@@ -1,0 +1,175 @@
+{
+  "_version": "1.82.0",
+  "sap.app": {
+    "id": "monitoring",
+    "type": "application",
+    "i18n": "i18n/i18n.properties",
+    "applicationVersion": {
+      "version": "0.0.1"
+    },
+    "title": "{{appTitle}}",
+    "description": "{{appDescription}}",
+    "resources": "resources.json",
+    "crossNavigation": {
+      "inbounds": {
+        "TaskChainMonitoring-display": {
+          "signature": {
+            "parameters": {},
+            "additionalParameters": "allowed"
+          },
+          "semanticObject": "TaskChainMonitoring",
+          "action": "display",
+          "title": "{{appTitle}}",
+          "icon": "sap-icon://monitor-payments"
+        }
+      }
+    },
+    "dataSources": {
+      "mainService": {
+        "uri": "odata/v4/services/",
+        "type": "OData",
+        "settings": {
+          "annotations": [],
+          "odataVersion": "4.0"
+        }
+      },
+      "monitoringApi": {
+        "uri": "api/monitoring",
+        "type": "JSON",
+        "settings": {}
+      }
+    }
+  },
+  "sap.cloud": {
+    "public": true,
+    "service": "taskchainutilities.service"
+  },
+  "sap.ui": {
+    "technology": "UI5",
+    "icons": {
+      "icon": "sap-icon://monitor-payments",
+      "favIcon": "",
+      "phone": "",
+      "phone@2": "",
+      "tablet": "",
+      "tablet@2": ""
+    },
+    "deviceTypes": {
+      "desktop": true,
+      "tablet": true,
+      "phone": true
+    }
+  },
+  "sap.ui5": {
+    "flexEnabled": false,
+    "rootView": {
+      "viewName": "monitoring.view.App",
+      "type": "XML",
+      "async": true,
+      "id": "appRootView"
+    },
+    "dependencies": {
+      "minUI5Version": "1.145.0",
+      "libs": {
+        "sap.m": {},
+        "sap.ushell": {},
+        "sap.ui.core": {},
+        "sap.ui.layout": {},
+        "sap.f": {},
+        "sap.suite.ui.microchart": {},
+        "sap.viz": {}
+      }
+    },
+    "contentDensities": {
+      "compact": true,
+      "cozy": true
+    },
+    "models": {
+      "i18n": {
+        "type": "sap.ui.model.resource.ResourceModel",
+        "settings": {
+          "bundleName": "monitoring.i18n.i18n"
+        }
+      },
+      "": {
+        "dataSource": "mainService",
+        "preload": true,
+        "settings": {
+          "operationMode": "Server",
+          "autoExpandSelect": true,
+          "earlyRequests": true
+        }
+      },
+      "monitoring": {
+        "type": "sap.ui.model.json.JSONModel",
+        "settings": {}
+      }
+    },
+    "resources": {
+      "css": [
+        {
+          "uri": "css/style.css"
+        }
+      ]
+    },
+    "routing": {
+      "config": {
+        "routerClass": "sap.m.routing.Router",
+        "controlAggregation": "pages",
+        "controlId": "app",
+        "viewType": "XML",
+        "viewPath": "monitoring.view",
+        "async": true
+      },
+      "routes": [
+        {
+          "pattern": "",
+          "name": "projectList",
+          "target": "projectList"
+        },
+        {
+          "pattern": "project/{projectId}",
+          "name": "projectDashboard",
+          "target": "projectDashboard"
+        },
+        {
+          "pattern": "project/{projectId}/chain/{chainId}",
+          "name": "taskChainDetail",
+          "target": "taskChainDetail"
+        },
+        {
+          "pattern": "project/{projectId}/chain/{chainId}/run/{runId}",
+          "name": "runInspector",
+          "target": "runInspector"
+        },
+        {
+          "pattern": "project/{projectId}/compare:?query:",
+          "name": "runComparison",
+          "target": "runComparison"
+        }
+      ],
+      "targets": {
+        "projectList": {
+          "viewName": "ProjectList",
+          "viewLevel": 1
+        },
+        "projectDashboard": {
+          "viewName": "ProjectDashboard",
+          "viewLevel": 2
+        },
+        "taskChainDetail": {
+          "viewName": "TaskChainDetail",
+          "viewLevel": 3
+        },
+        "runInspector": {
+          "viewName": "RunInspector",
+          "viewLevel": 4
+        },
+        "runComparison": {
+          "viewName": "RunComparison",
+          "viewLevel": 3
+        }
+      }
+    }
+  }
+}

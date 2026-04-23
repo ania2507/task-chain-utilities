@@ -1,0 +1,21 @@
+{
+  "Component-preload.js.map": 1776076958900,
+  "Component.js": 1773329688104,
+  "ext/controller/CodeEditorController.js": 1773329967149,
+  "ext/controller/CodeEditor.js": 1773329928313,
+  "manifest.json": 1773419916679,
+  "ext/controller/ObjectPageExt.controller.js": 1773331669693,
+  "ext/controller/ObjectPageExt-dbg.controller.js": 1773331669693,
+  "ext/controller/ObjectPageExt.controller.js.map": 1776076958802,
+  "ext/controller/CodeEditorController-dbg.js": 1773329967149,
+  "ext/controller/CodeEditorController.js.map": 1776076958788,
+  "ext/controller/CodeEditor-dbg.js": 1773329928313,
+  "ext/controller/CodeEditor.js.map": 1776076958801,
+  "Component-dbg.js": 1773329688104,
+  "Component.js.map": 1776076958788,
+  "Component-preload.js": 1776076958900,
+  "i18n/i18n.properties": 1773329688108,
+  "ext/fragment/CodeEditor.fragment.xml": 1773331741966,
+  "css/style.css": 1773329816800,
+  "index.html": 1773329688104
+}

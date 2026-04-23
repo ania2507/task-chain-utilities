@@ -1,0 +1,71 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:form="sap.ui.layout.form">
+
+    <Dialog
+        id="createProjectDialog"
+        title="{i18n>projectList.createTitle}"
+        type="Message"
+        contentWidth="400px">
+        
+        <content>
+            <VBox class="sapUiSmallMargin">
+                <form:SimpleForm
+                    id="createProjectForm"
+                    editable="true"
+                    layout="ResponsiveGridLayout"
+                    labelSpanXL="4"
+                    labelSpanL="4"
+                    labelSpanM="4"
+                    labelSpanS="12"
+                    emptySpanXL="0"
+                    emptySpanL="0"
+                    emptySpanM="0"
+                    emptySpanS="0"
+                    columnsXL="1"
+                    columnsL="1"
+                    columnsM="1"
+                    singleContainerFullSize="false">
+                    
+                    <form:content>
+                        <Label text="{i18n>projectList.projectName}" required="true"/>
+                        <Input
+                            id="inputProjectName"
+                            value="{newProject>/name}"
+                            placeholder="{i18n>projectList.namePlaceholder}"
+                            required="true"
+                            maxLength="100"/>
+                        
+                        <Label text="{i18n>projectList.projectDescription}"/>
+                        <TextArea
+                            id="inputProjectDescription"
+                            value="{newProject>/description}"
+                            placeholder="{i18n>projectList.descPlaceholder}"
+                            rows="3"
+                            maxLength="500"
+                            growing="true"
+                            growingMaxLines="5"/>
+                    </form:content>
+                </form:SimpleForm>
+            </VBox>
+        </content>
+        
+        <beginButton>
+            <Button
+                id="btnConfirmCreate"
+                text="{i18n>common.create}"
+                type="Emphasized"
+                press=".onCreateProjectConfirm"/>
+        </beginButton>
+        
+        <endButton>
+            <Button
+                id="btnCancelCreate"
+                text="{i18n>common.cancel}"
+                press=".onCreateProjectCancel"/>
+        </endButton>
+        
+    </Dialog>
+
+</core:FragmentDefinition>

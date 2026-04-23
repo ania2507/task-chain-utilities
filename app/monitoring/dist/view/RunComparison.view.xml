@@ -1,0 +1,129 @@
+<mvc:View
+    controllerName="monitoring.controller.RunComparison"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:f="sap.f"
+    xmlns:fcard="sap.f.cards"
+    xmlns:core="sap.ui.core"
+    xmlns:layout="sap.ui.layout">
+
+    <Page id="runComparisonPage" 
+        title="{i18n>comparison.title}"
+        showNavButton="true"
+        navButtonPress=".onNavBack"
+        class="sapUiContentPadding">
+
+        <customHeader>
+            <Bar>
+                <contentLeft>
+                    <Button icon="sap-icon://nav-back" press=".onNavBack" type="Transparent"/>
+                    <Title text="Run Comparison" level="H4"/>
+                </contentLeft>
+                <contentRight>
+                    <Text text="{compare>/runCount} runs compared" class="sapUiSmallMarginEnd"/>
+                </contentRight>
+            </Bar>
+        </customHeader>
+
+        <content>
+            <!-- Summary Cards Row -->
+            <Panel id="summaryPanel" class="sapUiSmallMarginBottom">
+                <headerToolbar>
+                    <Toolbar>
+                        <Title text="Overview" level="H5"/>
+                    </Toolbar>
+                </headerToolbar>
+                <content>
+                    <HBox id="summaryCardsContainer" wrap="Wrap" class="sapUiSmallMargin">
+                        <!-- Cards will be generated dynamically -->
+                    </HBox>
+                </content>
+            </Panel>
+
+            <!-- Comparison Statistics -->
+            <Panel id="statsPanel" class="sapUiSmallMarginBottom">
+                <headerToolbar>
+                    <Toolbar>
+                        <Title text="Comparison Statistics" level="H5"/>
+                    </Toolbar>
+                </headerToolbar>
+                <content>
+                    <layout:Grid defaultSpan="L3 M6 S12" class="sapUiSmallMargin">
+                        <VBox class="sapUiSmallMargin">
+                            <Label text="Success Rate" design="Bold"/>
+                            <ObjectStatus 
+                                text="{compare>/stats/successRate}%"
+                                state="{= ${compare>/stats/successRate} >= 80 ? 'Success' : 'Error'}"/>
+                        </VBox>
+                        <VBox class="sapUiSmallMargin">
+                            <Label text="Average Duration" design="Bold"/>
+                            <Text text="{compare>/stats/avgDuration} min"/>
+                        </VBox>
+                        <VBox class="sapUiSmallMargin">
+                            <Label text="Duration Range" design="Bold"/>
+                            <Text text="{compare>/stats/minDuration} - {compare>/stats/maxDuration} min"/>
+                        </VBox>
+                        <VBox class="sapUiSmallMargin">
+                            <Label text="Duration Variance" design="Bold"/>
+                            <ObjectStatus 
+                                text="{compare>/stats/durationVariance} min"
+                                state="{= ${compare>/stats/durationVariance} &lt; 5 ? 'Success' : 'Warning'}"/>
+                        </VBox>
+                    </layout:Grid>
+                </content>
+            </Panel>
+
+            <!-- Step-by-Step Comparison Table -->
+            <Panel id="stepComparisonPanel">
+                <headerToolbar>
+                    <Toolbar>
+                        <Title text="Step-by-Step Comparison" level="H5"/>
+                        <ToolbarSpacer/>
+                        <SegmentedButton id="viewModeBtn" selectedKey="table" selectionChange=".onViewModeChange">
+                            <items>
+                                <SegmentedButtonItem key="table" icon="sap-icon://table-view" tooltip="Table View"/>
+                                <SegmentedButtonItem key="timeline" icon="sap-icon://timeline" tooltip="Timeline View"/>
+                            </items>
+                        </SegmentedButton>
+                    </Toolbar>
+                </headerToolbar>
+                <content>
+                    <!-- Table View - columns built dynamically in controller -->
+                    <Table id="stepComparisonTable" 
+                        visible="{= ${compare>/viewMode} === 'table'}"
+                        sticky="ColumnHeaders"
+                        growing="true"
+                        growingThreshold="50">
+                        <!-- Columns and items are built dynamically -->
+                    </Table>
+
+                    <!-- Timeline View -->
+                    <VBox id="timelineContainer" visible="{= ${compare>/viewMode} === 'timeline'}">
+                        <!-- Timeline content generated dynamically -->
+                    </VBox>
+                </content>
+            </Panel>
+
+            <!-- Anomalies/Differences Panel -->
+            <Panel id="anomaliesPanel" class="sapUiSmallMarginTop" visible="{= ${compare>/anomalies}.length > 0}">
+                <headerToolbar>
+                    <Toolbar>
+                        <Title text="Detected Anomalies" level="H5"/>
+                        <ToolbarSpacer/>
+                        <ObjectStatus text="{= ${compare>/anomalies}.length} issues" state="Warning"/>
+                    </Toolbar>
+                </headerToolbar>
+                <content>
+                    <List id="anomaliesList" items="{compare>/anomalies}">
+                        <StandardListItem 
+                            title="{compare>title}"
+                            description="{compare>description}"
+                            icon="{compare>icon}"
+                            info="{compare>severity}"
+                            infoState="{= ${compare>severity} === 'High' ? 'Error' : 'Warning'}"/>
+                    </List>
+                </content>
+            </Panel>
+        </content>
+    </Page>
+</mvc:View>

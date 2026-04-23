@@ -1,0 +1,42 @@
+/* Aumenta altezza del campo multilinea Rule in edit */
+[id*="RuleContentFacet"] .sapMTextArea textarea,
+[id*="RuleContent"] .sapMTextArea textarea {
+    min-height: 400px !important;
+    resize: vertical;
+}
+
+[id*="RuleContentFacet"] .sapMTextArea,
+[id*="RuleContent"] .sapMTextArea {
+    width: 100%;
+}
+
+/* Visualizzazione Rule in display mode - preserva spazi e indentazioni */
+[id*="RuleContentFacet"] .sapMText,
+[id*="RuleContent"] .sapMText,
+[id*="RuleContentFacet"] .sapFEExpandableText,
+[id*="RuleContent"] .sapFEExpandableText {
+    white-space: pre-wrap !important;
+    font-family: monospace !important;
+    min-height: 300px !important;
+    max-height: none !important;
+    display: block !important;
+    width: 100% !important;
+    background-color: #f7f7f7;
+    padding: 1rem;
+    border-radius: 4px;
+    -webkit-line-clamp: unset !important;
+    line-clamp: unset !important;
+    overflow: visible !important;
+}
+
+/* Rimuovi il "Show Less/Show More" e mostra tutto */
+[id*="RuleContent"] .sapMTextMaxLine,
+[id*="RuleContentFacet"] .sapMTextMaxLine {
+    -webkit-line-clamp: unset !important;
+    max-height: none !important;
+}
+
+[id*="RuleContent"] .sapFEExpandableText__showMore,
+[id*="RuleContentFacet"] .sapFEExpandableText__showMore {
+    display: none !important;
+}

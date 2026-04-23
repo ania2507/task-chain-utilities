@@ -1,0 +1,242 @@
+_schema-version: "3.2"
+ID: task-chain-utilities
+description: Task Chain Utilities
+version: 1.0.0
+modules:
+- name: task-chain-utilities-srv
+  type: nodejs
+  path: gen/srv
+  properties:
+    PY_SRV_URL: ~{py-srv-api/py-srv-url}
+  requires:
+  - name: task-chain-utilities-auth
+  - name: task-chain-utilities-db
+  - name: task-chain-utilities-destination
+  - name: py-srv-api
+  provides:
+  - name: srv-api
+    properties:
+      srv-cert-url: ${protocol}://${default-host}.cert.${default-domain}
+      srv-url: ${default-url}
+  parameters:
+    buildpack: nodejs_buildpack
+    instances: 1
+    routes:
+    - route: ${default-url}
+    - route: ${default-host}.cert.${default-domain}
+  build-parameters:
+    builder: npm-ci
+- name: task-chain-utilities-db-deployer
+  type: hdb
+  path: gen/db
+  requires:
+  - name: task-chain-utilities-db
+    properties:
+      TARGET_CONTAINER: task-chain-utilities-db
+  parameters:
+    buildpack: nodejs_buildpack
+- name: task-chain-utilities-appcontent
+  type: com.sap.application.content
+  path: gen
+  requires:
+  - name: task-chain-utilities-destination
+  - name: task-chain-utilities-html5-repo-host
+    parameters:
+      content-target: true
+  build-parameters:
+    build-result: resources/
+    requires:
+    - artifacts:
+      - webapp.zip
+      name: webapp
+      target-path: resources/
+    - artifacts:
+      - skipoverrides.zip
+      name: skipoverrides
+      target-path: resources/
+    - artifacts:
+      - monitoring.zip
+      name: monitoring
+      target-path: resources/
+- name: task-chain-utilities-destinationcontent
+  type: com.sap.application.content
+  requires:
+  - name: task-chain-utilities-auth
+    parameters:
+      service-key:
+        name: task-chain-utilities-auth-key
+  - name: task-chain-utilities-html5-repo-host
+    parameters:
+      service-key:
+        name: task-chain-utilities-html5-repo-host-key
+  - name: task-chain-utilities-destination
+    parameters:
+      content-target: true
+  parameters:
+    content:
+      instance:
+        destinations:
+        - Name: task-chain-utilities-html5-repository
+          ServiceInstanceName: task-chain-utilities-html5-repo-host
+          ServiceKeyName: task-chain-utilities-html5-repo-host-key
+          sap.cloud.service: taskchainutilities.service
+        - Authentication: OAuth2UserTokenExchange
+          Name: task-chain-utilities-auth
+          ServiceInstanceName: task-chain-utilities-auth
+          ServiceKeyName: task-chain-utilities-auth-key
+          sap.cloud.service: taskchainutilities.service
+        existing_destinations_policy: update
+  build-parameters:
+    no-source: true
+- name: webapp
+  type: html5
+  path: app/webapp
+  build-parameters:
+    build-result: dist
+    builder: custom
+    commands:
+    - npm ci
+    - npm run build
+    supported-platforms: []
+- name: skipoverrides
+  type: html5
+  path: app/skipoverrides
+  build-parameters:
+    build-result: dist
+    builder: custom
+    commands:
+    - npm ci
+    - npm run build
+    supported-platforms: []
+- name: monitoring
+  type: html5
+  path: app/monitoring
+  build-parameters:
+    build-result: dist
+    builder: custom
+    commands:
+    - npm ci
+    - npm run build
+    supported-platforms: []
+- name: task-chain-utilities-py-srv
+  type: python
+  path: py-srv
+  requires:
+  - name: task-chain-utilities-auth
+  - name: task-chain-utilities-db
+  - name: dsp-hana
+  - name: dsp-credentials
+  provides:
+  - name: py-srv-api
+    properties:
+      py-srv-url: ${default-url}
+  parameters:
+    buildpacks:
+    - nodejs_buildpack
+    - python_buildpack
+    command: python app.py
+    disk-quota: 1024M
+    memory: 512M
+  build-parameters:
+    before-all:
+    - builder: custom
+      commands:
+      - cd py-srv && npm install
+      - npm install -g @sap/datasphere-cli
+    ignore:
+    - .venv/
+    - __pycache__/
+    - '*.pyc'
+    - dsp_credentials.json
+    - dsp-credentials.json
+    - .env
+    - .git/
+    - '*.log'
+- name: task-chain-utilities
+  type: approuter.nodejs
+  path: app/router
+  requires:
+  - name: task-chain-utilities-html5-runtime
+  - name: task-chain-utilities-auth
+resources:
+- name: task-chain-utilities-auth
+  type: org.cloudfoundry.managed-service
+  parameters:
+    config:
+      tenant-mode: dedicated
+      xsappname: task-chain-utilities
+    path: ./xs-security.json
+    service: xsuaa
+    service-plan: application
+- name: task-chain-utilities-db
+  type: com.sap.xs.hdi-container
+  parameters:
+    config:
+      schema: TASK_CHAIN_UTILITIE
+    service: hana
+    service-plan: hdi-shared
+  properties:
+    hdi-container-name: TASK_CHAIN_UTILITIE
+- name: task-chain-utilities-destination
+  type: org.cloudfoundry.managed-service
+  parameters:
+    config:
+      HTML5Runtime_enabled: true
+      init_data:
+        instance:
+          destinations:
+          - Authentication: NoAuthentication
+            HTML5.DynamicDestination: true
+            HTML5.ForwardAuthToken: true
+            Name: task-chain-utilities-srv
+            ProxyType: Internet
+            Type: HTTP
+            URL: ~{srv-api/srv-url}
+          - Authentication: NoAuthentication
+            HTML5.DynamicDestination: true
+            HTML5.ForwardAuthToken: true
+            Name: task-chain-utilities-py-srv
+            ProxyType: Internet
+            Type: HTTP
+            URL: ~{py-srv-api/py-srv-url}
+          - Authentication: NoAuthentication
+            Name: ui5
+            ProxyType: Internet
+            Type: HTTP
+            URL: https://ui5.sap.com
+          existing_destinations_policy: update
+      version: 1.0.0
+    service: destination
+    service-plan: lite
+  requires:
+  - name: srv-api
+  - name: py-srv-api
+- name: task-chain-utilities-html5-repo-host
+  type: org.cloudfoundry.managed-service
+  parameters:
+    service: html5-apps-repo
+    service-plan: app-host
+- name: task-chain-utilities-html5-runtime
+  type: org.cloudfoundry.managed-service
+  parameters:
+    service: html5-apps-repo
+    service-plan: app-runtime
+- name: dsp-hana
+  type: org.cloudfoundry.user-provided-service
+  parameters:
+    path: ./hana-multi-schema-credentials.json
+- name: dsp-credentials
+  type: org.cloudfoundry.user-provided-service
+  parameters:
+    path: ./dsp-credentials.json
+parameters:
+  deploy_mode: html5-repo
+  enable-parallel-deployments: true
+build-parameters:
+  before-all:
+  - builder: custom
+    commands:
+    - npm ci
+    - npx cds build --production
+    - rm -f resources/*.zip
+    - mkdir -p resources

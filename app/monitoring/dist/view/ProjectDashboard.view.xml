@@ -1,0 +1,333 @@
+<mvc:View
+    xmlns="sap.m"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns:f="sap.f"
+    xmlns:fcard="sap.f.cards"
+    xmlns:core="sap.ui.core"
+    xmlns:layout="sap.ui.layout"
+    xmlns:viz="sap.viz.ui5.controls"
+    xmlns:vizData="sap.viz.ui5.data"
+    xmlns:vizFeeds="sap.viz.ui5.controls.common.feeds"
+    controllerName="monitoring.controller.ProjectDashboard"
+    displayBlock="true">
+
+    <Page id="projectDashboardPage" 
+        showNavButton="true"
+        navButtonPress=".onNavBack"
+        class="sapUiContentPadding">
+        
+        <customHeader>
+            <Bar id="dashboardHeader" class="dashboardHeader">
+                <contentLeft>
+                    <Button id="btnBack" icon="sap-icon://nav-back" type="Transparent" press=".onNavBack"/>
+                </contentLeft>
+                <contentMiddle>
+                    <Title id="dashboardTitle" text="{i18n>dashboard.title}" level="H4"/>
+                </contentMiddle>
+                <contentRight>
+                    <Button id="btnExport" icon="sap-icon://download" tooltip="{i18n>common.export}"/>
+                    <Button id="btnSettings" icon="sap-icon://action-settings" tooltip="Settings"/>
+                    <Button id="btnNotifications" icon="sap-icon://bell" tooltip="Notifications"/>
+                </contentRight>
+            </Bar>
+        </customHeader>
+
+        <content>
+            <!-- KPI Section -->
+            <Panel id="kpiPanel" class="kpiSection" backgroundDesign="Transparent">
+                <HBox id="kpiContainer" class="kpiGrid" wrap="Wrap">
+                    <!-- Total Runs KPI -->
+                    <f:Card id="kpiTotalRuns" class="monitoringKpiCard sapUiSmallMarginEnd">
+                        <f:header>
+                            <fcard:NumericHeader
+                                title="Total Runs"
+                                number="{dashboard>/totalExecutions}"
+                                state="Good"/>
+                        </f:header>
+                    </f:Card>
+
+                    <!-- Success Rate KPI -->
+                    <f:Card id="kpiSuccessRate" class="monitoringKpiCard sapUiSmallMarginEnd">
+                        <f:header>
+                            <fcard:NumericHeader
+                                title="{i18n>dashboard.successRate}"
+                                number="{dashboard>/successRate}"
+                                scale="%"
+                                state="{= ${dashboard>/successRate} >= 95 ? 'Good' : ${dashboard>/successRate} >= 80 ? 'Critical' : 'Error'}"/>
+                        </f:header>
+                    </f:Card>
+
+                    <!-- Errors Last 24h KPI -->
+                    <f:Card id="kpiErrors" class="monitoringKpiCard sapUiSmallMarginEnd">
+                        <f:header>
+                            <fcard:NumericHeader
+                                title="{i18n>dashboard.errorsLast24h}"
+                                number="{dashboard>/errorsLast24h}"
+                                state="{= ${dashboard>/errorsLast24h} === 0 ? 'Good' : ${dashboard>/errorsLast24h} &lt;= 3 ? 'Critical' : 'Error'}"/>
+                        </f:header>
+                    </f:Card>
+
+                    <!-- Average Duration P95 KPI -->
+                    <f:Card id="kpiDuration" class="monitoringKpiCard sapUiSmallMarginEnd">
+                        <f:header>
+                            <fcard:NumericHeader
+                                title="{i18n>dashboard.avgDuration}"
+                                number="{dashboard>/avgDurationP95}"
+                                scale="{i18n>dashboard.minutes}"
+                                state="Good"/>
+                        </f:header>
+                    </f:Card>
+
+                    <!-- Avg Steps Executed KPI -->
+                    <f:Card id="kpiAvgSteps" class="monitoringKpiCard sapUiSmallMarginEnd">
+                        <f:header>
+                            <fcard:NumericHeader
+                                title="Avg Steps/Run"
+                                number="{dashboard>/avgStepsExecuted}"
+                                scale="steps"
+                                state="Good"/>
+                        </f:header>
+                    </f:Card>
+
+                    <!-- Avg Steps Failed KPI -->
+                    <f:Card id="kpiAvgStepsFailed" class="monitoringKpiCard sapUiSmallMarginEnd">
+                        <f:header>
+                            <fcard:NumericHeader
+                                title="Avg Failed Steps"
+                                number="{dashboard>/avgStepsFailed}"
+                                scale="steps"
+                                state="{= ${dashboard>/avgStepsFailed} &lt; 0.5 ? 'Good' : ${dashboard>/avgStepsFailed} &lt; 2 ? 'Critical' : 'Error'}"/>
+                        </f:header>
+                    </f:Card>
+
+                    <!-- Duration Std Dev KPI -->
+                    <f:Card id="kpiDurationStdDev" class="monitoringKpiCard">
+                        <f:header>
+                            <fcard:NumericHeader
+                                title="Duration σ"
+                                number="{dashboard>/durationStdDev}"
+                                scale="{i18n>dashboard.minutes}"
+                                state="Good"/>
+                        </f:header>
+                    </f:Card>
+                </HBox>
+            </Panel>
+
+            <!-- Chart Section - Executions -->
+            <Panel id="chartPanel" headerText="{i18n>dashboard.executionHistory}" class="sapUiSmallMargin chartContainer">
+                <headerToolbar>
+                    <Toolbar id="chartToolbar">
+                        <Title id="chartTitle" text="{i18n>dashboard.chartTitle}" level="H5"/>
+                        <ToolbarSpacer/>
+                        <Label id="timePeriodLabel" text="{i18n>dashboard.timePeriod}" class="sapUiTinyMarginEnd"/>
+                        <Select id="timePeriodSelect" selectedKey="24h" change=".onTimePeriodChange" class="sapUiSmallMarginEnd">
+                            <core:Item id="period24h" key="24h" text="{i18n>dashboard.last24h}"/>
+                            <core:Item id="period7d" key="7d" text="{i18n>dashboard.lastWeek}"/>
+                            <core:Item id="period30d" key="30d" text="{i18n>dashboard.lastMonth}"/>
+                            <core:Item id="period365d" key="365d" text="{i18n>dashboard.lastYear}"/>
+                            <core:Item id="periodAll" key="all" text="{i18n>dashboard.allTime}"/>
+                        </Select>
+                        <SegmentedButton id="chartFilter" selectedKey="related" selectionChange=".onChartFilterChange">
+                            <items>
+                                <SegmentedButtonItem id="filterRelated" key="related" text="{i18n>dashboard.related}"/>
+                                <SegmentedButtonItem id="filterLastRuns" key="durationTrend" text="{i18n>dashboard.durationTrend}"/>
+                                <SegmentedButtonItem id="filterErrors" key="errors" text="{i18n>dashboard.errorOnly}"/>
+                            </items>
+                        </SegmentedButton>
+                    </Toolbar>
+                </headerToolbar>
+                <content>
+                    <viz:VizFrame id="executionChart" 
+                        uiConfig="{applicationSet:'fiori'}" 
+                        height="320px" 
+                        width="100%" 
+                        vizType="stacked_column"
+                        vizProperties="{
+                            plotArea:{
+                                colorPalette:['#107e3e','#bb0000'],
+                                dataLabel:{
+                                    visible:false
+                                }
+                            },
+                            legend:{visible:true,position:'bottom'},
+                            title:{visible:false},
+                            categoryAxis:{title:{visible:true,text:'Time'}},
+                            valueAxis:{title:{visible:true,text:'Executions'}}
+                        }">
+                        <viz:dataset>
+                            <vizData:FlattenedDataset id="chartDataset" data="{dashboard>/executionChartData}">
+                                <vizData:dimensions>
+                                    <vizData:DimensionDefinition id="dimTime" name="Time" value="{dashboard>time}"/>
+                                </vizData:dimensions>
+                                <vizData:measures>
+                                    <vizData:MeasureDefinition id="measureSuccess" name="Successes" value="{dashboard>successes}"/>
+                                    <vizData:MeasureDefinition id="measureErrors" name="Errors" value="{dashboard>errors}"/>
+                                    <vizData:MeasureDefinition id="measureDuration" name="Duration" value="{dashboard>duration}"/>
+                                    <vizData:MeasureDefinition id="measureAvg" name="Avg" value="{dashboard>avg}"/>
+                                    <vizData:MeasureDefinition id="measureStdHigh" name="+1 StdDev" value="{dashboard>stdHigh}"/>
+                                    <vizData:MeasureDefinition id="measureStdLow" name="-1 StdDev" value="{dashboard>stdLow}"/>
+                                </vizData:measures>
+                            </vizData:FlattenedDataset>
+                        </viz:dataset>
+                        <viz:feeds>
+                            <vizFeeds:FeedItem id="feedCategory" uid="categoryAxis" type="Dimension" values="Time"/>
+                            <vizFeeds:FeedItem id="feedValues" uid="valueAxis" type="Measure" values="Successes,Errors"/>
+                        </viz:feeds>
+                    </viz:VizFrame>
+                </content>
+            </Panel>
+
+            <!-- Bottom Section - Two columns -->
+            <HBox id="bottomSection" class="sapUiSmallMargin" wrap="Wrap">
+                <!-- Left Column: Top Failing Tasks & Recent Executions -->
+                <VBox id="leftColumn" class="halfWidth sapUiSmallMarginEnd">
+                    <!-- Top Failing Tasks Table -->
+                    <Panel id="failingTasksPanel" headerText="{i18n>dashboard.topFailingTasks}" class="monitoringTable sapUiSmallMarginBottom">
+                        <Table id="failingTasksTable" 
+                            items="{dashboard>/topFailingTasks}" 
+                            growing="true" 
+                            growingThreshold="5">
+                            <columns>
+                                <Column id="colTaskName">
+                                    <Text id="colTaskNameText" text="{i18n>dashboard.task}"/>
+                                </Column>
+                                <Column id="colFailures" hAlign="Center" width="80px">
+                                    <Text id="colFailuresText" text="{i18n>dashboard.failures}"/>
+                                </Column>
+                                <Column id="colLatency" hAlign="End" width="100px">
+                                    <Text id="colLatencyText" text="{i18n>dashboard.avgLatency}"/>
+                                </Column>
+                            </columns>
+                            <items>
+                                <ColumnListItem id="failingTaskItem" type="Active" press=".onTaskPress">
+                                    <cells>
+                                        <Text id="cellTaskName" text="{dashboard>name}"/>
+                                        <ObjectNumber id="cellFailures" number="{dashboard>failures}" state="Error"/>
+                                        <Text id="cellLatency" text="{dashboard>avgLatency}"/>
+                                    </cells>
+                                </ColumnListItem>
+                            </items>
+                        </Table>
+                    </Panel>
+
+                    <!-- Recent Executions Table -->
+                    <Panel id="recentExecPanel" headerText="{i18n>dashboard.recentExecutions}" class="monitoringTable">
+                        <headerToolbar>
+                            <Toolbar id="execTableToolbar">
+                                <Title text="{i18n>dashboard.recentExecutions}" level="H5"/>
+                                <ToolbarSpacer/>
+                                <Button 
+                                    id="compareRunsBtn"
+                                    text="{i18n>dashboard.compareRuns}"
+                                    icon="sap-icon://compare"
+                                    type="Emphasized"
+                                    enabled="{= ${dashboard>/selectedRunsCount} >= 2}"
+                                    press=".onCompareRuns"/>
+                                <Text text="{= ${dashboard>/selectedRunsCount} > 0 ? ${dashboard>/selectedRunsCount} + ' selected' : ''}" class="sapUiTinyMarginBegin"/>
+                            </Toolbar>
+                        </headerToolbar>
+                        <Table id="recentExecutionsTable" 
+                            items="{dashboard>/recentExecutions}" 
+                            growing="true" 
+                            growingThreshold="20"
+                            mode="MultiSelect"
+                            selectionChange=".onExecutionSelectionChange"
+                            updateFinished=".onExecutionsTableUpdate">
+                            <columns>
+                                <Column id="colRunId" width="80px">
+                                    <Text text="{i18n>dashboard.runId}"/>
+                                </Column>
+                                <Column id="colTaskChain" width="180px">
+                                    <Text text="{i18n>dashboard.taskChain}"/>
+                                </Column>
+                                <Column id="colStartTime" width="130px">
+                                    <Text text="Start"/>
+                                </Column>
+                                <Column id="colEndTime" width="130px">
+                                    <Text text="End"/>
+                                </Column>
+                                <Column id="colDuration" hAlign="End" width="80px">
+                                    <Text text="Duration"/>
+                                </Column>
+                                <Column id="colStepsOk" hAlign="Center" width="50px">
+                                    <core:Icon src="sap-icon://accept" color="#107e3e" tooltip="Completed"/>
+                                </Column>
+                                <Column id="colStepsRunning" hAlign="Center" width="50px">
+                                    <core:Icon src="sap-icon://synchronize" color="#0854a0" tooltip="Running"/>
+                                </Column>
+                                <Column id="colStepsFailed" hAlign="Center" width="50px">
+                                    <core:Icon src="sap-icon://error" color="#bb0000" tooltip="Failed"/>
+                                </Column>
+                            </columns>
+                            <items>
+                                <ColumnListItem type="Active" press=".onExecutionPress">
+                                    <cells>
+                                        <Link text="{dashboard>runId}" press=".onRunIdPress"/>
+                                        <Text text="{dashboard>taskChain}"/>
+                                        <Text text="{path: 'dashboard>startTime', formatter: '.formatter.formatDateTime'}"/>
+                                        <Text text="{path: 'dashboard>endTime', formatter: '.formatter.formatDateTime'}"/>
+                                        <ObjectStatus 
+                                            text="{dashboard>durationDisplay}" 
+                                            state="{= ${dashboard>status} === 'success' ? 'Success' : ${dashboard>status} === 'error' ? 'Error' : 'Warning'}"/>
+                                        <ObjectNumber number="{dashboard>stepsCompleted}" state="Success"/>
+                                        <ObjectNumber number="{dashboard>stepsRunning}" state="Information"/>
+                                        <ObjectNumber number="{dashboard>stepsFailed}" state="Error"/>
+                                    </cells>
+                                </ColumnListItem>
+                            </items>
+                        </Table>
+                    </Panel>
+                </VBox>
+
+                <!-- Right Column will be populated by fragments for DAG preview or additional info -->
+                <VBox id="rightColumn" class="halfWidth">
+                    <Panel id="quickLinksPanel" class="sapUiSmallMarginBottom">
+                        <headerToolbar>
+                            <Toolbar>
+                                <Title text="Task Chains" level="H5"/>
+                                <ToolbarSpacer/>
+                                <Text text="{= ${dashboard>/selectedChainsCount} > 0 ? 'Filtering: ' + ${dashboard>/selectedChainsCount} : ''}" class="sapUiTinyMarginEnd"/>
+                                <Button 
+                                    id="clearFilterBtn"
+                                    icon="sap-icon://clear-filter"
+                                    tooltip="Clear Filter"
+                                    visible="{= ${dashboard>/selectedChainsCount} > 0}"
+                                    press=".onClearChainFilter"/>
+                                <Button 
+                                    icon="sap-icon://add"
+                                    text="{i18n>dashboard.addTaskChain}"
+                                    type="Emphasized"
+                                    press=".onAddTaskChain"/>
+                            </Toolbar>
+                        </headerToolbar>
+                        <content>
+                            <List id="taskChainsList" 
+                                items="{dashboard>/taskChains}" 
+                                mode="MultiSelect"
+                                selectionChange=".onChainSelectionChange"
+                                noDataText="{i18n>dashboard.noTaskChains}">
+                                <CustomListItem type="Active" press=".onTaskChainPress">
+                                    <HBox justifyContent="SpaceBetween" alignItems="Center" class="sapUiTinyMargin">
+                                        <HBox alignItems="Center">
+                                            <core:Icon src="sap-icon://chain-link" class="sapUiTinyMarginEnd"/>
+                                            <VBox>
+                                                <Text text="{dashboard>businessName}" class="sapUiTinyMarginBottom"/>
+                                                <Text text="{dashboard>spaceId} / {dashboard>name}" class="sapUiTinyFont"/>
+                                            </VBox>
+                                        </HBox>
+                                        <Button 
+                                            icon="sap-icon://delete"
+                                            type="Transparent"
+                                            tooltip="{i18n>dashboard.removeTaskChain}"
+                                            press=".onRemoveTaskChain"/>
+                                    </HBox>
+                                </CustomListItem>
+                            </List>
+                        </content>
+                    </Panel>
+                </VBox>
+            </HBox>
+        </content>
+
+    </Page>
+</mvc:View>

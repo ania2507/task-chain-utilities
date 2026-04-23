@@ -1,0 +1,293 @@
+/* ==========================================================================
+   Task Chain Monitoring - Custom Styles
+   ========================================================================== */
+
+/* -------------------------------------------------------------------------
+   KPI Cards
+   ------------------------------------------------------------------------- */
+.monitoringKpiCard {
+    margin: 0.5rem;
+    min-width: 180px;
+}
+
+.monitoringKpiCard .sapMNCItemHeader {
+    font-size: 0.875rem;
+    color: #6a6d70;
+}
+
+.monitoringKpiCard .sapMNCItemMain {
+    font-size: 2.5rem;
+    font-weight: 300;
+}
+
+.kpiSuccess .sapMNCItemMain {
+    color: #107e3e !important;
+}
+
+.kpiError .sapMNCItemMain {
+    color: #bb0000 !important;
+}
+
+.kpiWarning .sapMNCItemMain {
+    color: #e9730c !important;
+}
+
+.kpiNeutral .sapMNCItemMain {
+    color: #0854a0 !important;
+}
+
+/* -------------------------------------------------------------------------
+   Chart Section
+   ------------------------------------------------------------------------- */
+.chartContainer {
+    padding: 1rem;
+    background: #fff;
+    border-radius: 0.5rem;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.1);
+    margin-bottom: 1rem;
+}
+
+.chartHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.chartHeader .sapMSegB {
+    margin-left: auto;
+}
+
+/* -------------------------------------------------------------------------
+   Tables
+   ------------------------------------------------------------------------- */
+.monitoringTable {
+    background: #fff;
+    border-radius: 0.5rem;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.1);
+}
+
+.monitoringTable .sapMListTblHeader {
+    background: #f7f7f7;
+}
+
+/* -------------------------------------------------------------------------
+   Status Indicators
+   ------------------------------------------------------------------------- */
+.statusSuccess {
+    color: #fff;
+    background-color: #107e3e;
+    padding: 0.25rem 0.75rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.statusError {
+    color: #fff;
+    background-color: #bb0000;
+    padding: 0.25rem 0.75rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.statusRunning {
+    color: #fff;
+    background-color: #0854a0;
+    padding: 0.25rem 0.75rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.statusWarning {
+    color: #fff;
+    background-color: #e9730c;
+    padding: 0.25rem 0.75rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+/* -------------------------------------------------------------------------
+   DAG Visualization
+   ------------------------------------------------------------------------- */
+.dagContainer {
+    padding: 1rem;
+    background: #f5f5f5;
+    border-radius: 0.5rem;
+    min-height: 300px;
+    overflow: auto;
+}
+
+.dagNode {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.75rem 1.25rem;
+    border-radius: 0.5rem;
+    font-weight: 500;
+    margin: 0.25rem;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.dagNode:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.dagNodeSuccess {
+    background-color: #107e3e;
+    color: #fff;
+}
+
+.dagNodeError {
+    background-color: #bb0000;
+    color: #fff;
+}
+
+.dagNodeRunning {
+    background-color: #0854a0;
+    color: #fff;
+}
+
+.dagNodePending {
+    background-color: #e5e5e5;
+    color: #32363a;
+}
+
+.dagNodeWarning {
+    background-color: #df6e0c;
+    color: #fff;
+}
+
+.dagNodeIcon {
+    margin-right: 0.5rem;
+}
+
+/* -------------------------------------------------------------------------
+   Dashboard Layout
+   ------------------------------------------------------------------------- */
+.dashboardHeader {
+    padding: 1rem;
+    background: linear-gradient(135deg, #354a5f 0%, #2c3e50 100%);
+    color: #fff;
+}
+
+.dashboardHeader .sapMTitle {
+    color: #fff !important;
+}
+
+.kpiSection {
+    padding: 1rem;
+    background: #fff;
+    border-bottom: 1px solid #e5e5e5;
+}
+
+.kpiGrid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: flex-start;
+}
+
+.contentSection {
+    padding: 1rem;
+}
+
+.halfWidth {
+    width: calc(50% - 0.5rem);
+    min-width: 300px;
+}
+
+.fullWidth {
+    width: 100%;
+}
+
+/* -------------------------------------------------------------------------
+   Project List
+   ------------------------------------------------------------------------- */
+.projectCard {
+    margin: 0.5rem;
+    min-width: 280px;
+}
+
+.projectCard:hover {
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.projectCardHeader {
+    background: linear-gradient(135deg, #354a5f 0%, #2c3e50 100%);
+    color: #fff;
+    padding: 1rem;
+    border-radius: 0.5rem 0.5rem 0 0;
+}
+
+/* -------------------------------------------------------------------------
+   Responsive Adjustments
+   ------------------------------------------------------------------------- */
+@media (max-width: 1024px) {
+    .halfWidth {
+        width: 100%;
+    }
+    
+    .kpiGrid {
+        justify-content: center;
+    }
+}
+
+/* -------------------------------------------------------------------------
+   Segment Button for Chart Filters
+   ------------------------------------------------------------------------- */
+.chartSegmentedButton .sapMSegBBtn {
+    min-width: 80px;
+}
+
+/* -------------------------------------------------------------------------
+   Info Strip
+   ------------------------------------------------------------------------- */
+.infoStrip {
+    padding: 0.5rem 1rem;
+    background: #e8f4fd;
+    border-left: 4px solid #0854a0;
+    margin-bottom: 1rem;
+    border-radius: 0 0.25rem 0.25rem 0;
+}
+
+/* -------------------------------------------------------------------------
+   Timeline
+   ------------------------------------------------------------------------- */
+.timelineContainer {
+    padding: 1rem;
+}
+
+.timelineItem {
+    position: relative;
+    padding-left: 2rem;
+    padding-bottom: 1.5rem;
+    border-left: 2px solid #e5e5e5;
+}
+
+.timelineItem:last-child {
+    border-left: none;
+}
+
+.timelineDot {
+    position: absolute;
+    left: -0.5rem;
+    top: 0;
+    width: 1rem;
+    height: 1rem;
+    border-radius: 50%;
+    background: #0854a0;
+}
+
+.timelineDot.success {
+    background: #107e3e;
+}
+
+.timelineDot.error {
+    background: #bb0000;
+}

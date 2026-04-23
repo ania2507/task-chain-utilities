@@ -1,0 +1,220 @@
+<mvc:View
+    xmlns="sap.m"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns:f="sap.f"
+    xmlns:core="sap.ui.core"
+    xmlns:layout="sap.ui.layout"
+    controllerName="monitoring.controller.RunInspector"
+    displayBlock="true">
+
+    <Page id="runInspectorPage" 
+        showNavButton="true"
+        navButtonPress=".onNavBack"
+        class="sapUiContentPadding">
+        
+        <customHeader>
+            <Bar id="runInspectorHeader">
+                <contentLeft>
+                    <Button id="btnBackRun" icon="sap-icon://nav-back" type="Transparent" press=".onNavBack"/>
+                </contentLeft>
+                <contentMiddle>
+                    <Title id="runInspectorTitle" text="Run Inspector - {runDetail>/runId}" level="H4"/>
+                </contentMiddle>
+                <contentRight>
+                    <Button id="btnRefreshRun" icon="sap-icon://refresh" tooltip="{i18n>common.refresh}" press=".onRefresh"/>
+                    <Button id="btnLogs" icon="sap-icon://sys-monitor" text="View Logs" press=".onViewLogs"/>
+                </contentRight>
+            </Bar>
+        </customHeader>
+
+        <content>
+            <!-- Run Summary Header -->
+            <Panel id="runSummaryPanel" class="sapUiSmallMargin">
+                <layout:HorizontalLayout id="summaryLayout" class="sapUiSmallMargin">
+                    <VBox id="summaryCol1" class="sapUiMediumMarginEnd">
+                        <Label id="lblRunId" text="{i18n>dashboard.runId}" design="Bold"/>
+                        <Text id="txtRunId" text="{runDetail>/runId}"/>
+                    </VBox>
+                    <VBox id="summaryCol2" class="sapUiMediumMarginEnd">
+                        <Label id="lblTaskChainRun" text="{i18n>dashboard.taskChain}" design="Bold"/>
+                        <Text id="txtTaskChainRun" text="{runDetail>/taskChainName}"/>
+                    </VBox>
+                    <VBox id="summaryCol3" class="sapUiMediumMarginEnd">
+                        <Label id="lblStatusRun" text="{i18n>dashboard.status}" design="Bold"/>
+                        <ObjectStatus id="statusRun"
+                            text="{runDetail>/statusText}"
+                            state="{= ${runDetail>/status} === 'success' ? 'Success' : ${runDetail>/status} === 'error' ? 'Error' : 'Warning'}"/>
+                    </VBox>
+                    <VBox id="summaryCol4" class="sapUiMediumMarginEnd">
+                        <Label id="lblStartTime" text="Start Time" design="Bold"/>
+                        <Text id="txtStartTime" text="{runDetail>/startTime}"/>
+                    </VBox>
+                    <VBox id="summaryCol5" class="sapUiMediumMarginEnd">
+                        <Label id="lblEndTime" text="End Time" design="Bold"/>
+                        <Text id="txtEndTime" text="{runDetail>/endTime}"/>
+                    </VBox>
+                    <VBox id="summaryCol6">
+                        <Label id="lblTotalDuration" text="{i18n>dashboard.duration}" design="Bold"/>
+                        <Text id="txtTotalDuration" text="{runDetail>/totalDuration}"/>
+                    </VBox>
+                </layout:HorizontalLayout>
+            </Panel>
+
+            <!-- Timeline Section -->
+            <Panel id="timelinePanel" headerText="{i18n>runInspector.timeline}" class="sapUiSmallMargin" expandable="true" expanded="true">
+                <content>
+                    <List id="executionTimeline"
+                        items="{runDetail>/timeline}"
+                        mode="None">
+                        <FeedListItem 
+                            id="timelineItem"
+                            sender="{runDetail>taskName}"
+                            timestamp="{runDetail>timestamp}"
+                            text="{runDetail>message}"
+                            icon="{= ${runDetail>status} === 'success' ? 'sap-icon://accept' : ${runDetail>status} === 'error' ? 'sap-icon://error' : 'sap-icon://process'}"/>
+                    </List>
+                </content>
+            </Panel>
+
+            <!-- Retry Attempts Section -->
+            <Panel id="retriesPanel" headerText="{i18n>runInspector.retries}" class="sapUiSmallMargin" expandable="true" expanded="{= ${runDetail>/retryCount} > 0}">
+                <Table id="retriesTable" 
+                    items="{runDetail>/retries}" 
+                    visible="{= ${runDetail>/retryCount} > 0}">
+                    <columns>
+                        <Column id="colAttempt" width="100px">
+                            <Text id="colAttemptText" text="Attempt"/>
+                        </Column>
+                        <Column id="colAttemptTime">
+                            <Text id="colAttemptTimeText" text="Time"/>
+                        </Column>
+                        <Column id="colAttemptStatus" width="100px">
+                            <Text id="colAttemptStatusText" text="Status"/>
+                        </Column>
+                        <Column id="colAttemptReason">
+                            <Text id="colAttemptReasonText" text="Reason"/>
+                        </Column>
+                    </columns>
+                    <items>
+                        <ColumnListItem id="retryItem">
+                            <cells>
+                                <ObjectNumber id="cellAttempt" number="{runDetail>attempt}"/>
+                                <Text id="cellAttemptTime" text="{runDetail>timestamp}"/>
+                                <ObjectStatus id="cellAttemptStatus"
+                                    text="{runDetail>statusText}"
+                                    state="{= ${runDetail>status} === 'success' ? 'Success' : 'Error'}"/>
+                                <Text id="cellAttemptReason" text="{runDetail>reason}"/>
+                            </cells>
+                        </ColumnListItem>
+                    </items>
+                </Table>
+                <MessageStrip id="noRetriesStrip" 
+                    text="No retry attempts for this run."
+                    type="Information"
+                    visible="{= ${runDetail>/retryCount} === 0}"/>
+            </Panel>
+
+            <!-- Error Details Section -->
+            <Panel id="errorPanel" 
+                headerText="{i18n>runInspector.errorDetails}" 
+                class="sapUiSmallMargin" 
+                expandable="true" 
+                expanded="true"
+                visible="{= ${runDetail>/status} === 'error'}">
+                <content>
+                    <MessageStrip id="errorStrip"
+                        text="{runDetail>/errorMessage}"
+                        type="Error"
+                        showIcon="true"
+                        class="sapUiSmallMarginBottom"/>
+                    
+                    <VBox id="errorDetailsBox" class="sapUiSmallMargin">
+                        <HBox id="errorCodeBox" class="sapUiTinyMarginBottom">
+                            <Label id="lblErrorCode" text="Error Code:" design="Bold" class="sapUiSmallMarginEnd"/>
+                            <Text id="txtErrorCode" text="{runDetail>/errorCode}"/>
+                        </HBox>
+                        <HBox id="errorTaskBox" class="sapUiTinyMarginBottom">
+                            <Label id="lblErrorTask" text="Failed Task:" design="Bold" class="sapUiSmallMarginEnd"/>
+                            <Text id="txtErrorTask" text="{runDetail>/failedTask}"/>
+                        </HBox>
+                        <VBox id="stackTraceBox" visible="{= ${runDetail>/stackTrace} !== null}">
+                            <Label id="lblStackTrace" text="Stack Trace:" design="Bold"/>
+                            <TextArea id="txtStackTrace" 
+                                value="{runDetail>/stackTrace}"
+                                rows="6"
+                                width="100%"
+                                editable="false"
+                                class="sapUiTinyMarginTop"/>
+                        </VBox>
+                    </VBox>
+                </content>
+            </Panel>
+
+            <!-- Failed Steps Section - visible when there are failed steps (even if run is still running) -->
+            <Panel id="failedStepsPanel" 
+                headerText="Failed Steps ({runDetail>/failedStepsCount})" 
+                class="sapUiSmallMargin" 
+                expandable="true" 
+                expanded="true"
+                visible="{= ${runDetail>/failedStepsCount} > 0}">
+                <headerToolbar>
+                    <Toolbar>
+                        <Title text="Failed Steps" level="H5"/>
+                        <ToolbarSpacer/>
+                        <ObjectStatus 
+                            text="{runDetail>/failedStepsCount} step(s) failed"
+                            state="Error"
+                            icon="sap-icon://error"/>
+                    </Toolbar>
+                </headerToolbar>
+                <content>
+                    <Table id="failedStepsTable" items="{runDetail>/failedSteps}">
+                        <columns>
+                            <Column id="colFailedStepName" width="250px">
+                                <Text text="Task Name"/>
+                            </Column>
+                            <Column id="colFailedStepStatus" width="100px">
+                                <Text text="Status"/>
+                            </Column>
+                            <Column id="colFailedStepDuration" width="100px" hAlign="End">
+                                <Text text="Duration"/>
+                            </Column>
+                            <Column id="colFailedStepError">
+                                <Text text="Error Message"/>
+                            </Column>
+                        </columns>
+                        <items>
+                            <ColumnListItem type="Active" press=".onFailedStepPress">
+                                <cells>
+                                    <Text text="{runDetail>objectId}"/>
+                                    <ObjectStatus 
+                                        text="{runDetail>status}" 
+                                        state="Error"
+                                        icon="sap-icon://error"/>
+                                    <Text text="{runDetail>durationDisplay}"/>
+                                    <Text text="{runDetail>errorMessage}" maxLines="2"/>
+                                </cells>
+                            </ColumnListItem>
+                        </items>
+                    </Table>
+                </content>
+            </Panel>
+
+            <!-- Logs Link Section -->
+            <Panel id="logsPanel" headerText="{i18n>runInspector.logs}" class="sapUiSmallMargin" expandable="true">
+                <content>
+                    <VBox id="logsLinksBox" class="sapUiSmallMargin">
+                        <Link id="linkCorrelation" 
+                            text="View Correlated Logs (Correlation ID: {runDetail>/correlationId})"
+                            press=".onViewCorrelatedLogs"
+                            class="sapUiSmallMarginBottom"/>
+                        <Link id="linkFullLogs" 
+                            text="View Full Execution Logs"
+                            press=".onViewFullLogs"/>
+                    </VBox>
+                </content>
+            </Panel>
+        </content>
+
+    </Page>
+</mvc:View>

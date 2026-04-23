@@ -1,0 +1,103 @@
+{
+  "applications": {},
+  "inbounds": {},
+  "services": {
+    "LaunchPage": {
+      "adapter": {
+        "config": {
+          "groups": [
+            {
+              "id": "MainGroup",
+              "title": "Applications",
+              "tiles": [
+                {
+                  "id": "RulesTile",
+                  "tileType": "sap.ushell.ui.tile.StaticTile",
+                  "targetURL": "#ConditionalRules-manage",
+                  "properties": {
+                    "title": "Conditional Rules",
+                    "subtitle": "Manage conditional rules",
+                    "icon": "sap-icon://settings",
+                    "targetURL": "#ConditionalRules-manage"
+                  }
+                },
+                {
+                  "id": "OverridesTile",
+                  "tileType": "sap.ushell.ui.tile.StaticTile",
+                  "targetURL": "#SkipOverrides-manage",
+                  "properties": {
+                    "title": "Skip Overrides",
+                    "subtitle": "Manage skip overrides",
+                    "icon": "sap-icon://wrench",
+                    "targetURL": "#SkipOverrides-manage"
+                  }
+                },
+                {
+                  "id": "MonitoringTile",
+                  "tileType": "sap.ushell.ui.tile.StaticTile",
+                  "targetURL": "#TaskChainMonitoring-display",
+                  "properties": {
+                    "title": "Task Chain Monitoring",
+                    "subtitle": "Monitor task chains",
+                    "icon": "sap-icon://monitor-payments",
+                    "targetURL": "#TaskChainMonitoring-display"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "ClientSideTargetResolution": {
+      "adapter": {
+        "config": {
+          "inbounds": {
+            "ConditionalRules-manage": {
+              "semanticObject": "ConditionalRules",
+              "action": "manage",
+              "title": "Conditional Rules",
+              "signature": {
+                "parameters": {},
+                "additionalParameters": "allowed"
+              },
+              "resolutionResult": {
+                "applicationType": "SAPUI5",
+                "additionalInformation": "SAPUI5.Component=webapp",
+                "url": "http://localhost:8081/"
+              }
+            },
+            "SkipOverrides-manage": {
+              "semanticObject": "SkipOverrides",
+              "action": "manage",
+              "title": "Skip Overrides",
+              "signature": {
+                "parameters": {},
+                "additionalParameters": "allowed"
+              },
+              "resolutionResult": {
+                "applicationType": "SAPUI5",
+                "additionalInformation": "SAPUI5.Component=skipoverrides",
+                "url": "http://localhost:8082/"
+              }
+            },
+            "TaskChainMonitoring-display": {
+              "semanticObject": "TaskChainMonitoring",
+              "action": "display",
+              "title":  "Task Chain Monitoring",
+              "signature": {
+                "parameters": {},
+                "additionalParameters": "allowed"
+              },
+              "resolutionResult": {
+                "applicationType": "SAPUI5",
+                "additionalInformation": "SAPUI5.Component=monitoring",
+                "url": "../"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

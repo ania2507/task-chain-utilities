@@ -1,0 +1,157 @@
+<mvc:View
+    xmlns="sap.m"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns:f="sap.f"
+    xmlns:core="sap.ui.core"
+    xmlns:layout="sap.ui.layout"
+    xmlns:html="http://www.w3.org/1999/xhtml"
+    controllerName="monitoring.controller.TaskChainDetail"
+    displayBlock="true">
+
+    <Page id="taskChainDetailPage" 
+        showNavButton="true"
+        navButtonPress=".onNavBack"
+        class="sapUiContentPadding">
+        
+        <customHeader>
+            <Bar id="chainDetailHeader">
+                <contentLeft>
+                    <Button id="btnBackChain" icon="sap-icon://nav-back" type="Transparent" press=".onNavBack"/>
+                </contentLeft>
+                <contentMiddle>
+                    <Title id="chainDetailTitle" text="{chainDetail>/chainName}" level="H4"/>
+                </contentMiddle>
+                <contentRight>
+                    <Button id="btnDownload" icon="sap-icon://download" tooltip="Download"/>
+                    <Button id="btnMore" icon="sap-icon://overflow" tooltip="More options"/>
+                </contentRight>
+            </Bar>
+        </customHeader>
+
+        <subHeader>
+            <Toolbar id="subHeaderToolbar">
+                <Label id="lblVersion" text="{i18n>chainDetail.version}:" class="sapUiSmallMarginEnd"/>
+                <Text id="txtVersion" text="{chainDetail>/version}" class="sapUiSmallMarginEnd"/>
+                <ToolbarSeparator/>
+                <Label id="lblState" text="{i18n>chainDetail.state}:" class="sapUiSmallMarginBegin sapUiSmallMarginEnd"/>
+                <ObjectStatus id="chainStatus" 
+                    text="{chainDetail>/statusText}"
+                    state="{= ${chainDetail>/status} === 'running' ? 'Warning' : ${chainDetail>/status} === 'success' ? 'Success' : 'Error'}"/>
+            </Toolbar>
+        </subHeader>
+
+        <content>
+            <!-- DAG Visualization Section -->
+            <Panel id="dagPanel" headerText="Task Chain DAG" class="sapUiSmallMargin dagContainer">
+                <content>
+                    <core:HTML id="dagSvgContainer" content="{chainDetail>/dagHtml}" preferDOM="true"/>
+                </content>
+            </Panel>
+
+            <!-- Alternative: Custom DAG using Boxes (fallback without SVG) -->
+            <Panel id="dagBoxPanel" headerText="Task Flow" class="sapUiSmallMargin" visible="{= !${chainDetail>/useSvgDag}}">
+                <HBox id="dagFlowContainer" wrap="Wrap" alignItems="Center" justifyContent="Center">
+                    <VBox id="dagCol1" alignItems="Center" class="sapUiSmallMarginEnd">
+                        <Button id="dagNode1" 
+                            text="{chainDetail>/nodes/0/name}"
+                            icon="{= ${chainDetail>/nodes/0/status} === 'success' ? 'sap-icon://accept' : ${chainDetail>/nodes/0/status} === 'error' ? 'sap-icon://decline' : 'sap-icon://process'}"
+                            type="{= ${chainDetail>/nodes/0/status} === 'success' ? 'Accept' : ${chainDetail>/nodes/0/status} === 'error' ? 'Reject' : 'Emphasized'}"
+                            class="dagNode sapUiSmallMarginBottom"
+                            press=".onDagNodePress"/>
+                    </VBox>
+                    <core:Icon id="arrow1" src="sap-icon://slim-arrow-right" size="1.5rem" class="sapUiSmallMarginEnd"/>
+                    <VBox id="dagCol2" alignItems="Center" class="sapUiSmallMarginEnd">
+                        <Button id="dagNode2" 
+                            text="{chainDetail>/nodes/1/name}"
+                            icon="{= ${chainDetail>/nodes/1/status} === 'success' ? 'sap-icon://accept' : ${chainDetail>/nodes/1/status} === 'error' ? 'sap-icon://decline' : 'sap-icon://process'}"
+                            type="{= ${chainDetail>/nodes/1/status} === 'success' ? 'Accept' : ${chainDetail>/nodes/1/status} === 'error' ? 'Reject' : 'Emphasized'}"
+                            class="dagNode sapUiSmallMarginBottom"
+                            press=".onDagNodePress"/>
+                        <Button id="dagNode3" 
+                            text="{chainDetail>/nodes/2/name}"
+                            icon="{= ${chainDetail>/nodes/2/status} === 'success' ? 'sap-icon://accept' : ${chainDetail>/nodes/2/status} === 'error' ? 'sap-icon://decline' : 'sap-icon://process'}"
+                            type="{= ${chainDetail>/nodes/2/status} === 'success' ? 'Accept' : ${chainDetail>/nodes/2/status} === 'error' ? 'Reject' : 'Emphasized'}"
+                            class="dagNode"
+                            press=".onDagNodePress"/>
+                    </VBox>
+                    <core:Icon id="arrow2" src="sap-icon://slim-arrow-right" size="1.5rem" class="sapUiSmallMarginEnd"/>
+                    <VBox id="dagCol3" alignItems="Center" class="sapUiSmallMarginEnd">
+                        <Button id="dagNode4" 
+                            text="{chainDetail>/nodes/3/name}"
+                            icon="{= ${chainDetail>/nodes/3/status} === 'success' ? 'sap-icon://accept' : ${chainDetail>/nodes/3/status} === 'error' ? 'sap-icon://decline' : 'sap-icon://process'}"
+                            type="{= ${chainDetail>/nodes/3/status} === 'success' ? 'Accept' : ${chainDetail>/nodes/3/status} === 'error' ? 'Reject' : 'Emphasized'}"
+                            class="dagNode sapUiSmallMarginBottom"
+                            press=".onDagNodePress"/>
+                        <Button id="dagNode5" 
+                            text="{chainDetail>/nodes/4/name}"
+                            icon="{= ${chainDetail>/nodes/4/status} === 'success' ? 'sap-icon://accept' : ${chainDetail>/nodes/4/status} === 'error' ? 'sap-icon://decline' : 'sap-icon://process'}"
+                            type="{= ${chainDetail>/nodes/4/status} === 'success' ? 'Accept' : ${chainDetail>/nodes/4/status} === 'error' ? 'Reject' : 'Emphasized'}"
+                            class="dagNode"
+                            press=".onDagNodePress"/>
+                    </VBox>
+                    <core:Icon id="arrow3" src="sap-icon://slim-arrow-right" size="1.5rem" class="sapUiSmallMarginEnd"/>
+                    <VBox id="dagCol4" alignItems="Center">
+                        <Button id="dagNode6" 
+                            text="{chainDetail>/nodes/5/name}"
+                            icon="{= ${chainDetail>/nodes/5/status} === 'success' ? 'sap-icon://accept' : ${chainDetail>/nodes/5/status} === 'error' ? 'sap-icon://decline' : 'sap-icon://process'}"
+                            type="{= ${chainDetail>/nodes/5/status} === 'success' ? 'Accept' : ${chainDetail>/nodes/5/status} === 'error' ? 'Reject' : 'Emphasized'}"
+                            class="dagNode"
+                            press=".onDagNodePress"/>
+                    </VBox>
+                </HBox>
+            </Panel>
+
+            <!-- Execution Details Table -->
+            <Panel id="executionDetailsPanel" headerText="{i18n>chainDetail.executionDetails}" class="sapUiSmallMargin monitoringTable">
+                <headerToolbar>
+                    <Toolbar id="execTableToolbar">
+                        <Title id="execTableTitle" text="{i18n>chainDetail.executionDetails}" level="H5"/>
+                        <ToolbarSpacer/>
+                        <Button id="btnTableSettings" icon="sap-icon://action-settings" tooltip="Table Settings"/>
+                    </Toolbar>
+                </headerToolbar>
+                <Table id="executionDetailsTable" 
+                    items="{chainDetail>/executions}" 
+                    growing="true" 
+                    growingThreshold="10">
+                    <columns>
+                        <Column id="colExecRunId" width="120px">
+                            <Text id="colExecRunIdText" text="{i18n>dashboard.runId}"/>
+                        </Column>
+                        <Column id="colExecTask">
+                            <Text id="colExecTaskText" text="{i18n>dashboard.task}"/>
+                        </Column>
+                        <Column id="colExecStatus" width="100px" hAlign="Center">
+                            <Text id="colExecStatusText" text="{i18n>dashboard.status}"/>
+                        </Column>
+                        <Column id="colExecStart" width="100px">
+                            <Text id="colExecStartText" text="{i18n>chainDetail.start}"/>
+                        </Column>
+                        <Column id="colExecDuration" width="100px" hAlign="End">
+                            <Text id="colExecDurationText" text="{i18n>dashboard.duration}"/>
+                        </Column>
+                        <Column id="colExecRetries" width="80px" hAlign="Center">
+                            <Text id="colExecRetriesText" text="{i18n>chainDetail.retries}"/>
+                        </Column>
+                    </columns>
+                    <items>
+                        <ColumnListItem id="execDetailItem" type="Active" press=".onExecutionRowPress">
+                            <cells>
+                                <Link id="cellExecRunId" text="{chainDetail>runId}" press=".onRunIdPress"/>
+                                <Text id="cellExecTask" text="{chainDetail>taskName}"/>
+                                <ObjectStatus id="cellExecStatus"
+                                    text="{chainDetail>statusText}"
+                                    state="{= ${chainDetail>status} === 'success' ? 'Success' : ${chainDetail>status} === 'error' ? 'Error' : 'Warning'}"
+                                    inverted="true"/>
+                                <Text id="cellExecStart" text="{chainDetail>startTime}"/>
+                                <Text id="cellExecDuration" text="{chainDetail>duration}"/>
+                                <ObjectNumber id="cellExecRetries" number="{chainDetail>retries}"/>
+                            </cells>
+                        </ColumnListItem>
+                    </items>
+                </Table>
+            </Panel>
+        </content>
+
+    </Page>
+</mvc:View>

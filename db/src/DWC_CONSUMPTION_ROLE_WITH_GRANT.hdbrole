@@ -1,0 +1,2 @@
+{    "role": {"name": "DWC_CONSUMPTION_ROLE#",
+               "schema_privileges": [{"privileges_with_grant_option":[ "SELECT","SELECT METADATA","EXECUTE" ]}]}}

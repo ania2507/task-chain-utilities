@@ -1,0 +1,11 @@
+{
+  "name": "py-srv",
+  "version": "1.0.0",
+  "description": "Python server module for task-chain-utilities (Datasphere CLI helper)",
+  "dependencies": {
+    "@sap/datasphere-cli": "^2025.22.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

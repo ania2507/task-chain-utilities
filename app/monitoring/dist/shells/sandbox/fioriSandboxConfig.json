@@ -1,0 +1,73 @@
+{
+  "applications": {
+    "TaskChainMonitoring": {
+      "additionalInformation": "SAPUI5.Component=monitoring",
+      "applicationType": "SAPUI5",
+      "url": "../../"
+    }
+  },
+  "inbounds": {
+    "TaskChainMonitoring-display": {
+      "semanticObject": "TaskChainMonitoring",
+      "action": "display",
+      "title": "Task Chain Monitoring",
+      "signature": {
+        "parameters": {},
+        "additionalParameters": "allowed"
+      },
+      "resolutionResult": {
+        "applicationType": "SAPUI5",
+        "additionalInformation": "SAPUI5.Component=monitoring",
+        "url": "../../"
+      }
+    }
+  },
+  "services": {
+    "LaunchPage": {
+      "adapter": {
+        "config": {
+          "groups": [
+            {
+              "id": "MonitoringGroup",
+              "title": "Monitoring",
+              "tiles": [
+                {
+                  "id": "MonitoringTile",
+                  "tileType": "sap.ushell.ui.tile.StaticTile",
+                  "targetURL": "#TaskChainMonitoring-display",
+                  "properties": {
+                    "title": "Task Chain Monitoring",
+                    "icon": "sap-icon://monitor-payments",
+                    "targetURL": "#TaskChainMonitoring-display"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "ClientSideTargetResolution": {
+      "adapter": {
+        "config": {
+          "inbounds": {
+            "TaskChainMonitoring-display": {
+              "semanticObject": "TaskChainMonitoring",
+              "action": "display",
+              "title": "Task Chain Monitoring",
+              "signature": {
+                "parameters": {},
+                "additionalParameters": "allowed"
+              },
+              "resolutionResult": {
+                "applicationType": "SAPUI5",
+                "additionalInformation": "SAPUI5.Component=monitoring",
+                "url": "../../"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

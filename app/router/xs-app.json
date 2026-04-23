@@ -1,0 +1,66 @@
+{
+  "welcomeFile": "/index.html",
+  "authenticationMethod": "route",
+  "routes": [
+    {
+      "source": "^/sap/bc/lrep/(.*)$",
+      "target": "/sap/bc/lrep/$1",
+      "service": "html5-apps-repo-rt",
+      "authenticationType": "xsuaa"
+    },
+    {
+      "source": "^/webapp/odata/(.*)$",
+      "target": "/odata/$1",
+      "destination": "srv-api",
+      "authenticationType": "xsuaa"
+    },
+    {
+      "source": "^/monitoring/odata/(.*)$",
+      "target": "/odata/$1",
+      "destination": "srv-api",
+      "authenticationType": "xsuaa"
+    },
+    {
+      "source": "^/skipoverrides/odata/(.*)$",
+      "target": "/odata/$1",
+      "destination": "srv-api",
+      "authenticationType": "xsuaa"
+    },
+    {
+      "source": "^/webapp/api/rules/(.*)$",
+      "target": "/$1",
+      "destination": "py-srv-api",
+      "authenticationType": "none"
+    },
+    {
+      "source": "^/api/rules/(.*)$",
+      "target": "/$1",
+      "destination": "py-srv-api",
+      "authenticationType": "none"
+    },
+    {
+      "source": "^/api/dsp/(.*)$",
+      "target": "/v1/dsp/$1",
+      "destination": "py-srv-api",
+      "authenticationType": "xsuaa"
+    },
+    {
+      "source": "^/v1/(.*)$",
+      "target": "/v1/$1",
+      "destination": "py-srv-api",
+      "authenticationType": "xsuaa"
+    },
+    {
+      "source": "^/odata/(.*)$",
+      "target": "/odata/$1",
+      "destination": "srv-api",
+      "authenticationType": "xsuaa"
+    },
+    {
+      "source": "^/(.*)$",
+      "target": "$1",
+      "service": "html5-apps-repo-rt",
+      "authenticationType": "xsuaa"
+    }
+  ]
+}

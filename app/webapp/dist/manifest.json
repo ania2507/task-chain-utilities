@@ -1,0 +1,222 @@
+{
+	"_version": "1.82.0",
+	"sap.app": {
+		"id": "webapp",
+		"type": "application",
+		"i18n": {
+			"bundleUrl": "i18n/i18n.properties",
+			"supportedLocales": [
+				""
+			]
+		},
+		"applicationVersion": {
+			"version": "0.0.1"
+		},
+		"title": "{{appTitle}}",
+		"description": "{{appDescription}}",
+		"resources": "resources.json",
+		"sourceTemplate": {
+			"id": "@sap/generator-fiori:worklist",
+			"version": "1.20.4",
+			"toolsId": "7b05a94c-f3ef-4c6c-b087-20a8b72e2e8a"
+		},
+		"crossNavigation": {
+			"inbounds": {
+				"ConditionalRules-manage": {
+					"signature": {
+						"parameters": {},
+						"additionalParameters": "allowed"
+					},
+					"semanticObject": "ConditionalRules",
+					"action": "manage",
+					"title": "{{appTitle}}",
+					"icon": "sap-icon://settings"
+				}
+			}
+		},
+		"dataSources": {
+			"mainService": {
+				"uri": "odata/v4/services/",
+				"type": "OData",
+				"settings": {
+					"annotations": [],
+					"odataVersion": "4.0"
+				}
+			},
+			"pyService": {
+				"uri": "api/rules",
+				"type": "JSON",
+				"settings": {}
+			}
+		}
+	},
+	"sap.ui": {
+		"technology": "UI5",
+		"icons": {
+			"icon": "",
+			"favIcon": "",
+			"phone": "",
+			"phone@2": "",
+			"tablet": "",
+			"tablet@2": ""
+		},
+		"deviceTypes": {
+			"desktop": true,
+			"tablet": true,
+			"phone": true
+		}
+	},
+	"sap.ui5": {
+		"flexEnabled": true,
+		"dependencies": {
+			"minUI5Version": "1.145.0",
+			"libs": {
+				"sap.m": {},
+				"sap.ui.core": {},
+				"sap.ushell": {},
+				"sap.fe.templates": {},
+				"sap.ui.codeeditor": {}
+			}
+		},
+		"extends": {
+			"extensions": {
+				"sap.ui.controllerExtensions": {
+					"sap.fe.templates.ObjectPage.ObjectPageController": {
+						"controllerName": "webapp.ext.controller.ObjectPageExt"
+					}
+				}
+			}
+		},
+		"contentDensities": {
+			"compact": true,
+			"cozy": true
+		},
+		"models": {
+			"i18n": {
+				"type": "sap.ui.model.resource.ResourceModel",
+				"settings": {
+					"bundleName": "webapp.i18n.i18n",
+					"supportedLocales": [
+						""
+					]
+				}
+			},
+			"": {
+				"dataSource": "mainService",
+				"preload": true,
+				"settings": {
+					"operationMode": "Server",
+					"autoExpandSelect": true,
+					"earlyRequests": true
+				}
+			},
+			"@i18n": {
+				"type": "sap.ui.model.resource.ResourceModel",
+				"uri": "i18n/i18n.properties",
+				"settings": {
+					"supportedLocales": [
+						""
+					]
+				}
+			}
+		},
+		"resources": {
+			"css": [
+				{
+					"uri": "css/style.css"
+				}
+			]
+		},
+		"routing": {
+			"config": {},
+			"routes": [
+				{
+					"pattern": ":?query:",
+					"name": "RuleTableList",
+					"target": "RuleTableList"
+				},
+				{
+					"pattern": "RuleTable({key}):?query:",
+					"name": "RuleTableObjectPage",
+					"target": "RuleTableObjectPage"
+				},
+				{
+					"pattern": "Taskchain({key}):?query:",
+					"name": "TaskchainObjectPage",
+					"target": "TaskchainObjectPage"
+				}
+			],
+			"targets": {
+				"RuleTableList": {
+					"type": "Component",
+					"id": "RuleTableList",
+					"name": "sap.fe.templates.ListReport",
+					"options": {
+						"settings": {
+							"contextPath": "/RuleTable",
+							"variantManagement": "Page",
+							"hideFilterBar": false,
+							"navigation": {
+								"RuleTable": {
+									"detail": {
+										"route": "RuleTableObjectPage"
+									}
+								}
+							},
+							"initialLoad": "Enabled",
+							"controlConfiguration": {
+								"@com.sap.vocabularies.UI.v1.LineItem": {
+									"tableSettings": {
+										"type": "ResponsiveTable"
+									}
+								}
+							}
+						}
+					}
+				},
+				"RuleTableObjectPage": {
+					"type": "Component",
+					"id": "RuleTableObjectPage",
+					"name": "sap.fe.templates.ObjectPage",
+					"options": {
+						"settings": {
+							"editableHeaderContent": false,
+							"contextPath": "/RuleTable",
+							"content": {
+								"body": {
+									"sections": {
+										"customCodeEditorSection": {
+											"template": "tcuwebapp.ext.fragment.CodeEditor",
+											"title": "Python Code Editor"
+										}
+									}
+								}
+							},
+							"controlConfiguration": {}
+						}
+					}
+				},
+				"TaskchainObjectPage": {
+					"type": "Component",
+					"id": "TaskchainObjectPage",
+					"name": "sap.fe.templates.ObjectPage",
+					"options": {
+						"settings": {
+							"editableHeaderContent": false,
+							"contextPath": "/Taskchain"
+						}
+					}
+				}
+			}
+		},
+		"flexBundle": false
+	},
+	"sap.fiori": {
+		"registrationIds": [],
+		"archeType": "transactional"
+	},
+	"sap.cloud": {
+		"public": true,
+		"service": "taskchainutilities.service"
+	}
+}

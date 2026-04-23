@@ -1,0 +1,72 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core">
+
+    <Dialog
+        id="addTaskChainDialog"
+        title="{i18n>dashboard.addTaskChainTitle}"
+        contentWidth="600px"
+        contentHeight="500px"
+        stretch="{device>/system/phone}">
+        
+        <content>
+            <VBox class="sapUiSmallMargin">
+                <Text text="{i18n>dashboard.addTaskChainDesc}" class="sapUiSmallMarginBottom"/>
+                
+                <!-- Search Fields -->
+                <HBox class="sapUiSmallMarginBottom" alignItems="End">
+                    <VBox class="sapUiTinyMarginEnd" width="45%">
+                        <Label text="{i18n>dashboard.filterBySpace}"/>
+                        <Input
+                            id="searchSpaceInput"
+                            placeholder="{i18n>dashboard.spacePlaceholder}"
+                            liveChange=".onChainSearchChange"
+                            value="{availableChains>/searchSpace}"/>
+                    </VBox>
+                    <VBox width="45%">
+                        <Label text="{i18n>dashboard.filterByChain}"/>
+                        <Input
+                            id="searchChainInput"
+                            placeholder="{i18n>dashboard.chainPlaceholder}"
+                            liveChange=".onChainSearchChange"
+                            value="{availableChains>/searchChain}"/>
+                    </VBox>
+                </HBox>
+                
+                <BusyIndicator 
+                    visible="{availableChains>/loading}"
+                    text="{i18n>common.loading}"
+                    class="sapUiMediumMargin"/>
+                
+                <List
+                    id="availableChainsList"
+                    visible="{= !${availableChains>/loading} }"
+                    items="{path: 'availableChains>/chainsFiltered', templateShareable: false}"
+                    mode="MultiSelect"
+                    selectionChange=".onChainSelectionChange"
+                    noDataText="{i18n>dashboard.noChainsAvailable}">
+                    <StandardListItem
+                        title="{availableChains>businessName}"
+                        description="{availableChains>spaceId} / {availableChains>name}"
+                        icon="sap-icon://chain-link"
+                        info="{availableChains>owner}"/>
+                </List>
+            </VBox>
+        </content>
+        
+        <beginButton>
+            <Button
+                text="{i18n>common.add}"
+                type="Emphasized"
+                press=".onAddChainConfirm"/>
+        </beginButton>
+        
+        <endButton>
+            <Button
+                text="{i18n>common.cancel}"
+                press=".onAddChainCancel"/>
+        </endButton>
+        
+    </Dialog>
+
+</core:FragmentDefinition>

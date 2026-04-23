@@ -1,0 +1,35 @@
+{
+  "xsappname": "task-chain-utilities",
+  "tenant-mode": "dedicated",
+  "scopes": [
+    {
+      "name": "$XSAPPNAME.admin",
+      "description": "Admin access to manage rules"
+    }
+  ],
+  "attributes": [],
+  "role-templates": [
+    {
+      "name": "Admin",
+      "description": "Administrator with full access",
+      "scope-references": [
+        "$XSAPPNAME.admin"
+      ]
+    }
+  ],
+  "oauth2-configuration": {
+    "redirect-uris": [
+      "https://acea-dev-datasphere-gcp-dev-task-chain-utilities.cfapps.eu30.hana.ondemand.com/login/callback",
+      "https://acea-dev-datasphere-gcp-dev-task-chain-utilities.cfapps.eu30.hana.ondemand.com/**",
+      "https://*.cfapps.*.hana.ondemand.com/**",
+      "https://*.hana.ondemand.com/**",
+      "https://*.applicationstudio.cloud.sap/**",
+      "http://localhost:*/**",
+      "https://localhost:*/**"
+    ],
+    "credential-types": ["binding-secret", "x509"]
+  },
+  "authorities": [
+    "$XSAPPNAME.admin"
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "generationParameters": {
+    "generationDate": "Fri Mar 13 2026 14:59:27 GMT+0000 (Coordinated Universal Time)",
+    "generatorPlatform": "SAP Business Application Studio",
+    "serviceType": "Local CAP",
+    "metadataFilename": "",
+    "serviceUrl": "http://localhost:4004/odata/v4/services/",
+    "appName": "monitoring",
+    "appTitle": "Task Chain Monitoring",
+    "appDescription": "SAP Datasphere Task Chain Monitoring System",
+    "appNamespace": "",
+    "ui5Theme": "sap_horizon",
+    "ui5Version": "1.145.0",
+    "enableEslint": false,
+    "enableTypeScript": false,
+    "showMockDataInfo": false,
+    "generatorVersion": "1.20.4",
+    "template": "Basic V4",
+    "generatorName": "SAP Fiori Application Generator",
+    "entityRelatedConfig": [],
+    "launchText": "To launch the generated app, start your CAP project:  and navigate to the following location in your browser:\n\nhttp://localhost:4004/monitoring/webapp/index.html"
+  }
+}

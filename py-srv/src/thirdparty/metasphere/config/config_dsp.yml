@@ -1,0 +1,18 @@
+# dsp
+datatype:
+  nvarchar : cds.string
+  varchar: cds.string
+  decimal: cds.Decimal
+  double: cds.Double
+  float: cds.Float
+
+dsp_table_exclusion:
+  1: bwid_tech_table_tgt
+  2: bwid_trfn_tech_explorer
+
+json:
+  folder_name : Folder_VYFSWOZM
+
+folders:
+  Folder_AQPTLCEX: Ingestion
+  Folder_BFDWKSIZ: Text
