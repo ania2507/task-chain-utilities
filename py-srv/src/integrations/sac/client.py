@@ -55,9 +55,8 @@ class _SACSession:
       • **direct** – client_credentials grant (default, no user context)
       • **destination** – BTP Destination Service SAML Bearer (user propagation)
 
-    When a ``DestinationClient`` is provided *and* a BTP user JWT is
-    available in the current Flask request, the destination path is used
-    automatically.  Otherwise the session falls back to client_credentials.
+    When a ``DestinationClient`` is provided, the destination path is used
+    and requires a BTP user JWT from the current Flask request.
     """
 
     def __init__(
@@ -107,13 +106,16 @@ class _SACSession:
         """Return a valid SAC access token, refreshing if needed.
 
         Prefers the Destination Service path when available.
-        When the BTP Destination has a SystemUser, no user JWT is needed.
+        In pure user-propagation mode, a caller JWT is required.
         """
         # ------ destination (SAML Bearer) path ------
         if self._destination_client:
-            # Try with user JWT if available (real user propagation),
-            # otherwise call without it (SystemUser mode from the blog).
             user_jwt = self._get_user_jwt()
+            if not user_jwt:
+                raise RuntimeError(
+                    "SAC destination requires an authenticated user context "
+                    "for user propagation"
+                )
             return self._ensure_token_via_destination(user_jwt)
 
         # ------ direct client_credentials path ------
@@ -139,12 +141,8 @@ class _SACSession:
     def _ensure_token_via_destination(self, user_jwt: Optional[str] = None) -> str:
         """Get a SAC token through the BTP Destination Service (SAML Bearer).
 
-        When the BTP Destination has a ``SystemUser`` property, no
-        ``user_jwt`` is required — the Destination Service creates the
-        SAML assertion for the SystemUser automatically.
-
-        If ``user_jwt`` is provided it is forwarded as ``X-user-token``
-        for real user-propagation scenarios.
+        The caller JWT is forwarded as ``X-user-token`` so the Destination
+        Service can perform SAML Bearer user propagation.
         """
         # Invalidate cache when the calling user changes
         if user_jwt != self._last_user_jwt:
@@ -154,6 +152,8 @@ class _SACSession:
         if self._access_token and time.time() < self._token_expiry:
             return self._access_token
 
+        mode = f"user_jwt propagation (user={user_jwt[:20]}...)"
+        logger.debug(f"SAC: exchanging token via BTP Destination ({mode})")
         token_data = self._destination_client.get_sac_token(user_jwt)
         self._access_token = token_data["access_token"]
         self._token_expiry = (
@@ -162,7 +162,7 @@ class _SACSession:
         self._session.headers.update({"Authorization": f"Bearer {self._access_token}"})
         self._csrf_token = None
         self._last_user_jwt = user_jwt
-        logger.info("SAC token obtained via BTP Destination Service (SAML Bearer)")
+        logger.info(f"SAC token obtained via BTP Destination Service ({mode})")
         return self._access_token
 
     def _fetch_csrf(self) -> str:
@@ -345,11 +345,35 @@ class SACJobClient(BaseJobClient):
         }
 
     def check_health(self) -> Dict[str, Any]:
+        """Check SAC connectivity with graceful fallback for auth scenarios.
+        
+        In pure user-propagation mode this endpoint is expected to run without
+        a caller JWT, so SAC is reported as degraded rather than broken.
+        """
         try:
             self._sac.get(f"{_MULTIACTION_PATH}?$top=1")
             return {"status": "ok", "integration": IntegrationType.SAC.value}
         except Exception as e:
-            return {"status": "error", "integration": IntegrationType.SAC.value, "error": str(e)}
+            error_str = str(e)
+            if (
+                "Cannot determine user to propagate" in error_str
+                or "requires an authenticated user context" in error_str
+            ):
+                logger.warning(
+                    "SAC health check: destination requires a user JWT for "
+                    "OAuth2SAMLBearerAssertion. This endpoint runs without "
+                    "an authenticated caller, so the result is degraded by design. "
+                    "Error: %s",
+                    error_str,
+                )
+                return {
+                    "status": "degraded",
+                    "integration": IntegrationType.SAC.value,
+                    "note": "SAC validation requires an authenticated caller JWT; use POST /v1/jobs/launch from the UI",
+                    "error": error_str,
+                }
+            # Other errors are real problems
+            return {"status": "error", "integration": IntegrationType.SAC.value, "error": error_str}
 
     # ------------------------------------------------------------------
     # Internal

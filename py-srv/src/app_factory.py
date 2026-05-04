@@ -14,7 +14,7 @@ from flask import Flask
 
 from .config import Config
 from .engine import RuleEngine
-from .repository import DspHanaQueryExecutor, HanaRuleRepository, InMemoryRuleRepository
+from .repository import HanaRuleRepository, InMemoryRuleRepository
 from .routes.db import bp as db_bp
 from .routes.dsp import bp as dsp_bp
 from .routes.jobs import bp as jobs_bp
@@ -42,15 +42,7 @@ def _init_components() -> Tuple[Any, Any, RuleEngine, TaskchainRoutingService, T
                 "Falling back to InMemoryRuleRepository (HANA init failed): %s", e
             )
             repository = InMemoryRuleRepository()
-            db_query_executor = repository
-        else:
-            dsp_executor = DspHanaQueryExecutor()
-            if Config.get_dsp_hana_credentials():
-                logging.getLogger(__name__).info("Using DSP HANA for cross-schema db_query()")
-                db_query_executor = dsp_executor
-            else:
-                logging.getLogger(__name__).info("DSP HANA not configured, using HDI container for db_query()")
-                db_query_executor = repository
+        db_query_executor = repository
 
     engine = RuleEngine(db_query_func=getattr(db_query_executor, "query", None))
     routing_service = TaskchainRoutingService(repository, engine)
@@ -68,55 +60,88 @@ def _init_job_executor() -> JobExecutor:
     executor = JobExecutor()
 
     # -- IBP --
-    ibp_host = os.environ.get("IBP_HOST", "").strip()
-    ibp_user = os.environ.get("IBP_USER", "").strip()
-    ibp_password = os.environ.get("IBP_PASSWORD", "").strip()
-    if ibp_host and ibp_user and ibp_password:
-        try:
-            from .integrations.ibp import IBPJobClient
+    try:
+        from .integrations.ibp import IBPJobClient
+        from .integrations.ibp.destination import IBPDestinationClient
 
-            verify = os.environ.get("IBP_VERIFY_SSL", "true").lower() != "false"
-            client = IBPJobClient(ibp_host, ibp_user, ibp_password, verify_ssl=verify)
-            executor.register_client(client)
-            log.info("IBP integration registered (host=%s)", ibp_host)
-        except Exception as e:
-            log.warning("Failed to initialise IBP client: %s", e)
-    else:
-        log.info("IBP integration not configured (IBP_HOST/IBP_USER/IBP_PASSWORD missing)")
+        verify = os.environ.get("IBP_VERIFY_SSL", "true").lower() != "false"
+        ibp_dest_name = os.environ.get("IBP_DESTINATION_NAME", "").strip()
+
+        if ibp_dest_name:
+            dest_client = IBPDestinationClient.from_env()
+            if not dest_client:
+                log.warning(
+                    "IBP_DESTINATION_NAME is set (%s) but Destination Service credentials are missing",
+                    ibp_dest_name,
+                )
+            else:
+                conn = dest_client.get_connection()
+                client = IBPJobClient(
+                    host=conn["host"],
+                    user=conn.get("user"),
+                    password=conn.get("password"),
+                    bearer_token=conn.get("access_token"),
+                    verify_ssl=verify,
+                )
+                executor.register_client(client)
+                log.info("IBP integration registered via Destination (dest=%s)", ibp_dest_name)
+        else:
+            ibp_host = os.environ.get("IBP_HOST", "").strip()
+            ibp_user = os.environ.get("IBP_USER", "").strip()
+            ibp_password = os.environ.get("IBP_PASSWORD", "").strip()
+            if ibp_host and ibp_user and ibp_password:
+                client = IBPJobClient(ibp_host, ibp_user, ibp_password, verify_ssl=verify)
+                executor.register_client(client)
+                log.info("IBP integration registered (legacy env mode, host=%s)", ibp_host)
+            else:
+                log.info(
+                    "IBP integration not configured "
+                    "(set IBP_DESTINATION_NAME or IBP_HOST/IBP_USER/IBP_PASSWORD)"
+                )
+    except Exception as e:
+        log.warning("Failed to initialise IBP client: %s", e)
 
     # -- SAC --
     sac_host = os.environ.get("SAC_HOST", "").strip()
     sac_token_url = os.environ.get("SAC_TOKEN_URL", "").strip()
     sac_client_id = os.environ.get("SAC_CLIENT_ID", "").strip()
     sac_client_secret = os.environ.get("SAC_CLIENT_SECRET", "").strip()
-    if sac_host and sac_token_url and sac_client_id and sac_client_secret:
-        try:
-            from .integrations.sac import SACJobClient
-            from .integrations.sac.destination import DestinationClient
+    try:
+        from .integrations.sac import SACJobClient
+        from .integrations.sac.destination import DestinationClient
 
-            verify = os.environ.get("SAC_VERIFY_SSL", "true").lower() != "false"
+        verify = os.environ.get("SAC_VERIFY_SSL", "true").lower() != "false"
 
-            # When SAC_DESTINATION_NAME is set, enable the BTP Destination
-            # Service path for user-propagated tokens (SAML Bearer).
-            # This is required for multi action execution.
-            dest_client = DestinationClient.from_env()
-            if dest_client:
-                log.info("SAC Destination Service integration enabled (dest=%s)",
-                         os.environ.get("SAC_DESTINATION_NAME"))
-            else:
-                log.info("SAC Destination Service not configured – using client_credentials only")
-
+        # Prefer BTP Destination bootstrap when available. This supports
+        # OAuth2SAMLBearerAssertion/SystemUser setups without legacy SAC_* vars.
+        dest_client = DestinationClient.from_env()
+        if dest_client:
+            conn = dest_client.get_connection()
             client = SACJobClient(
-                sac_host, sac_token_url, sac_client_id, sac_client_secret,
+                conn["host"], sac_token_url, sac_client_id, sac_client_secret,
                 destination_client=dest_client,
                 verify_ssl=verify,
             )
             executor.register_client(client)
-            log.info("SAC integration registered (host=%s)", sac_host)
-        except Exception as e:
-            log.warning("Failed to initialise SAC client: %s", e)
-    else:
-        log.info("SAC integration not configured (SAC_HOST/SAC_TOKEN_URL/SAC_CLIENT_ID/SAC_CLIENT_SECRET missing)")
+            log.info(
+                "SAC integration registered via Destination (dest=%s, host=%s)",
+                os.environ.get("SAC_DESTINATION_NAME"),
+                conn["host"],
+            )
+        elif sac_host and sac_token_url and sac_client_id and sac_client_secret:
+            client = SACJobClient(
+                sac_host, sac_token_url, sac_client_id, sac_client_secret,
+                verify_ssl=verify,
+            )
+            executor.register_client(client)
+            log.info("SAC integration registered (legacy env mode, host=%s)", sac_host)
+        else:
+            log.info(
+                "SAC integration not configured "
+                "(set SAC_DESTINATION_NAME or SAC_HOST/SAC_TOKEN_URL/SAC_CLIENT_ID/SAC_CLIENT_SECRET)"
+            )
+    except Exception as e:
+        log.warning("Failed to initialise SAC client: %s", e)
 
     return executor
 

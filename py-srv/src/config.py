@@ -1,4 +1,4 @@
-"""Configuration helpers for Cloud Foundry / HANA / DSP HANA."""
+"""Configuration helpers for Cloud Foundry / HANA."""
 
 from __future__ import annotations
 
@@ -20,9 +20,7 @@ class Config:
     DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
     LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
-    HANA_SERVICE_INSTANCE_NAME = os.environ.get("HANA_SERVICE_INSTANCE_NAME", "task-chain-utilities-db")
-    DSP_HANA_SERVICE_NAME = os.environ.get("DSP_HANA_SERVICE_NAME", "dsp-hana")
-    DSP_SERVICE_NAME = os.environ.get("DSP_SERVICE_NAME", "dsp-credentials")
+    HANA_SERVICE_INSTANCE_NAME = os.environ.get("HANA_SERVICE_INSTANCE_NAME", "orchestrator_hdi_cont_noprod")
 
     HANA_HOST = os.environ.get("HANA_HOST", "localhost")
     HANA_PORT = int(os.environ.get("HANA_PORT", 443))
@@ -31,54 +29,6 @@ class Config:
     HANA_ENCRYPT = os.environ.get("HANA_ENCRYPT", "true").lower() == "true"
     HANA_SCHEMA = os.environ.get("HANA_SCHEMA", "")
 
-    DSP_HANA_HOST = os.environ.get("DSP_HANA_HOST", "")
-    DSP_HANA_PORT = int(os.environ.get("DSP_HANA_PORT", 443))
-    DSP_HANA_USER = os.environ.get("DSP_HANA_USER", "")
-    DSP_HANA_PASSWORD = os.environ.get("DSP_HANA_PASSWORD", "")
-
-
-    @classmethod
-    def get_dsp_credentials(cls) -> dict | None:
-        """Return DSP API credentials.
-
-        Priority:
-        1) VCAP_SERVICES["user-provided"] — UPS bound in CF (name = DSP_SERVICE_NAME)
-        2) Individual env vars DSP_HOSTNAME / DSP_CLIENT_ID / ... (local .env)
-        """
-        vcap_services = os.environ.get("VCAP_SERVICES")
-        if vcap_services:
-            try:
-                services = json.loads(vcap_services)
-                if "user-provided" in services:
-                    for instance in services["user-provided"]:
-                        if instance.get("name") == cls.DSP_SERVICE_NAME:
-                            creds = instance.get("credentials", {})
-                            logger.info("Using DSP credentials from UPS '%s'", cls.DSP_SERVICE_NAME)
-                            return {
-                                "hostname": creds.get("hostname"),
-                                "client_id": creds.get("client_id"),
-                                "client_secret": creds.get("client_secret"),
-                                "auth_url": creds.get("auth_url"),
-                                "simulate": str(creds.get("simulate", "false")).lower() == "true",
-                            }
-            except json.JSONDecodeError as e:
-                logger.error("Failed to parse VCAP_SERVICES for DSP credentials: %s", e)
-
-        # Fallback: individual env vars (local dev via .env)
-        hostname = os.environ.get("DSP_HOSTNAME")
-        client_id = os.environ.get("DSP_CLIENT_ID")
-        client_secret = os.environ.get("DSP_CLIENT_SECRET")
-        if hostname and client_id and client_secret:
-            logger.info("Using DSP credentials from env vars (local dev)")
-            return {
-                "hostname": hostname,
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "auth_url": os.environ.get("DSP_AUTH_URL") or os.environ.get("DSP_TOKEN_URL"),
-                "simulate": os.environ.get("DSP_SIMULATE", "false").lower() == "true",
-            }
-
-        return None
 
     @classmethod
     def get_hana_credentials(cls) -> dict:
@@ -147,36 +97,3 @@ class Config:
             "encrypt": cls.HANA_ENCRYPT,
             "schema": cls.HANA_SCHEMA,
         }
-
-    @classmethod
-    def get_dsp_hana_credentials(cls) -> dict | None:
-        vcap_services = os.environ.get("VCAP_SERVICES")
-        if vcap_services:
-            try:
-                services = json.loads(vcap_services)
-                if "user-provided" in services:
-                    for instance in services["user-provided"]:
-                        if instance.get("name") == cls.DSP_HANA_SERVICE_NAME:
-                            creds = instance.get("credentials", {})
-                            return {
-                                "host": creds.get("host"),
-                                "port": int(creds.get("port", 443)),
-                                "user": creds.get("user"),
-                                "password": creds.get("password"),
-                                "encrypt": True,
-                                "schema": None,
-                            }
-            except json.JSONDecodeError as e:
-                logger.error("Failed to parse VCAP_SERVICES for DSP HANA: %s", e)
-
-        if cls.DSP_HANA_HOST and cls.DSP_HANA_USER:
-            return {
-                "host": cls.DSP_HANA_HOST,
-                "port": cls.DSP_HANA_PORT,
-                "user": cls.DSP_HANA_USER,
-                "password": cls.DSP_HANA_PASSWORD,
-                "encrypt": True,
-                "schema": None,
-            }
-
-        return None

@@ -330,83 +330,21 @@ module.exports = cds.service.impl(async function () {
      */
     async function fetchTaskchainsFromDSP(authHeader = null) {
         const pySrvUrl = getPySrvUrl();
-        const allTaskchains = [];
+        const headers = {};
+        if (authHeader) headers['Authorization'] = authHeader;
 
-        // 1. Recupera la lista degli space da DSP
-        const spacesHeaders = { 'Content-Type': 'application/json' };
-        if (authHeader) spacesHeaders['Authorization'] = authHeader;
-
-        const spacesResponse = await fetch(`${pySrvUrl}/v1/db/query`, {
-            method: 'POST',
-            headers: spacesHeaders,
-            body: JSON.stringify({ 
-                sql: "SELECT SPACE_ID, SCHEMA_NAME FROM DWC_TENANT_OWNER.SPACE_SCHEMAS WHERE SCHEMA_NAME LIKE '%$TEC'",
-                params: []
-            })
+        const response = await fetch(`${pySrvUrl}/v1/db/taskchains`, {
+            method: 'GET',
+            headers
         });
-        
-        const spacesResult = await spacesResponse.json();
-        if (!spacesResult.success) {
-            throw new Error(`Failed to fetch spaces: ${spacesResult.error}`);
+
+        const result = await response.json();
+        if (!result.success) {
+            throw new Error(`Failed to fetch taskchains: ${result.error}`);
         }
 
-        const spaces = spacesResult.data || [];
-
-        // 2. Per ogni space, recupera le taskchain
-        for (const space of spaces) {
-            const schemaName = space.SCHEMA_NAME;
-            const spaceId = space.SPACE_ID;
-            
-            try {
-                const tcHeaders = { 'Content-Type': 'application/json' };
-                if (authHeader) tcHeaders['Authorization'] = authHeader;
-
-                const tcResponse = await fetch(`${pySrvUrl}/v1/db/query`, {
-                    method: 'POST',
-                    headers: tcHeaders,
-                    body: JSON.stringify({ 
-                        sql: `SELECT NAME, JSON, DEPLOYED_BY, DEPLOYED_AT FROM "${schemaName}".DEPLOYED_METADATA WHERE REPOSITORY_OBJECT_TYPE = 'DWC_TASKCHAIN'`,
-                        params: []
-                    })
-                });
-                
-                const tcResult = await tcResponse.json();
-                if (tcResult.success && tcResult.data && tcResult.data.length > 0) {
-                    // Converti in formato entità
-                    for (const tc of tcResult.data) {
-                        let businessName = tc.NAME;
-                        let owner = '';
-                        let modificationDate = null;
-
-                        // Estrai info dal JSON embedded
-                        if (tc.JSON) {
-                            try {
-                                const tcJson = JSON.parse(tc.JSON);
-                                businessName = tcJson.business_name || tc.NAME;
-                                owner = tcJson.owner || '';
-                                modificationDate = tcJson.modification_date || null;
-                            } catch (e) {
-                                // Usa valori default
-                            }
-                        }
-
-                        allTaskchains.push({
-                            name: tc.NAME,
-                            spaceId: spaceId,
-                            businessName: businessName,
-                            owner: owner,
-                            deployedBy: tc.DEPLOYED_BY || '',
-                            deployedAt: tc.DEPLOYED_AT || null,
-                            modificationDate: modificationDate
-                        });
-                    }
-                }
-            } catch (e) {
-                console.warn(`⚠️ Error fetching taskchains for ${spaceId}:`, e.message);
-            }
-        }
-
-        console.log(`✅ Fetched ${allTaskchains.length} taskchains from DSP`);
-        return allTaskchains;
+        const taskchains = result.data || [];
+        console.log(`✅ Fetched ${taskchains.length} taskchains from DSP`);
+        return taskchains;
     }
 });

@@ -37,12 +37,6 @@ def status():
         db_query_executor = current_app.extensions["taskchain"]["db_query_executor"]
 
         health_status = routing_service.check_status()
-        if Config.get_dsp_hana_credentials():
-            dsp_ok = bool(getattr(db_query_executor, "check_health", lambda: False)())
-            health_status.setdefault("components", {})["dsp_hana"] = "ok" if dsp_ok else "error"
-            if not dsp_ok:
-                health_status["status"] = "degraded"
-
         return jsonify(health_status), (200 if health_status.get("status") == "ok" else 503)
     except Exception as e:
         return (

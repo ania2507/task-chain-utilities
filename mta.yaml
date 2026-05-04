@@ -32,7 +32,7 @@ modules:
   requires:
   - name: task-chain-utilities-db
     properties:
-      TARGET_CONTAINER: task-chain-utilities-db
+      TARGET_CONTAINER: orchestrator_hdi_cont_noprod
   parameters:
     buildpack: nodejs_buildpack
 - name: task-chain-utilities-appcontent
@@ -121,11 +121,14 @@ modules:
 - name: task-chain-utilities-py-srv
   type: python
   path: py-srv
+  properties:
+    SAC_DESTINATION_NAME: SAC_DSP_ORCHESTRATOR
+    DSP_DESTINATION_NAME: External_Trigger_DSP
+    IBP_DESTINATION_NAME: IBP_APPJOB_MANAGEMENT
   requires:
   - name: task-chain-utilities-auth
   - name: task-chain-utilities-db
-  - name: dsp-hana
-  - name: dsp-credentials
+  - name: task-chain-utilities-destination
   provides:
   - name: py-srv-api
     properties:
@@ -158,6 +161,19 @@ modules:
   requires:
   - name: task-chain-utilities-html5-runtime
   - name: task-chain-utilities-auth
+  - name: task-chain-utilities-destination
+  - name: srv-api
+    group: destinations
+    properties:
+      name: srv-api
+      url: ~{srv-url}
+      forwardAuthToken: true
+  - name: py-srv-api
+    group: destinations
+    properties:
+      name: py-srv-api
+      url: ~{py-srv-url}
+      forwardAuthToken: true
 resources:
 - name: task-chain-utilities-auth
   type: org.cloudfoundry.managed-service
@@ -169,14 +185,11 @@ resources:
     service: xsuaa
     service-plan: application
 - name: task-chain-utilities-db
-  type: com.sap.xs.hdi-container
+  type: org.cloudfoundry.existing-service
   parameters:
-    config:
-      schema: TASK_CHAIN_UTILITIE
-    service: hana
-    service-plan: hdi-shared
+    service-name: orchestrator_hdi_cont_noprod
   properties:
-    hdi-container-name: TASK_CHAIN_UTILITIE
+    hdi-container-name: ORCHESTRATOR
 - name: task-chain-utilities-destination
   type: org.cloudfoundry.managed-service
   parameters:
@@ -188,14 +201,14 @@ resources:
           - Authentication: NoAuthentication
             HTML5.DynamicDestination: true
             HTML5.ForwardAuthToken: true
-            Name: task-chain-utilities-srv
+            Name: srv-api
             ProxyType: Internet
             Type: HTTP
             URL: ~{srv-api/srv-url}
           - Authentication: NoAuthentication
             HTML5.DynamicDestination: true
             HTML5.ForwardAuthToken: true
-            Name: task-chain-utilities-py-srv
+            Name: py-srv-api
             ProxyType: Internet
             Type: HTTP
             URL: ~{py-srv-api/py-srv-url}
@@ -221,14 +234,6 @@ resources:
   parameters:
     service: html5-apps-repo
     service-plan: app-runtime
-- name: dsp-hana
-  type: org.cloudfoundry.user-provided-service
-  parameters:
-    path: ./hana-multi-schema-credentials.json
-- name: dsp-credentials
-  type: org.cloudfoundry.user-provided-service
-  parameters:
-    path: ./dsp-credentials.json
 parameters:
   deploy_mode: html5-repo
   enable-parallel-deployments: true

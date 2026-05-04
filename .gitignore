@@ -36,3 +36,15 @@ mta_archives/
 # auto generated wildcard
 db/.env
 py-srv/.env
+
+# Credentials (do NOT commit)
+dsp-credentials.json
+hana-multi-schema-credentials.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Built UI artifacts
+app/*/dist/

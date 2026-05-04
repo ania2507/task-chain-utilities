@@ -19,8 +19,6 @@
   ],
   "oauth2-configuration": {
     "redirect-uris": [
-      "https://acea-dev-datasphere-gcp-dev-task-chain-utilities.cfapps.eu30.hana.ondemand.com/login/callback",
-      "https://acea-dev-datasphere-gcp-dev-task-chain-utilities.cfapps.eu30.hana.ondemand.com/**",
       "https://*.cfapps.*.hana.ondemand.com/**",
       "https://*.hana.ondemand.com/**",
       "https://*.applicationstudio.cloud.sap/**",

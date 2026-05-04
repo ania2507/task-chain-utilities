@@ -7,18 +7,14 @@ Implements the OAuth 2.0 SAML Bearer Assertion flow described in:
 
 Flow:
   1. Obtain a **service token** for the Destination Service (client_credentials
-     against the Destination Service's own XSUAA).
+      against the Destination Service's own XSUAA).
   2. Call ``GET /destination-configuration/v1/destinations/{name}``
-     with the service token as Bearer.
-  3. Because the BTP Destination is configured with
-     ``OAuth2SAMLBearerAssertion`` + a **SystemUser** property, the
-     Destination Service generates a SAML assertion for that fixed user
-     and exchanges it with SAC for an access-token that carries the
-     user identity.
+      with the service token as Bearer.
+  3. Forward the caller JWT as ``X-user-token`` so the Destination Service
+      can generate the SAML assertion and exchange it with SAC for a user-bound
+      access token.
   4. The returned ``authTokens[0].value`` is used as Bearer for all
-     subsequent SAC REST calls (CSRF + multiActions).
-
-  No ``X-user-token`` header is needed when SystemUser is set.
+      subsequent SAC REST calls (CSRF + multiActions).
 """
 
 from __future__ import annotations
@@ -36,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 class DestinationClient:
     """Calls BTP Destination Service to obtain SAC access tokens
-    via OAuth2 SAML Bearer Assertion (user propagation)."""
+    via OAuth2 SAML Bearer Assertion user propagation."""
 
     def __init__(
         self,
@@ -62,41 +58,44 @@ class DestinationClient:
     # Public
     # ------------------------------------------------------------------
 
+    def get_connection(self, user_jwt: str | None = None) -> Dict[str, Any]:
+        """Return destination URL and optional token material for SAC."""
+        data = self._fetch_destination(user_jwt)
+        cfg = data.get("destinationConfiguration", {})
+        base_url = self._normalize_host((cfg.get("URL") or "").rstrip("/"))
+        auth = (cfg.get("Authentication") or "").strip()
+
+        if not base_url:
+            raise RuntimeError(
+                f"Destination '{self._destination_name}' has no URL configured"
+            )
+
+        connection: Dict[str, Any] = {
+            "name": self._destination_name,
+            "host": base_url,
+            "authentication": auth,
+        }
+
+        auth_tokens = data.get("authTokens", [])
+        if auth_tokens and not auth_tokens[0].get("error"):
+            connection["access_token"] = auth_tokens[0].get("value")
+            connection["expires_in"] = int(
+                auth_tokens[0].get("expires_in_seconds", 3600)
+            )
+
+        return connection
+
     def get_sac_token(self, user_jwt: str | None = None) -> Dict[str, Any]:
         """Exchange for a SAC access token via the BTP Destination Service.
 
-        When the BTP Destination has a **SystemUser** property, no
-        ``user_jwt`` is needed — the Destination Service uses the
-        SystemUser for the SAML assertion automatically.
-
-        If ``user_jwt`` is provided it is forwarded as ``X-user-token``
-        for real user-propagation scenarios.
+        The caller JWT is forwarded as ``X-user-token`` so the Destination
+        Service can perform user propagation toward SAC.
 
         Returns a dict::
 
             {"access_token": "...", "expires_in": 3600, "type": "Bearer"}
         """
-        service_token = self._ensure_service_token()
-
-        url = (
-            f"{self._service_url}/destination-configuration/v1"
-            f"/destinations/{self._destination_name}"
-        )
-
-        headers: Dict[str, str] = {
-            "Authorization": f"Bearer {service_token}",
-        }
-        if user_jwt:
-            headers["X-user-token"] = user_jwt
-
-        resp = requests.get(
-            url,
-            headers=headers,
-            verify=self._verify,
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        data = self._fetch_destination(user_jwt)
 
         auth_tokens = data.get("authTokens", [])
         if not auth_tokens:
@@ -107,6 +106,10 @@ class DestinationClient:
 
         token_info = auth_tokens[0]
         if token_info.get("error"):
+            logger.error(
+                "SAC authTokens full detail: %s",
+                json.dumps(token_info, indent=2),
+            )
             raise RuntimeError(
                 f"Destination token exchange error: {token_info['error']} "
                 f"(destination={self._destination_name})"
@@ -141,6 +144,37 @@ class DestinationClient:
             time.time() + int(data.get("expires_in", 3600)) - 60
         )
         return self._service_token
+
+    def _fetch_destination(self, user_jwt: str | None = None) -> Dict[str, Any]:
+        """Load the raw destination payload from Destination Service."""
+        service_token = self._ensure_service_token()
+
+        url = (
+            f"{self._service_url}/destination-configuration/v1"
+            f"/destinations/{self._destination_name}"
+        )
+
+        headers: Dict[str, str] = {
+            "Authorization": f"Bearer {service_token}",
+        }
+        if user_jwt:
+            headers["X-user-token"] = user_jwt
+
+        resp = requests.get(
+            url,
+            headers=headers,
+            verify=self._verify,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    @staticmethod
+    def _normalize_host(url: str) -> str:
+        """Strip API suffixes because the SAC client appends /api/v1 itself."""
+        if url.endswith("/api/v1"):
+            return url[: -len("/api/v1")]
+        return url
 
     # ------------------------------------------------------------------
     # Factory

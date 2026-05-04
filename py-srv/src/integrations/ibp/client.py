@@ -29,10 +29,23 @@ _SERVICE_PATH = "/sap/opu/odata/SAP/BC_EXT_APPJOB_MANAGEMENT;v=0002"
 class _ODataSession:
     """Thin wrapper that keeps a CSRF token + cookies alive."""
 
-    def __init__(self, host: str, user: str, password: str, *, verify_ssl: bool = True):
+    def __init__(
+        self,
+        host: str,
+        user: str | None = None,
+        password: str | None = None,
+        *,
+        bearer_token: str | None = None,
+        verify_ssl: bool = True,
+    ):
         self._host = host.rstrip("/")
         self._session = requests.Session()
-        self._session.auth = (user, password)
+        if bearer_token:
+            self._session.headers.update({"Authorization": f"Bearer {bearer_token}"})
+        elif user and password:
+            self._session.auth = (user, password)
+        else:
+            raise ValueError("IBP client requires either user/password or bearer_token")
         self._session.verify = verify_ssl
         self._session.headers.update({"Accept": "application/json"})
         self._csrf_token: Optional[str] = None
@@ -113,12 +126,19 @@ class IBPJobClient(BaseJobClient):
     def __init__(
         self,
         host: str,
-        user: str,
-        password: str,
+        user: str | None = None,
+        password: str | None = None,
         *,
+        bearer_token: str | None = None,
         verify_ssl: bool = True,
     ):
-        self._odata = _ODataSession(host, user, password, verify_ssl=verify_ssl)
+        self._odata = _ODataSession(
+            host,
+            user,
+            password,
+            bearer_token=bearer_token,
+            verify_ssl=verify_ssl,
+        )
 
     @property
     def integration_type(self) -> IntegrationType:

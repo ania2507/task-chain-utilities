@@ -1,19 +1,14 @@
-"""Taskchain Executor with optional DSP integration.
-
-For this repo (option A), DSP execution is optional; when DSPHandler isn't available,
-execution endpoints will return errors.
-"""
+"""Taskchain Executor - DSP execution via BTP Destination Service."""
 
 from __future__ import annotations
 
 import logging
 import os
-import sys
 import threading
+import urllib.request
 import json
 import time
 import uuid
-from pathlib import Path
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -22,43 +17,6 @@ from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-
-def _ensure_thirdparty_on_syspath() -> None:
-    # When running via unit tests or alternative entrypoints, app.py may not
-    # have inserted the thirdparty folder into sys.path yet.
-    # Find the nearest '<something>/thirdparty/metasphere' by walking upwards.
-    here = os.path.abspath(os.path.dirname(__file__))
-    thirdparty_dir: str | None = None
-    for depth in range(0, 8):
-        candidate = os.path.abspath(os.path.join(here, *(".." for _ in range(depth)), "thirdparty"))
-        if os.path.isdir(os.path.join(candidate, "metasphere")):
-            thirdparty_dir = candidate
-            break
-
-    if thirdparty_dir and thirdparty_dir not in sys.path:
-        sys.path.insert(0, thirdparty_dir)
-
-
-_ensure_thirdparty_on_syspath()
-
-try:
-    # Importing via `thirdparty.metasphere` can execute `metasphere/__init__.py`
-    # under the wrong module name, which breaks absolute imports inside thirdparty.
-    # Prefer importing the package as `metasphere.*` when thirdparty is on sys.path.
-    from metasphere.src.dsp.dsp_handler_v2 import DSPHandler  # type: ignore
-
-    DSP_AVAILABLE = True
-except Exception as e:
-    logger.warning("DSPHandler not available (metasphere import failed): %s", e)
-    try:
-        # Last-resort fallback for environments where `thirdparty` is a package.
-        from thirdparty.metasphere.src.dsp.dsp_handler_v2 import DSPHandler  # type: ignore
-
-        DSP_AVAILABLE = True
-    except Exception as e2:
-        logger.warning("DSPHandler not available (thirdparty.metasphere import failed): %s", e2)
-        DSP_AVAILABLE = False
-        DSPHandler = None  # type: ignore
 
 
 class TaskchainStatus(Enum):
@@ -94,10 +52,8 @@ class TaskchainExecutor:
 
         if self._simulate:
             logger.warning("TaskchainExecutor using simulated DSP execution (DSP_SIMULATE=true)")
-        elif DSP_AVAILABLE:
-            logger.info("TaskchainExecutor initialized with DSP support")
         else:
-            logger.warning("DSPHandler not available - DSP execution disabled")
+            logger.info("TaskchainExecutor initialized (DSP via BTP Destination)")
 
     @staticmethod
     def make_execution_id(space: str, logid: str) -> str:
@@ -142,16 +98,7 @@ class TaskchainExecutor:
             threading.Thread(target=_runner, daemon=True).start()
             return execution_id
 
-        if not DSP_AVAILABLE:
-            raise RuntimeError("DSP not available - cannot execute real taskchains")
-
-        assert DSPHandler is not None
-
-        creds = self._get_dsp_cli_credentials()
-
-        dsp = DSPHandler(**creds)
-
-        logid = dsp.launch_task_chain(spaceid, taskchain_name)
+        logid = self._dsp_run_task_chain(spaceid, taskchain_name)
         if not logid or str(logid).strip().lower() == "none":
             raise RuntimeError("DSP taskchain launch did not return a logId")
         execution_id = self.make_execution_id(spaceid, logid)
@@ -299,19 +246,11 @@ class TaskchainExecutor:
                 "simulated": True,
             }
 
-        if not DSP_AVAILABLE:
-            raise RuntimeError("DSP not available")
-
-        assert DSPHandler is not None
-
         spaceid, logid = self.parse_execution_id(execution_id)
         if not spaceid or not logid:
             raise ValueError("Invalid execution_id format")
 
-        creds = self._get_dsp_cli_credentials()
-
-        dsp = DSPHandler(**creds)
-        raw_status = dsp.get_chain_status(spaceid, logid)
+        raw_status = self._dsp_get_chain_status(spaceid, logid)
 
         s = (raw_status or "").strip().strip('"').strip().upper()
         if "RUNNING" in s:
@@ -364,47 +303,61 @@ class TaskchainExecutor:
         return self.get_status_dsp(execution_id)
 
     @staticmethod
-    def _get_dsp_cli_credentials() -> Dict[str, str]:
-        """Return DSP CLI credentials.
+    def _get_dsp_connection() -> Dict[str, str]:
+        """Return DSP base URL and access token via BTP Destination Service."""
+        from ..integrations.dsp import DSPDestinationClient
 
-        Priority:
-        1) Env vars (CF-friendly)
-        2) Local file `dsp_credentials.json` next to `py-srv/app.py` (dev-friendly)
-        """
-
-        client_id = os.environ.get("DSP_CLIENT_ID")
-        client_secret = os.environ.get("DSP_CLIENT_SECRET")
-        hostname = os.environ.get("DSP_HOSTNAME")
-        if client_id and client_secret and hostname:
-            return {"client_id": client_id, "client_secret": client_secret, "hostname": hostname}
-
-        # Local dev fallback (never on Cloud Foundry)
-        if os.environ.get("VCAP_APPLICATION") or os.environ.get("CF_INSTANCE_INDEX"):
+        client = DSPDestinationClient.from_env()
+        if not client:
             raise RuntimeError(
-                "DSP credentials missing (DSP_CLIENT_ID/DSP_CLIENT_SECRET/DSP_HOSTNAME). "
-                "Refusing to read dsp_credentials.json on Cloud Foundry."
+                "DSP destination not configured. Set DSP_DESTINATION_NAME and bind Destination Service."
             )
+        conn = client.get_connection()
+        base_url = (conn.get("host") or "").rstrip("/")
+        access_token = conn.get("access_token") or ""
+        if not base_url:
+            raise RuntimeError("DSP destination has no target URL configured")
+        if not access_token:
+            raise RuntimeError("DSP destination did not return an auth token")
+        return {"base_url": base_url, "access_token": access_token}
 
-        try:
-            # taskchain_executor.py -> src/services -> src -> py-srv
-            py_srv_dir = Path(__file__).resolve().parents[2]
-            creds_path = py_srv_dir / "dsp_credentials.json"
-            if creds_path.exists():
-                data = json.loads(creds_path.read_text(encoding="utf-8"))
-                file_client_id = (data.get("client_id") or "").strip()
-                file_client_secret = (data.get("client_secret") or "").strip()
-                file_hostname = (data.get("hostname") or "").strip()
-                if file_client_id and file_client_secret and file_hostname:
-                    return {
-                        "client_id": file_client_id,
-                        "client_secret": file_client_secret,
-                        "hostname": file_hostname,
-                    }
-        except Exception:
-            # Keep error surfaced as "missing credentials" below.
-            pass
+    @staticmethod
+    def _dsp_run_task_chain(spaceid: str, taskchain_name: str) -> str:
+        """Launch a DSP task chain via REST API and return the logId."""
+        conn = TaskchainExecutor._get_dsp_connection()
+        url = f"{conn['base_url']}/api/v1/tasks/spaces/{spaceid}/chains/{taskchain_name}"
+        req = urllib.request.Request(
+            url,
+            data=b"{}",
+            headers={
+                "Authorization": f"Bearer {conn['access_token']}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        logid = data.get("logId")
+        if not logid:
+            raise RuntimeError(f"DSP task chain launch did not return a logId. Response: {data}")
+        return str(logid)
 
-        raise RuntimeError("DSP credentials missing (DSP_CLIENT_ID/DSP_CLIENT_SECRET/DSP_HOSTNAME or dsp_credentials.json)")
+    @staticmethod
+    def _dsp_get_chain_status(spaceid: str, logid: str) -> str:
+        """Get the status of a DSP task chain execution via REST API."""
+        conn = TaskchainExecutor._get_dsp_connection()
+        url = f"{conn['base_url']}/api/v1/tasks/spaces/{spaceid}/logs/{logid}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {conn['access_token']}",
+                "Accept": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data.get("status", "")
 
     def list_executions(self, limit: int = 50) -> list[Dict[str, Any]]:
         with self._lock:

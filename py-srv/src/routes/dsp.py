@@ -10,15 +10,13 @@ import json
 import os
 import re
 import time
-import base64
-import urllib.parse
 import urllib.request
-from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from flask import Blueprint, jsonify, request
 
 from ..auth import flask_access_validation
+from ..integrations.dsp import DSPDestinationClient
 
 bp = Blueprint("dsp", __name__)
 
@@ -28,14 +26,6 @@ _TOKEN_CACHE: dict[str, Any] = {
     "expires_at": 0.0,
 }
 
-
-@dataclass
-class CliResult:
-    ok: bool
-    rc: int
-    stdout: str
-    stderr: str
-    command: str
 
 
 _REDACT_KEYS = {
@@ -90,155 +80,44 @@ def _redact_json_payload(payload: Any) -> Any:
     return payload
 
 
-def _sanitize_cli_result(r: Dict[str, Any]) -> Dict[str, Any]:
-    stdout = r.get("stdout") or ""
-    stderr = r.get("stderr") or ""
-
-    # If stdout/stderr are JSON, redact keys.
-    def maybe_json(s: str) -> Optional[Any]:
-        s = (s or "").strip()
-        if not s:
-            return None
-        if not (s.startswith("{") or s.startswith("[")):
-            return None
-        try:
-            return json.loads(s)
-        except Exception:
-            return None
-
-    stdout_json = maybe_json(stdout)
-    stderr_json = maybe_json(stderr)
-
-    sanitized: Dict[str, Any] = {
-        "ok": bool(r.get("ok")),
-        "rc": int(r.get("rc", -1)),
-        "command": _redact_text(str(r.get("command") or "")),
-        "stdout": None,
-        "stderr": None,
-    }
-
-    # Optional metadata
-    if "timed_out" in r:
-        sanitized["timed_out"] = bool(r.get("timed_out"))
-    if "timeout_sec" in r:
-        try:
-            sanitized["timeout_sec"] = int(r.get("timeout_sec")) if r.get("timeout_sec") is not None else None
-        except Exception:
-            sanitized["timeout_sec"] = r.get("timeout_sec")
-
-    if stdout_json is not None:
-        sanitized["stdout"] = _redact_json_payload(stdout_json)
-    else:
-        sanitized["stdout"] = _redact_text(stdout)
-
-    if stderr_json is not None:
-        sanitized["stderr"] = _redact_json_payload(stderr_json)
-    else:
-        sanitized["stderr"] = _redact_text(stderr)
-
-    return sanitized
-
-
-def _exec_cli(command: str, *, timeout_sec: int | None = 120) -> Dict[str, Any]:
-    # Prefer metasphere tool (it also resolves local datasphere binary on CF)
-    try:
-        from thirdparty.metasphere.src.tools.dsp_tools import exec_command_result  # type: ignore
-
-        return exec_command_result(command, timeout_sec=timeout_sec)
-    except Exception:
-        # Minimal fallback: run via subprocess with NODE_ENV removed.
-        import platform
-        import shlex
-        import subprocess
-        from pathlib import Path
-
-        env = os.environ.copy()
-        env.pop("NODE_ENV", None)
-
-        # Try local node_modules binary if present (CF droplet)
-        cli = None
-        for p in [
-            Path.cwd() / "node_modules" / ".bin" / "datasphere",
-            Path("/home/vcap/app/node_modules/.bin/datasphere"),
-        ]:
-            try:
-                if p.exists():
-                    cli = str(p)
-                    break
-            except Exception:
-                pass
-
-        if command.strip().startswith("datasphere ") and cli:
-            command = f"{shlex.quote(cli)} " + command.strip()[len("datasphere ") :]
-
-        is_windows = platform.system() == "Windows"
-        if is_windows:
-            p = subprocess.run(command, shell=True, text=True, capture_output=True, env=env, timeout=timeout_sec)
-        else:
-            p = subprocess.run(shlex.split(command), text=True, capture_output=True, env=env, timeout=timeout_sec)
-
-        return {
-            "ok": p.returncode == 0,
-            "rc": p.returncode,
-            "stdout": (p.stdout or "").strip(),
-            "stderr": (p.stderr or "").strip(),
-            "command": command,
-            "timeout_sec": timeout_sec,
-        }
 
 
 def _get_dsp_rest_config() -> Dict[str, str]:
-    auth_url = os.environ.get("DSP_AUTH_URL") or os.environ.get("DSP_TOKEN_URL")
-    client_id = os.environ.get("DSP_CLIENT_ID")
-    client_secret = os.environ.get("DSP_CLIENT_SECRET")
-    base_url = os.environ.get("DSP_REST_BASE_URL") or os.environ.get("DSP_HOSTNAME")
-
-    if not (auth_url and client_id and client_secret and base_url):
+    dest_name = os.environ.get("DSP_DESTINATION_NAME", "").strip()
+    if not dest_name:
         raise RuntimeError(
-            "DSP REST config missing. Set DSP_AUTH_URL (or DSP_TOKEN_URL), "
-            "DSP_CLIENT_ID, DSP_CLIENT_SECRET, and DSP_REST_BASE_URL (or DSP_HOSTNAME)."
+            "DSP destination not configured. Set DSP_DESTINATION_NAME and bind Destination Service."
         )
 
-    if base_url.endswith("/"):
-        base_url = base_url[:-1]
+    dest_client = DSPDestinationClient.from_env()
+    if not dest_client:
+        raise RuntimeError(
+            "DSP destination configured but Destination Service credentials are missing. "
+            "Bind destination service or set DEST_* env vars."
+        )
+
+    conn = dest_client.get_connection()
+    base_url = (conn.get("host") or "").rstrip("/")
+    access_token = conn.get("access_token") or ""
+    if not base_url:
+        raise RuntimeError(
+            f"DSP destination '{dest_name}' has no target URL configured"
+        )
+    if not access_token:
+        raise RuntimeError(
+            f"DSP destination '{dest_name}' did not return an auth token"
+        )
 
     return {
-        "auth_url": auth_url,
-        "client_id": client_id,
-        "client_secret": client_secret,
         "base_url": base_url,
+        "access_token": access_token,
+        "destination_name": dest_name,
     }
 
 
 def _get_dsp_access_token() -> str:
-    now = time.time()
-    if _TOKEN_CACHE.get("access_token") and _TOKEN_CACHE.get("expires_at", 0) > now + 30:
-        return _TOKEN_CACHE["access_token"]
-
     cfg = _get_dsp_rest_config()
-    token_url = cfg["auth_url"].rstrip("/")
-    if not token_url.endswith("/oauth/token"):
-        token_url = token_url + "/oauth/token"
-
-    payload = urllib.parse.urlencode({"grant_type": "client_credentials"}).encode("utf-8")
-    basic = f"{cfg['client_id']}:{cfg['client_secret']}".encode("utf-8")
-    headers = {
-        "Authorization": "Basic " + base64.b64encode(basic).decode("ascii"),
-        "Content-Type": "application/x-www-form-urlencoded",
-    }
-
-    req = urllib.request.Request(token_url, data=payload, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-
-    access_token = data.get("access_token")
-    if not access_token:
-        raise RuntimeError("DSP token response missing access_token")
-
-    expires_in = float(data.get("expires_in", 600))
-    _TOKEN_CACHE["access_token"] = access_token
-    _TOKEN_CACHE["expires_at"] = now + expires_in
-    return access_token
+    return cfg["access_token"]
 
 
 def _post_dsp_directexecute(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -270,158 +149,56 @@ def _post_dsp_directexecute(payload: Dict[str, Any]) -> Dict[str, Any]:
 @bp.route("/diagnose", methods=["POST"])
 @flask_access_validation(required_scope="admin")
 def diagnose_dsp():
-    """Run a few Datasphere CLI diagnostics.
-
-    Body (optional):
-      - spaceid: space ID to check
-      - taskchain: technical name to check
-
-    Returns sanitized stdout/stderr (no client_secret/access_token).
-    """
-
-    payload = request.get_json(silent=True) if request.is_json else {}
-    if payload is None:
-        payload = {}
-
-    spaceid = payload.get("spaceid") or payload.get("spaceId")
-    taskchain = payload.get("taskchain") or payload.get("taskchain_name")
-
-    # Keep endpoint responsive even when CLI hangs.
-    try:
-        requested_timeout = payload.get("timeout_sec")
-        base_timeout_sec = int(requested_timeout) if requested_timeout is not None else 60
-    except Exception:
-        base_timeout_sec = 60
-    base_timeout_sec = max(5, min(base_timeout_sec, 300))
-
-    # Optional: attempt a non-interactive login (client credentials) so cache init can complete.
-    attempt_login = payload.get("attempt_login")
-    if attempt_login is None:
-        attempt_login = True
-
-    dsp_hostname = os.environ.get("DSP_HOSTNAME")
+    """Datasphere diagnostics via BTP Destination Service (REST)."""
 
     checks: list[dict] = []
 
-    # Basic env presence (no secrets)
-    checks.append(
-        {
-            "name": "env",
-            "data": {
-                "DSP_SIMULATE": os.environ.get("DSP_SIMULATE"),
-                "DSP_HOSTNAME_set": bool(os.environ.get("DSP_HOSTNAME")),
-                "DSP_CLIENT_ID_set": bool(os.environ.get("DSP_CLIENT_ID")),
-                "DSP_CLIENT_SECRET_set": bool(os.environ.get("DSP_CLIENT_SECRET")),
-            },
-        }
-    )
+    # Check destination connectivity
+    try:
+        cfg = _get_dsp_rest_config()
+        checks.append({
+            "name": "destination",
+            "ok": True,
+            "host": cfg["base_url"],
+            "destination_name": cfg["destination_name"],
+        })
+    except Exception as e:
+        checks.append({"name": "destination", "ok": False, "error": str(e)})
+        return jsonify({"success": False, "checks": checks}), 200
 
-    # What secrets the CLI has (sanitized)
-    def run_check(name: str, command: str, *, timeout_sec: int) -> None:
-        started = time.monotonic()
-        raw = _exec_cli(command, timeout_sec=timeout_sec)
-        elapsed_ms = int((time.monotonic() - started) * 1000)
-        checks.append(
-            {
-                "name": name,
-                "timeout_sec": timeout_sec,
-                "elapsed_ms": elapsed_ms,
-                "result": _sanitize_cli_result(raw),
-            }
+    # Optionally list spaces
+    payload = request.get_json(silent=True) or {}
+    spaceid = payload.get("spaceid") or payload.get("spaceId")
+    taskchain = payload.get("taskchain") or payload.get("taskchain_name")
+    base_url = cfg["base_url"]
+    access_token = cfg["access_token"]
+
+    try:
+        req = urllib.request.Request(
+            f"{base_url}/api/v1/spaces?$top=25",
+            headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
         )
-
-    run_check("cli.config.secrets.show", "datasphere config secrets show", timeout_sec=base_timeout_sec)
-
-    # Identify the CLI that is actually being executed (version/help can reveal mismatched binaries).
-    run_check("cli.version", "datasphere --version", timeout_sec=min(20, base_timeout_sec))
-    run_check("cli.help", "datasphere --help", timeout_sec=min(20, base_timeout_sec))
-    run_check("cli.config.host.show", "datasphere config host show", timeout_sec=min(20, base_timeout_sec))
-
-    # Some CLI versions require login + cache initialization before other commands.
-    if dsp_hostname:
-        dsp_client_id = os.environ.get("DSP_CLIENT_ID")
-        dsp_client_secret = os.environ.get("DSP_CLIENT_SECRET")
-        if attempt_login and dsp_client_id and dsp_client_secret:
-            run_check(
-                "cli.login.client_credentials",
-                " ".join(
-                    [
-                        "datasphere login",
-                        f'--host "{dsp_hostname}"',
-                        "--authorization-flow client_credentials",
-                        f'--client-id "{dsp_client_id}"',
-                        f'--client-secret "{dsp_client_secret}"',
-                    ]
-                ),
-                timeout_sec=max(60, base_timeout_sec),
-            )
-
-            run_check(
-                "cli.config.secrets.show.after_login",
-                "datasphere config secrets show",
-                timeout_sec=min(30, base_timeout_sec),
-            )
-
-        run_check(
-            "cli.config.cache.init",
-            f"datasphere config cache init --host \"{dsp_hostname}\"",
-            timeout_sec=max(120, base_timeout_sec),
-        )
-
-        # Help for subcommands (useful when the CLI behaves differently in CF)
-        run_check(
-            "cli.spaces.list.help",
-            "datasphere spaces list --help",
-            timeout_sec=min(30, base_timeout_sec),
-        )
-        run_check(
-            "cli.objects.task-chains.list.help",
-            "datasphere objects task-chains list --help",
-            timeout_sec=min(30, base_timeout_sec),
-        )
-        run_check(
-            "cli.tasks.chains.run.help",
-            "datasphere tasks chains run --help",
-            timeout_sec=min(30, base_timeout_sec),
-        )
-
-    # Spaces list (may fail if permissions are missing). Try a simple call first.
-    spaces_cmd_simple = "datasphere spaces list"
-    spaces_cmd_full = "datasphere spaces list -Q 25 -S id,name,displayName"
-    if dsp_hostname:
-        spaces_cmd_simple = f"datasphere spaces list --host \"{dsp_hostname}\""
-        spaces_cmd_full = f"datasphere spaces list --host \"{dsp_hostname}\" -Q 25 -S id,name,displayName"
-    run_check("cli.spaces.list", spaces_cmd_simple, timeout_sec=max(60, base_timeout_sec))
-    run_check("cli.spaces.list.full", spaces_cmd_full, timeout_sec=max(60, base_timeout_sec))
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        spaces = [s.get("spaceDefinition", {}).get("spaceId") or s.get("id") for s in data.get("value", [])]
+        checks.append({"name": "spaces.list", "ok": True, "count": len(spaces), "spaces": spaces[:10]})
+    except Exception as e:
+        checks.append({"name": "spaces.list", "ok": False, "error": str(e)})
 
     if spaceid and taskchain:
-        host_arg = f" --host \"{dsp_hostname}\"" if dsp_hostname else ""
-        run_check(
-            "cli.objects.task-chains.list.simple",
-            f"datasphere objects task-chains list{host_arg} --space \"{spaceid}\" --technical-names \"{taskchain}\"",
-            timeout_sec=max(60, base_timeout_sec),
-        )
-        run_check(
-            "cli.objects.task-chains.list",
-            f"datasphere objects task-chains list{host_arg} --space \"{spaceid}\" --technical-names \"{taskchain}\" -S technicalName,status",
-            timeout_sec=max(30, base_timeout_sec),
-        )
-
-        # Attempt a dry-ish run (this will actually trigger the run; only do when explicitly requested)
-        if payload.get("attempt_run") is True:
-            run_check(
-                "cli.tasks.chains.run",
-                f"datasphere tasks chains run{host_arg} --space \"{spaceid}\" --object \"{taskchain}\"",
-                timeout_sec=max(60, base_timeout_sec),
+        try:
+            req = urllib.request.Request(
+                f"{base_url}/api/v1/tasks/spaces/{spaceid}/chains?$filter=technicalName eq '{taskchain}'",
+                headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
             )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            checks.append({"name": "taskchain.check", "ok": True, "result": data})
+        except Exception as e:
+            checks.append({"name": "taskchain.check", "ok": False, "error": str(e)})
 
-    ok = True
-    for c in checks:
-        r = c.get("result")
-        if isinstance(r, dict) and r.get("ok") is False:
-            ok = False
-
-    return jsonify({"success": ok, "checks": checks}), (200 if ok else 200)
+    ok = all(c.get("ok", True) for c in checks)
+    return jsonify({"success": ok, "checks": checks}), 200
 
 
 @bp.route("/tf/remove-deleted-records", methods=["POST"])
