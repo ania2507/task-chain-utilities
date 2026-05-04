@@ -12,7 +12,7 @@
   },
   "devDependencies": {
     "@cap-js/sqlite": "^2.4.0",
-    "@sap/cds-dk": "^9",
+    "@sap/cds-dk": "^9.9.0",
     "cds-plugin-ui5": "^0.13.0",
     "mbt": "^1.2.49",
     "rimraf": "^5.0.5"
