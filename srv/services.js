@@ -325,26 +325,86 @@ module.exports = cds.service.impl(async function () {
     }
 
     /**
-     * Recupera le taskchain da Datasphere interrogando tutti gli space
-    * Usa il py-srv endpoint /v1/db/query per eseguire query cross-schema su DSP HANA
+     * Esegue una query SQL sul py-srv via /v1/db/query (solo SELECT, cross-schema DSP HANA).
      */
-    async function fetchTaskchainsFromDSP(authHeader = null) {
+    async function dbQuery(sql, params, authHeader) {
         const pySrvUrl = getPySrvUrl();
-        const headers = {};
+        const headers = { 'Content-Type': 'application/json' };
         if (authHeader) headers['Authorization'] = authHeader;
 
-        const response = await fetch(`${pySrvUrl}/v1/db/taskchains`, {
-            method: 'GET',
-            headers
+        const response = await fetch(`${pySrvUrl}/v1/db/query`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ sql, params: params || [] })
         });
 
         const result = await response.json();
         if (!result.success) {
-            throw new Error(`Failed to fetch taskchains: ${result.error}`);
+            throw new Error(`db/query failed: ${result.error}`);
+        }
+        return result.data || [];
+    }
+
+    /**
+     * Recupera le taskchain da Datasphere interrogando tutti gli space via HANA cross-schema.
+     *
+     * Step 1 (services.js:331-349): legge DWC_TENANT_OWNER.SPACE_SCHEMAS per ottenere
+     *   tutti gli space con il relativo SCHEMA_NAME, filtrando gli schemi tecnici LIKE '%$TEC'.
+     *
+     * Step 2 (services.js:355-410): per ogni schema, legge "${schemaName}".DEPLOYED_METADATA
+     *   dove REPOSITORY_OBJECT_TYPE = 'DWC_TASKCHAIN' per costruire l'entità virtuale Taskchain.
+     */
+    async function fetchTaskchainsFromDSP(authHeader = null) {
+        // Step 1 — recupera space e schema name da DWC_TENANT_OWNER.SPACE_SCHEMAS
+        const spaceRows = await dbQuery(
+            `SELECT "SPACE_ID", "SCHEMA_NAME"
+             FROM "DWC_TENANT_OWNER"."SPACE_SCHEMAS"
+             WHERE "SCHEMA_NAME" NOT LIKE '%$TEC'`,
+            [],
+            authHeader
+        );
+
+        if (!spaceRows.length) {
+            console.warn('⚠️ No spaces found in DWC_TENANT_OWNER.SPACE_SCHEMAS');
+            return [];
         }
 
-        const taskchains = result.data || [];
-        console.log(`✅ Fetched ${taskchains.length} taskchains from DSP`);
+        // Step 2 — per ogni schema, legge le taskchain deployate da DEPLOYED_METADATA
+        const taskchains = [];
+        for (const { SPACE_ID: spaceId, SCHEMA_NAME: schemaName } of spaceRows) {
+            if (!schemaName) continue;
+            try {
+                const rows = await dbQuery(
+                    `SELECT
+                        "OBJECT_NAME"        AS "name",
+                        "DEPLOYED_BY"        AS "deployedBy",
+                        "DEPLOYED_AT"        AS "deployedAt",
+                        "BUSINESS_NAME"      AS "businessName",
+                        "OBJECT_STATUS"      AS "objectStatus",
+                        "MODIFICATION_DATE"  AS "modificationDate",
+                        "OWNER"              AS "owner"
+                     FROM "${schemaName}"."DEPLOYED_METADATA"
+                     WHERE "REPOSITORY_OBJECT_TYPE" = 'DWC_TASKCHAIN'`,
+                    [],
+                    authHeader
+                );
+                for (const row of rows) {
+                    taskchains.push({
+                        name: row.name,
+                        spaceId,
+                        businessName: row.businessName || row.name,
+                        owner: row.owner || row.deployedBy || '',
+                        deployedBy: row.deployedBy || '',
+                        deployedAt: row.deployedAt || null,
+                        modificationDate: row.modificationDate || null,
+                    });
+                }
+            } catch (e) {
+                console.warn(`⚠️ Could not read DEPLOYED_METADATA for schema '${schemaName}' (space '${spaceId}'):`, e.message);
+            }
+        }
+
+        console.log(`✅ Fetched ${taskchains.length} taskchains from DSP HANA (${spaceRows.length} spaces)`);
         return taskchains;
     }
 });

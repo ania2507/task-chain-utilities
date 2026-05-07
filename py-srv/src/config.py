@@ -1,4 +1,4 @@
-"""Configuration helpers for Cloud Foundry / HANA."""
+"""Configuration helpers for Cloud Foundry / HANA / DSP HANA."""
 
 from __future__ import annotations
 
@@ -20,7 +20,9 @@ class Config:
     DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
     LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
-    HANA_SERVICE_INSTANCE_NAME = os.environ.get("HANA_SERVICE_INSTANCE_NAME", "orchestrator_hdi_cont_noprod")
+    HANA_SERVICE_INSTANCE_NAME = os.environ.get("HANA_SERVICE_INSTANCE_NAME", "task-chain-utilities-db")
+    DSP_HANA_SERVICE_NAME = os.environ.get("DSP_HANA_SERVICE_NAME", "dsp-hana")
+    DSP_SERVICE_NAME = os.environ.get("DSP_SERVICE_NAME", "dsp-credentials")
 
     HANA_HOST = os.environ.get("HANA_HOST", "localhost")
     HANA_PORT = int(os.environ.get("HANA_PORT", 443))
@@ -29,6 +31,44 @@ class Config:
     HANA_ENCRYPT = os.environ.get("HANA_ENCRYPT", "true").lower() == "true"
     HANA_SCHEMA = os.environ.get("HANA_SCHEMA", "")
 
+    DSP_HANA_HOST = os.environ.get("DSP_HANA_HOST", "")
+    DSP_HANA_PORT = int(os.environ.get("DSP_HANA_PORT", 443))
+    DSP_HANA_USER = os.environ.get("DSP_HANA_USER", "")
+    DSP_HANA_PASSWORD = os.environ.get("DSP_HANA_PASSWORD", "")
+
+
+    @classmethod
+    def get_dsp_hana_credentials(cls) -> dict | None:
+        vcap_services = os.environ.get("VCAP_SERVICES")
+        if vcap_services:
+            try:
+                services = json.loads(vcap_services)
+                if "user-provided" in services:
+                    for instance in services["user-provided"]:
+                        if instance.get("name") == cls.DSP_HANA_SERVICE_NAME:
+                            creds = instance.get("credentials", {})
+                            return {
+                                "host": creds.get("host"),
+                                "port": int(creds.get("port", 443)),
+                                "user": creds.get("user"),
+                                "password": creds.get("password"),
+                                "encrypt": True,
+                                "schema": None,
+                            }
+            except json.JSONDecodeError as e:
+                logger.error("Failed to parse VCAP_SERVICES for DSP HANA: %s", e)
+
+        if cls.DSP_HANA_HOST and cls.DSP_HANA_USER:
+            return {
+                "host": cls.DSP_HANA_HOST,
+                "port": cls.DSP_HANA_PORT,
+                "user": cls.DSP_HANA_USER,
+                "password": cls.DSP_HANA_PASSWORD,
+                "encrypt": True,
+                "schema": None,
+            }
+
+        return None
 
     @classmethod
     def get_hana_credentials(cls) -> dict:

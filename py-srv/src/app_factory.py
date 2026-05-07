@@ -14,7 +14,7 @@ from flask import Flask
 
 from .config import Config
 from .engine import RuleEngine
-from .repository import HanaRuleRepository, InMemoryRuleRepository
+from .repository import DspHanaQueryExecutor, HanaRuleRepository, InMemoryRuleRepository
 from .routes.db import bp as db_bp
 from .routes.dsp import bp as dsp_bp
 from .routes.jobs import bp as jobs_bp
@@ -42,7 +42,14 @@ def _init_components() -> Tuple[Any, Any, RuleEngine, TaskchainRoutingService, T
                 "Falling back to InMemoryRuleRepository (HANA init failed): %s", e
             )
             repository = InMemoryRuleRepository()
-        db_query_executor = repository
+
+        dsp_executor = DspHanaQueryExecutor()
+        if Config.get_dsp_hana_credentials():
+            logging.getLogger(__name__).info("Using DSP HANA for cross-schema db_query()")
+            db_query_executor = dsp_executor
+        else:
+            logging.getLogger(__name__).info("DSP HANA not configured, using HDI container for db_query()")
+            db_query_executor = repository
 
     engine = RuleEngine(db_query_func=getattr(db_query_executor, "query", None))
     routing_service = TaskchainRoutingService(repository, engine)

@@ -204,3 +204,76 @@ class InMemoryRuleRepository(RuleRepository):
 
     def set_query_result(self, result: list) -> None:
         self._mock_query_result = result
+
+
+class DspHanaQueryExecutor:
+    """Cross-schema query executor using DSP HANA credentials (user-provided service)."""
+
+    def __init__(self, credentials: dict | None = None):
+        self._credentials = credentials or Config.get_dsp_hana_credentials()
+        if not self._credentials:
+            logger.warning("DSP HANA not configured - cross-schema queries will fail")
+
+    def _get_connection(self):
+        if not self._credentials:
+            raise RuntimeError("DSP HANA not configured")
+
+        try:
+            from hdbcli import dbapi  # type: ignore
+        except Exception as e:
+            raise RuntimeError("hdbcli not available; install SAP HANA client driver") from e
+
+        conn_params = {
+            "address": self._credentials["host"],
+            "port": int(self._credentials["port"]),
+            "user": self._credentials["user"],
+            "password": self._credentials["password"],
+            "encrypt": self._credentials.get("encrypt", True),
+        }
+
+        return dbapi.connect(**conn_params)
+
+    def query(self, sql: str, params: tuple = None) -> list:  # type: ignore
+        sql_upper = sql.strip().upper()
+        if not sql_upper.startswith("SELECT"):
+            raise ValueError("Only SELECT queries are allowed")
+
+        forbidden = ["INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "GRANT", "REVOKE", "EXEC"]
+        for keyword in forbidden:
+            if keyword in sql_upper:
+                raise ValueError(f"Forbidden keyword '{keyword}' in query")
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(sql, params or ())
+            columns = [desc[0] for desc in cursor.description]
+            rows = cursor.fetchall()
+            cursor.close()
+            return [dict(zip(columns, row)) for row in rows]
+        except ValueError:
+            raise
+        except Exception as e:
+            raise RuleExecutionError(f"Database query failed: {e}")
+        finally:
+            if conn:
+                conn.close()
+
+    def check_health(self) -> bool:
+        if not self._credentials:
+            return False
+        conn = None
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM DUMMY")
+            cursor.fetchone()
+            cursor.close()
+            return True
+        except Exception as e:
+            logger.error("DSP HANA health check failed: %s", e)
+            return False
+        finally:
+            if conn:
+                conn.close()
