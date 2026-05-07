@@ -33,6 +33,11 @@ modules:
   - name: task-chain-utilities-db
     properties:
       TARGET_CONTAINER: orchestrator_hdi_cont_noprod
+  - name: cross-container-service-1
+    group: SERVICE_REPLACEMENTS
+    properties:
+      key: ServiceName_1
+      service: ~{the-service-name}
   parameters:
     buildpack: nodejs_buildpack
 - name: task-chain-utilities-appcontent
@@ -122,9 +127,9 @@ modules:
   type: python
   path: py-srv
   properties:
-    SAC_DESTINATION_NAME: SAC_DSP_ORCHESTRATOR
     DSP_DESTINATION_NAME: External_Trigger_DSP
     IBP_DESTINATION_NAME: IBP_APPJOB_MANAGEMENT
+    SAC_DESTINATION_NAME: SAC_DSP_ORCHESTRATOR
   requires:
   - name: task-chain-utilities-auth
   - name: task-chain-utilities-db
@@ -165,15 +170,15 @@ modules:
   - name: srv-api
     group: destinations
     properties:
+      forwardAuthToken: true
       name: srv-api
       url: ~{srv-url}
-      forwardAuthToken: true
   - name: py-srv-api
     group: destinations
     properties:
+      forwardAuthToken: true
       name: py-srv-api
       url: ~{py-srv-url}
-      forwardAuthToken: true
 resources:
 - name: task-chain-utilities-auth
   type: org.cloudfoundry.managed-service
@@ -234,6 +239,12 @@ resources:
   parameters:
     service: html5-apps-repo
     service-plan: app-runtime
+- name: cross-container-service-1
+  type: org.cloudfoundry.existing-service
+  parameters:
+    service-name: dsp-hana
+  properties:
+    the-service-name: ${service-name}
 parameters:
   deploy_mode: html5-repo
   enable-parallel-deployments: true
