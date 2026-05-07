@@ -29,6 +29,14 @@
   "private": true,
   "cds": {
     "requires": {
+      "[development]": {
+        "db": {
+          "kind": "sqlite",
+          "credentials": {
+            "database": ":memory:"
+          }
+        }
+      },
       "[hybrid]": {
         "auth": "xsuaa"
       },

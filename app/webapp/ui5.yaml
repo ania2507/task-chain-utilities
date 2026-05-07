@@ -10,6 +10,11 @@ server:
       afterMiddleware: compression
       configuration:
         ignoreCertErrors: false # If set to true, certificate errors will be ignored. E.g. self-signed certificates will be accepted
+        backend:
+          - path: /odata
+            url: http://localhost:4004
+          - path: /v1
+            url: http://localhost:8080
         ui5:
           path:
             - /resources
