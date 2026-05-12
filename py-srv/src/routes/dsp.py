@@ -285,7 +285,7 @@ def get_tasklog_messages():
                 "DETAILS" as "details",
                 "TIMESTAMP" as "timestamp",
                 "MESSAGE_BUNDLE_KEY" as "messageKey"
-            FROM "DWC_GLOBAL"."TASK_LOG_MESSAGES"
+            FROM "ORCHESTRATION"."3VR_DWC_TASK_LOG_MESSAGES_01"
             WHERE "TASK_LOG_ID" = ?
             ORDER BY "MESSAGE_NO" ASC
         '''
@@ -344,7 +344,7 @@ def get_taskchain_run_nodes():
                 "FUTURE_STATUS" as "status",
                 "JSON" as "dagJson",
                 "PLAN" as "planJson"
-            FROM "DWC_GLOBAL"."TASK_CHAIN_RUNS"
+            FROM "ORCHESTRATION"."3VR_DWC_TASK_CHAIN_RUNS_01"
             WHERE "CHAIN_TASK_LOG_ID" = ?
         '''
         
@@ -365,8 +365,8 @@ def get_taskchain_run_nodes():
                 l."START_TIME" as "startTime",
                 l."END_TIME" as "endTime",
                 l."OBJECT_ID" as "objectId"
-            FROM "DWC_GLOBAL"."TASK_CHAIN_RUN_NODES" n
-            LEFT JOIN "DWC_GLOBAL"."TASK_LOGS" l ON n."TASK_LOG_ID" = l."TASK_LOG_ID"
+            FROM "ORCHESTRATION"."3VR_DWC_TASK_CHAIN_RUN_NODES_01" n
+            LEFT JOIN "ORCHESTRATION"."3VR_DWC_TASK_LOGS_01" l ON n."TASK_LOG_ID" = l."TASK_LOG_ID"
             WHERE n."CHAIN_TASK_LOG_ID" = ?
             ORDER BY n."NODE_ID" ASC
         '''
@@ -464,7 +464,7 @@ def get_taskchain_dag():
                     r."JSON" as "dagJson",
                     r."PLAN" as "planJson",
                     r."FUTURE_STATUS" as "status"
-                FROM "DWC_GLOBAL"."TASK_CHAIN_RUNS" r
+                FROM "ORCHESTRATION"."3VR_DWC_TASK_CHAIN_RUNS_01" r
                 WHERE r."CHAIN_TASK_LOG_ID" = ?
             '''
             rows = db_query_executor.query(sql, (run_id,))
@@ -476,7 +476,7 @@ def get_taskchain_dag():
                     r."JSON" as "dagJson",
                     r."PLAN" as "planJson",
                     r."FUTURE_STATUS" as "status"
-                FROM "DWC_GLOBAL"."TASK_CHAIN_RUNS" r
+                FROM "ORCHESTRATION"."3VR_DWC_TASK_CHAIN_RUNS_01" r
                 WHERE r."SPACE_ID" = ? AND r."TECHNICAL_NAME" = ?
                 ORDER BY r."CHAIN_TASK_LOG_ID" DESC
                 LIMIT 1
@@ -514,8 +514,8 @@ def get_taskchain_dag():
                 l."OBJECT_ID" as "objectId",
                 l."START_TIME" as "startTime",
                 l."END_TIME" as "endTime"
-            FROM "DWC_GLOBAL"."TASK_CHAIN_RUN_NODES" n
-            LEFT JOIN "DWC_GLOBAL"."TASK_LOGS" l ON n."TASK_LOG_ID" = l."TASK_LOG_ID"
+            FROM "ORCHESTRATION"."3VR_DWC_TASK_CHAIN_RUN_NODES_01" n
+            LEFT JOIN "ORCHESTRATION"."3VR_DWC_TASK_LOGS_01" l ON n."TASK_LOG_ID" = l."TASK_LOG_ID"
             WHERE n."CHAIN_TASK_LOG_ID" = ?
         '''
         node_rows = db_query_executor.query(nodes_sql, (chain_task_log_id,))
@@ -628,7 +628,7 @@ def get_taskchain_runs():
                 "STATUS" as "status",
                 "START_TIME" as "startTime",
                 "END_TIME" as "endTime"
-            FROM "DWC_GLOBAL"."TASK_LOGS"
+            FROM "ORCHESTRATION"."3VR_DWC_TASK_LOGS_01"
             WHERE {where_clause}
             ORDER BY "START_TIME" DESC
             LIMIT {limit}

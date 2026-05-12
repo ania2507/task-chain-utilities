@@ -134,6 +134,7 @@ modules:
   - name: task-chain-utilities-auth
   - name: task-chain-utilities-db
   - name: task-chain-utilities-destination
+  - name: cross-container-service-1
   provides:
   - name: py-srv-api
     properties:

@@ -50,7 +50,7 @@ def _get_step_status_from_dsp_logs(
             status_rows = db_query_executor.query(
                 (
                     "SELECT \"STATUS\" "
-                    "FROM \"DWC_GLOBAL\".\"TASK_LOGS\" "
+                    "FROM \"ORCHESTRATION\".\"3VR_DWC_TASK_LOGS_01\" "
                     "WHERE \"OBJECT_ID\" = ? AND \"SPACE_ID\" = ? "
                     "ORDER BY \"START_TIME\" DESC LIMIT 1"
                 ),
@@ -60,7 +60,7 @@ def _get_step_status_from_dsp_logs(
             status_rows = db_query_executor.query(
                 (
                     "SELECT \"STATUS\" "
-                    "FROM \"DWC_GLOBAL\".\"TASK_LOGS\" "
+                    "FROM \"ORCHESTRATION\".\"3VR_DWC_TASK_LOGS_01\" "
                     "WHERE \"OBJECT_ID\" = ? "
                     "ORDER BY \"START_TIME\" DESC LIMIT 1"
                 ),
@@ -74,7 +74,7 @@ def _get_step_status_from_dsp_logs(
         status_rows = db_query_executor.query(
             (
                 "SELECT \"STATUS\" "
-                "FROM \"DWC_GLOBAL\".\"TASK_LOGS\" "
+                "FROM \"ORCHESTRATION\".\"3VR_DWC_TASK_LOGS_01\" "
                 "WHERE \"OBJECT_ID\" = ? AND \"SPACE_ID\" = ? "
                 "ORDER BY \"START_TIME\" DESC LIMIT 1"
             ),
@@ -87,7 +87,7 @@ def _get_step_status_from_dsp_logs(
     running_rows = db_query_executor.query(
         (
             "SELECT \"TASK_LOG_ID\" "
-            "FROM \"DWC_GLOBAL\".\"TASK_LOGS\" "
+            "FROM \"ORCHESTRATION\".\"3VR_DWC_TASK_LOGS_01\" "
             "WHERE \"OBJECT_ID\" = ? AND \"SPACE_ID\" = ? AND \"STATUS\" = 'RUNNING'"
         ),
         (stepid, spaceid),
@@ -102,7 +102,7 @@ def _get_step_status_from_dsp_logs(
     chain_rows = db_query_executor.query(
         (
             "SELECT TOP 1000 \"CHAIN_TASK_LOG_ID\", \"TASK_LOG_ID\" "
-            "FROM \"DWC_GLOBAL\".\"TASK_CHAIN_RUN_NODES\" "
+            "FROM \"ORCHESTRATION\".\"3VR_DWC_TASK_CHAIN_RUN_NODES_01\" "
             "WHERE \"TASK_LOG_ID\" = ?"
         ),
         (task_log_id,),
@@ -117,7 +117,7 @@ def _get_step_status_from_dsp_logs(
     chain_verify = db_query_executor.query(
         (
             "SELECT \"TASK_LOG_ID\" "
-            "FROM \"DWC_GLOBAL\".\"TASK_LOGS\" "
+            "FROM \"ORCHESTRATION\".\"3VR_DWC_TASK_LOGS_01\" "
             "WHERE \"TASK_LOG_ID\" = ? AND \"OBJECT_ID\" = ? AND \"SPACE_ID\" = ?"
         ),
         (chain_task_log_id, taskchain, spaceid),
@@ -128,7 +128,7 @@ def _get_step_status_from_dsp_logs(
     chain_nodes = db_query_executor.query(
         (
             "SELECT \"TASK_LOG_ID\" "
-            "FROM \"DWC_GLOBAL\".\"TASK_CHAIN_RUN_NODES\" "
+            "FROM \"ORCHESTRATION\".\"3VR_DWC_TASK_CHAIN_RUN_NODES_01\" "
             "WHERE \"CHAIN_TASK_LOG_ID\" = ?"
         ),
         (chain_task_log_id,),
@@ -144,7 +144,7 @@ def _get_step_status_from_dsp_logs(
     status_rows = db_query_executor.query(
         (
             "SELECT \"STATUS\" "
-            "FROM \"DWC_GLOBAL\".\"TASK_LOGS\" "
+            "FROM \"ORCHESTRATION\".\"3VR_DWC_TASK_LOGS_01\" "
             f"WHERE \"TASK_LOG_ID\" IN ({placeholders}) AND \"OBJECT_ID\" = ?"
             "ORDER BY \"START_TIME\" DESC LIMIT 1"
         ),

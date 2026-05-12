@@ -346,65 +346,45 @@ module.exports = cds.service.impl(async function () {
     }
 
     /**
-     * Recupera le taskchain da Datasphere interrogando tutti gli space via HANA cross-schema.
+     * Recupera le taskchain da Datasphere via il view union ORCHESTRATION.3VR_DEPL_METADATA_01,
+     * che aggrega le DEPLOYED_METADATA dei 3 space (IFP, INBOUND, ORCHESTRATION).
      *
-     * Step 1 (services.js:331-349): legge DWC_TENANT_OWNER.SPACE_SCHEMAS per ottenere
-     *   tutti gli space con il relativo SCHEMA_NAME, filtrando gli schemi tecnici LIKE '%$TEC'.
-     *
-     * Step 2 (services.js:355-410): per ogni schema, legge "${schemaName}".DEPLOYED_METADATA
-     *   dove REPOSITORY_OBJECT_TYPE = 'DWC_TASKCHAIN' per costruire l'entità virtuale Taskchain.
+     * Le colonne BUSINESS_NAME / OWNER / MODIFICATION_DATE / #spaceName non sono esposte come
+     * colonne relazionali nel view ma sono incapsulate nel payload "JSON" → vengono estratte
+     * con JSON_VALUE() in modo da preservare lo stesso shape di risultato del codice precedente.
      */
     async function fetchTaskchainsFromDSP(authHeader = null) {
-        // Step 1 — recupera space e schema name da DWC_TENANT_OWNER.SPACE_SCHEMAS
-        const spaceRows = await dbQuery(
-            `SELECT "SPACE_ID", "SCHEMA_NAME"
-             FROM "DWC_TENANT_OWNER"."SPACE_SCHEMAS"
-             WHERE "SCHEMA_NAME" NOT LIKE '%$TEC'`,
-            [],
-            authHeader
-        );
+        try {
+            const rows = await dbQuery(
+                `SELECT
+                    "NAME"                                       AS "name",
+                    JSON_VALUE("JSON", '$."#spaceName"')         AS "spaceId",
+                    JSON_VALUE("JSON", '$.business_name')        AS "businessName",
+                    JSON_VALUE("JSON", '$.owner')                AS "owner",
+                    "DEPLOYED_BY"                                AS "deployedBy",
+                    "DEPLOYED_AT"                                AS "deployedAt",
+                    JSON_VALUE("JSON", '$.modification_date')    AS "modificationDate"
+                 FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01"
+                 WHERE "REPOSITORY_OBJECT_TYPE" = 'DWC_TASKCHAIN'`,
+                [],
+                authHeader
+            );
 
-        if (!spaceRows.length) {
-            console.warn('⚠️ No spaces found in DWC_TENANT_OWNER.SPACE_SCHEMAS');
+            const taskchains = rows.map(row => ({
+                name: row.name,
+                spaceId: row.spaceId || '',
+                businessName: row.businessName || row.name,
+                owner: row.owner || row.deployedBy || '',
+                deployedBy: row.deployedBy || '',
+                deployedAt: row.deployedAt || null,
+                modificationDate: row.modificationDate || null,
+            }));
+
+            console.log(`✅ Fetched ${taskchains.length} taskchains from DSP HANA (3VR_DEPL_METADATA_01)`);
+            return taskchains;
+        } catch (e) {
+            console.warn(`⚠️ Could not read 3VR_DEPL_METADATA_01:`, e.message);
             return [];
         }
-
-        // Step 2 — per ogni schema, legge le taskchain deployate da DEPLOYED_METADATA
-        const taskchains = [];
-        for (const { SPACE_ID: spaceId, SCHEMA_NAME: schemaName } of spaceRows) {
-            if (!schemaName) continue;
-            try {
-                const rows = await dbQuery(
-                    `SELECT
-                        "OBJECT_NAME"        AS "name",
-                        "DEPLOYED_BY"        AS "deployedBy",
-                        "DEPLOYED_AT"        AS "deployedAt",
-                        "BUSINESS_NAME"      AS "businessName",
-                        "OBJECT_STATUS"      AS "objectStatus",
-                        "MODIFICATION_DATE"  AS "modificationDate",
-                        "OWNER"              AS "owner"
-                     FROM "${schemaName}"."DEPLOYED_METADATA"
-                     WHERE "REPOSITORY_OBJECT_TYPE" = 'DWC_TASKCHAIN'`,
-                    [],
-                    authHeader
-                );
-                for (const row of rows) {
-                    taskchains.push({
-                        name: row.name,
-                        spaceId,
-                        businessName: row.businessName || row.name,
-                        owner: row.owner || row.deployedBy || '',
-                        deployedBy: row.deployedBy || '',
-                        deployedAt: row.deployedAt || null,
-                        modificationDate: row.modificationDate || null,
-                    });
-                }
-            } catch (e) {
-                console.warn(`⚠️ Could not read DEPLOYED_METADATA for schema '${schemaName}' (space '${spaceId}'):`, e.message);
-            }
-        }
-
-        console.log(`✅ Fetched ${taskchains.length} taskchains from DSP HANA (${spaceRows.length} spaces)`);
-        return taskchains;
     }
 });
