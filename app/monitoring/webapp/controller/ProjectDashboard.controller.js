@@ -657,11 +657,9 @@ sap.ui.define([
          * Remove a task chain from the project
          */
         onRemoveTaskChain: function (oEvent) {
-            console.log("[REMOVE] onRemoveTaskChain triggered");
             var oBindingContext = oEvent.getSource().getBindingContext("dashboard");
             var sChainName = oBindingContext.getProperty("name");
             var sSpaceId = oBindingContext.getProperty("spaceId");
-            console.log("[REMOVE] chain da rimuovere — name:", sChainName, "| spaceId:", sSpaceId);
             var oResourceBundle = this.getView().getModel("i18n").getResourceBundle();
 
             MessageBox.confirm(
@@ -669,7 +667,6 @@ sap.ui.define([
                 {
                     title: oResourceBundle.getText("dashboard.removeChainTitle"),
                     onClose: function (oAction) {
-                        console.log("[REMOVE] MessageBox action:", oAction);
                         if (oAction === MessageBox.Action.OK) {
                             this._removeTaskChain(sChainName, sSpaceId);
                         }
@@ -682,43 +679,25 @@ sap.ui.define([
          * Perform task chain removal via OData
          */
         _removeTaskChain: function (sChainName, sSpaceId) {
-            console.log("[REMOVE] _removeTaskChain — name:", sChainName, "| spaceId:", sSpaceId);
             var that = this;
             var oMonitoringModel = this.getOwnerComponent().getModel("monitoring");
             var aProjects = oMonitoringModel.getProperty("/projects") || [];
-            console.log("[REMOVE] progetti nel monitoring model:", aProjects.length);
             var oProject = aProjects.find(function(p) { return p.id === that._sCurrentProjectId; });
-            console.log("[REMOVE] progetto corrente:", oProject ? oProject.name : "NON TROVATO", "| _sCurrentProjectId:", that._sCurrentProjectId);
 
             if (oProject && oProject.taskChainsList) {
-                console.log("[REMOVE] taskChainsList nel monitoring model:", JSON.stringify(oProject.taskChainsList.map(function(c) { return { id: c.id, name: c.name, spaceId: c.spaceId }; })));
                 // Find the task chain ID to delete
                 var oChain = oProject.taskChainsList.find(function(c) {
                     return c.name === sChainName && c.spaceId === sSpaceId;
                 });
-                console.log("[REMOVE] chain trovata:", oChain ? JSON.stringify({ id: oChain.id, name: oChain.name }) : "NON TROVATA");
 
                 if (oChain && oChain.id) {
-                    console.log("[REMOVE] chiamata removeTaskChain con id:", oChain.id, "| tipo:", typeof oChain.id);
                     this.getOwnerComponent().removeTaskChain(oChain.id).then(function() {
-                        console.log("[REMOVE] removeTaskChain RISOLTO — ora rileggo il monitoring model prima di _loadProjectData");
-                        var aProjectsAfter = oMonitoringModel.getProperty("/projects") || [];
-                        var oProjectAfter = aProjectsAfter.find(function(p) { return p.id === that._sCurrentProjectId; });
-                        console.log("[REMOVE] taskChainsList NEL MONITORING MODEL dopo remove (prima di _loadProjectData):",
-                            oProjectAfter ? JSON.stringify(oProjectAfter.taskChainsList.map(function(c) { return { id: c.id, name: c.name }; })) : "progetto non trovato"
-                        );
                         that._loadProjectData(that._sCurrentProjectId);
                         MessageToast.show("Task chain removed");
                     }).catch(function(oError) {
-                        console.error("[REMOVE] removeTaskChain FALLITO:", oError);
-                        console.error("[REMOVE] messaggio:", oError && oError.message);
                         MessageBox.error("Error removing task chain: " + oError.message);
                     });
-                } else {
-                    console.warn("[REMOVE] chain non trovata o senza id — salto la rimozione");
                 }
-            } else {
-                console.warn("[REMOVE] progetto non trovato o taskChainsList vuota — oProject:", JSON.stringify(oProject));
             }
         },
 
