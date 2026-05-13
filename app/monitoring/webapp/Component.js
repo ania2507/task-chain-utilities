@@ -194,24 +194,42 @@ sap.ui.define([
          * @returns {Promise} Promise resolving when deleted
          */
         removeTaskChain: function (sTaskChainId) {
+            console.log("[COMPONENT] removeTaskChain chiamato con id:", sTaskChainId, "| tipo:", typeof sTaskChainId);
             var oODataModel = this.getModel();
+            var sFilter = "ID eq " + sTaskChainId;
+            console.log("[COMPONENT] filtro OData usato:", sFilter);
             var that = this;
 
             return new Promise(function (resolve, reject) {
                 var oListBinding = oODataModel.bindList("/MonitoringTaskChain", undefined, undefined, undefined, {
-                    $filter: "ID eq " + sTaskChainId
+                    $filter: sFilter
                 });
-                
+
                 oListBinding.requestContexts(0, 1).then(function (aContexts) {
+                    console.log("[COMPONENT] contesti trovati dal binding:", aContexts.length);
                     if (aContexts.length > 0) {
+                        console.log("[COMPONENT] context trovato, avvio delete:", aContexts[0].getPath());
                         aContexts[0].delete().then(function () {
-                            that.refreshProjects();
-                            resolve();
-                        }).catch(reject);
+                            console.log("[COMPONENT] delete OData OK — aspetto refreshProjects prima di resolve()");
+                            that.refreshProjects().then(function() {
+                                console.log("[COMPONENT] refreshProjects COMPLETATO — ora chiamo resolve()");
+                                resolve();
+                            }).catch(function(oErr) {
+                                console.error("[COMPONENT] refreshProjects FALLITO:", oErr);
+                                reject(oErr);
+                            });
+                        }).catch(function(oErr) {
+                            console.error("[COMPONENT] delete OData FALLITO:", oErr);
+                            reject(oErr);
+                        });
                     } else {
+                        console.error("[COMPONENT] NESSUN contesto trovato — filtro senza risultati:", sFilter);
                         reject(new Error("Task chain not found"));
                     }
-                }).catch(reject);
+                }).catch(function(oErr) {
+                    console.error("[COMPONENT] requestContexts FALLITO:", oErr);
+                    reject(oErr);
+                });
             });
         },
 
