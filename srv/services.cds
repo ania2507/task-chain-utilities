@@ -4,5 +4,6 @@
 using from './domains/rules';
 using from './domains/taskchains';
 using from './domains/monitoring';
+using from './domains/schedules';
 
 service Services {}

@@ -9,3 +9,7 @@ PyJWT
 # Optional (used when bound to HANA / DSP HANA)
 hdbcli
 pytest
+# Scheduler
+apscheduler>=3.10
+croniter>=2.0
+tzdata

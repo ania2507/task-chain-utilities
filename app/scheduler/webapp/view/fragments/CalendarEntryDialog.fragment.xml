@@ -1,0 +1,26 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core">
+    <Dialog title="{i18n>calendar.entryDialog.title}" contentWidth="420px">
+        <content>
+            <VBox class="sapUiSmallMargin">
+                <Label text="{i18n>calendar.col.date}" required="true"/>
+                <DatePicker value="{edit>/entryDate}" valueFormat="yyyy-MM-dd" displayFormat="long"/>
+                <Label text="{i18n>calendar.col.time}" required="true" class="sapUiSmallMarginTop"/>
+                <TimePicker value="{edit>/entryTime}" valueFormat="HH:mm" displayFormat="HH:mm" support2400="true"/>
+                <CheckBox text="{i18n>calendar.col.active}" selected="{edit>/entryActive}" class="sapUiSmallMarginTop"/>
+                <Label text="{i18n>steps.title}" class="sapUiSmallMarginTop"/>
+                <TextArea value="{edit>/entryParameters}"
+                          rows="4"
+                          placeholder="{i18n>steps.placeholder}"
+                          growing="false"/>
+            </VBox>
+        </content>
+        <beginButton>
+            <Button text="{i18n>common.save}" type="Emphasized" press=".onSaveCalendarEntry"/>
+        </beginButton>
+        <endButton>
+            <Button text="{i18n>common.cancel}" press=".onCloseCalendarEntryDialog"/>
+        </endButton>
+    </Dialog>
+</core:FragmentDefinition>

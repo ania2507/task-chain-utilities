@@ -1,0 +1,46 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:l="sap.ui.layout">
+    <Dialog title="{i18n>onDemand.title}" contentWidth="520px">
+        <content>
+            <VBox class="sapUiSmallMargin">
+                <Title text="{edit>/taskchain}" level="H3" class="sapUiTinyMarginBottom"/>
+                <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }" class="sapUiSmallMarginBottom"/>
+                <Text text="{i18n>onDemand.intro}" class="sapUiSmallMarginBottom"/>
+
+                <RadioButtonGroup selectedIndex="{edit>/onDemandModeIndex}" columns="1" class="sapUiSmallMarginTop">
+                    <buttons>
+                        <RadioButton text="{i18n>onDemand.runNow}"/>
+                        <RadioButton text="{i18n>onDemand.runAt}"/>
+                    </buttons>
+                </RadioButtonGroup>
+
+                <l:HorizontalLayout class="sapUiSmallMarginTop" allowWrapping="true">
+                    <DatePicker value="{edit>/onDemandDate}"
+                                valueFormat="yyyy-MM-dd"
+                                displayFormat="long"
+                                placeholder="{i18n>onDemand.date}"
+                                enabled="{= ${edit>/onDemandModeIndex} === 1 }"
+                                class="sapUiTinyMarginEnd"/>
+                    <TimePicker value="{edit>/onDemandTime}"
+                                valueFormat="HH:mm"
+                                displayFormat="HH:mm"
+                                placeholder="{i18n>onDemand.time}"
+                                enabled="{= ${edit>/onDemandModeIndex} === 1 }"/>
+                </l:HorizontalLayout>
+
+                <Button text="{i18n>onDemand.configureSteps}"
+                        icon="sap-icon://settings"
+                        press=".onConfigureStepParameters"
+                        class="sapUiSmallMarginTop"/>
+            </VBox>
+        </content>
+        <beginButton>
+            <Button text="{i18n>onDemand.confirm}" type="Emphasized" press=".onConfirmOnDemand"/>
+        </beginButton>
+        <endButton>
+            <Button text="{i18n>common.cancel}" press=".onCloseOnDemandDialog"/>
+        </endButton>
+    </Dialog>
+</core:FragmentDefinition>

@@ -63,6 +63,10 @@ modules:
       - monitoring.zip
       name: monitoring
       target-path: resources/
+    - artifacts:
+      - scheduler.zip
+      name: scheduler
+      target-path: resources/
 - name: task-chain-utilities-destinationcontent
   type: com.sap.application.content
   requires:
@@ -116,6 +120,16 @@ modules:
 - name: monitoring
   type: html5
   path: app/monitoring
+  build-parameters:
+    build-result: dist
+    builder: custom
+    commands:
+    - npm ci
+    - npm run build
+    supported-platforms: []
+- name: scheduler
+  type: html5
+  path: app/scheduler
   build-parameters:
     build-result: dist
     builder: custom

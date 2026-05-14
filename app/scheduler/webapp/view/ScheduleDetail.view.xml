@@ -1,0 +1,53 @@
+<mvc:View
+    controllerName="scheduler.controller.ScheduleDetail"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:f="sap.ui.layout.form">
+    <Page title="{name}" showNavButton="true" navButtonPress=".onNavBack" busy="{view>/busy}">
+        <headerContent>
+            <Button icon="sap-icon://media-play" text="{i18n>common.runNow}" type="Emphasized" press=".onRunNow"/>
+            <Button text="{= ${isActive} ? ${i18n>common.deactivate} : ${i18n>common.activate} }" press=".onToggleActive"/>
+            <Button icon="sap-icon://refresh" press=".onRefresh"/>
+        </headerContent>
+        <content>
+            <ObjectHeader responsive="true" title="{name}" intro="{description}">
+                <attributes>
+                    <ObjectAttribute title="{i18n>col.target}" text="{targetType}"/>
+                    <ObjectAttribute title="{i18n>col.cron}"   text="{cronExpression}"/>
+                    <ObjectAttribute title="{i18n>col.timezone}" text="{timezone}"/>
+                    <ObjectAttribute title="{i18n>col.nextRun}" text="{nextRunAt}"/>
+                </attributes>
+                <statuses>
+                    <ObjectStatus
+                        text="{= ${isActive} ? 'Active' : 'Inactive' }"
+                        state="{= ${isActive} ? 'Success' : 'None' }"/>
+                </statuses>
+            </ObjectHeader>
+
+            <Panel headerText="{i18n>detail.history}" expandable="false">
+                <Table items="{ path: 'runs', parameters: { $orderby: 'triggeredAt desc' } }" growing="true" growingThreshold="50">
+                    <columns>
+                        <Column><Text text="Triggered"/></Column>
+                        <Column><Text text="Finished"/></Column>
+                        <Column><Text text="{i18n>col.status}"/></Column>
+                        <Column><Text text="Remote ID"/></Column>
+                        <Column><Text text="Error"/></Column>
+                    </columns>
+                    <items>
+                        <ColumnListItem>
+                            <cells>
+                                <Text text="{triggeredAt}"/>
+                                <Text text="{finishedAt}"/>
+                                <ObjectStatus
+                                    text="{status}"
+                                    state="{= ${status} === 'success' ? 'Success' : ${status} === 'error' ? 'Error' : 'Information' }"/>
+                                <Text text="{remoteId}"/>
+                                <Text text="{errorMessage}"/>
+                            </cells>
+                        </ColumnListItem>
+                    </items>
+                </Table>
+            </Panel>
+        </content>
+    </Page>
+</mvc:View>

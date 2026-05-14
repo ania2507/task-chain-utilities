@@ -1,0 +1,44 @@
+<mvc:View
+    controllerName="scheduler.controller.ScheduleCalendar"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:u="sap.ui.unified">
+    <Page title="{i18n>appTitle}" showNavButton="true" navButtonPress=".onNavBack">
+        <headerContent>
+            <SegmentedButton selectedKey="calendar" selectionChange=".onViewSwitch">
+                <items>
+                    <SegmentedButtonItem key="list"     icon="sap-icon://list"     text="{i18n>common.list}"/>
+                    <SegmentedButtonItem key="calendar" icon="sap-icon://calendar" text="{i18n>common.calendar}"/>
+                </items>
+            </SegmentedButton>
+            <Button icon="sap-icon://refresh" press=".onRefresh" tooltip="{i18n>common.refresh}"/>
+        </headerContent>
+        <content>
+            <PlanningCalendar
+                id="schedulesPC"
+                rows="{view>/rows}"
+                appointmentsVisualization="Filled"
+                showWeekNumbers="true"
+                startDate="{view>/startDate}"
+                appointmentSelect=".onAppointmentSelect"
+                viewKey="Week">
+                <rows>
+                    <PlanningCalendarRow
+                        title="{view>title}"
+                        text="{view>text}"
+                        icon="sap-icon://calendar"
+                        appointments="{view>appointments}">
+                        <appointments>
+                            <u:CalendarAppointment
+                                title="{view>title}"
+                                text="{view>text}"
+                                type="{view>type}"
+                                startDate="{view>startDate}"
+                                endDate="{view>endDate}"/>
+                        </appointments>
+                    </PlanningCalendarRow>
+                </rows>
+            </PlanningCalendar>
+        </content>
+    </Page>
+</mvc:View>

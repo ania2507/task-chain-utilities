@@ -20,9 +20,12 @@ from .routes.dsp import bp as dsp_bp
 from .routes.jobs import bp as jobs_bp
 from .routes.meta import bp as meta_bp
 from .routes.rules import bp as rules_bp
+from .routes.scheduler import bp as scheduler_bp
 from .routes.tasks import bp as tasks_bp
 from .services import TaskchainExecutor, TaskchainRoutingService
 from .services.job_executor import JobExecutor
+from .services.scheduler_service import SchedulerService
+from .repository.schedule_repository import ScheduleRepository
 
 
 def _init_components() -> Tuple[Any, Any, RuleEngine, TaskchainRoutingService, TaskchainExecutor]:
@@ -169,6 +172,24 @@ def create_app() -> Flask:
 
     repository, db_query_executor, engine, routing_service, taskchain_executor = _init_components()
     job_executor = _init_job_executor()
+
+    # Scheduler service (APScheduler).  Safe to instantiate even if DB/APS unavailable;
+    # `sync()` will simply load zero jobs.
+    try:
+        schedule_repo = ScheduleRepository()
+        scheduler_service = SchedulerService(
+            repo=schedule_repo,
+            taskchain_executor=taskchain_executor,
+            job_executor=job_executor,
+        )
+        try:
+            scheduler_service.sync()
+        except Exception:
+            logging.getLogger(__name__).exception("Initial scheduler sync failed")
+    except Exception as e:
+        logging.getLogger(__name__).warning("SchedulerService init failed: %s", e)
+        scheduler_service = None
+
     app.extensions["taskchain"] = {
         "repository": repository,
         "db_query_executor": db_query_executor,
@@ -176,6 +197,7 @@ def create_app() -> Flask:
         "routing_service": routing_service,
         "taskchain_executor": taskchain_executor,
         "job_executor": job_executor,
+        "scheduler_service": scheduler_service,
     }
 
     app.register_blueprint(meta_bp)
@@ -186,5 +208,6 @@ def create_app() -> Flask:
     app.register_blueprint(jobs_bp, url_prefix="/v1/jobs")
     app.register_blueprint(db_bp, url_prefix="/v1/db")
     app.register_blueprint(dsp_bp, url_prefix="/v1/dsp")
+    app.register_blueprint(scheduler_bp, url_prefix="/v1/scheduler")
 
     return app

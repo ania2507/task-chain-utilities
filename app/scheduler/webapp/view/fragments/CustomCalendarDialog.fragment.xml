@@ -1,0 +1,94 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:u="sap.ui.unified">
+    <Dialog title="{i18n>calendar.title}" contentWidth="720px" contentHeight="560px" resizable="true">
+        <content>
+            <VBox class="sapUiSmallMargin">
+                <Title text="Task Chain - {edit>/taskchain}" level="H3" class="sapUiTinyMarginBottom"/>
+                <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }" class="sapUiSmallMarginBottom"/>
+                <Text text="{i18n>calendar.intro}" class="sapUiTinyMarginBottom"/>
+                <Text text="{i18n>calendar.format}" class="sapUiSmallMarginBottom"/>
+
+                <HBox alignItems="Center" class="sapUiSmallMarginBottom">
+                    <u:FileUploader
+                        id="calendarFileUploader"
+                        name="calendar"
+                        buttonOnly="true"
+                        buttonText="{i18n>calendar.upload}"
+                        fileType="xlsx,xls,csv"
+                        style="Emphasized"
+                        icon="sap-icon://upload"
+                        iconOnly="false"
+                        change=".onCalendarFileSelect"/>
+                    <Button text="{i18n>calendar.downloadTemplate}"
+                            icon="sap-icon://download"
+                            press=".onDownloadCalendarTemplate"
+                            class="sapUiTinyMarginBegin"/>
+                    <Button text="{i18n>calendar.addEntry}"
+                            icon="sap-icon://add"
+                            press=".onAddCalendarEntry"
+                            class="sapUiTinyMarginBegin"/>
+                </HBox>
+
+                <ObjectStatus
+                    text="{edit>/calendarFileStatus}"
+                    state="{= ${edit>/calendarEntries}.length > 0 ? 'Success' : 'None' }"
+                    class="sapUiTinyMarginBottom"
+                    visible="{= !!${edit>/calendarFileStatus} }"/>
+
+                <Title text="{ path: 'edit>/taskchain', formatter: '.formatCalendarEntriesTitle' }" level="H4" class="sapUiSmallMarginTop"/>
+
+                <Text text="{i18n>calendar.noFile}"
+                      class="sapUiSmallMarginBegin"
+                      visible="{= !${edit>/calendarFileStatus} &amp;&amp; ${edit>/calendarEntries}.length === 0 }"/>
+
+                <Table items="{edit>/calendarEntries}"
+                       mode="None"
+                       growing="true"
+                       growingThreshold="50"
+                       visible="{= ${edit>/calendarEntries}.length > 0 }"
+                       noDataText="{i18n>calendar.noEntries}">
+                    <columns>
+                        <Column><Text text="{i18n>calendar.col.date}"/></Column>
+                        <Column><Text text="{i18n>calendar.col.time}"/></Column>
+                        <Column hAlign="Center"><Text text="{i18n>calendar.col.active}"/></Column>
+                        <Column hAlign="End"><Text text="{i18n>calendar.col.actions}"/></Column>
+                    </columns>
+                    <ColumnListItem>
+                        <cells>
+                            <Text text="{edit>dateLabel}"/>
+                            <Text text="{edit>time}"/>
+                            <core:Icon src="sap-icon://accept"
+                                       color="{= ${edit>active} ? 'Positive' : 'Neutral' }"
+                                       visible="{edit>active}"/>
+                            <HBox justifyContent="End">
+                                <Button icon="sap-icon://action-settings"
+                                        tooltip="{i18n>calendar.configureSteps}"
+                                        type="Transparent"
+                                        press=".onCalendarConfigureRowParams"/>
+                                <Button icon="sap-icon://edit"
+                                        tooltip="{i18n>calendar.edit}"
+                                        type="Transparent"
+                                        press=".onEditCalendarEntry"/>
+                                <Button icon="sap-icon://delete"
+                                        tooltip="{i18n>calendar.remove}"
+                                        type="Transparent"
+                                        press=".onRemoveCalendarEntry"/>
+                            </HBox>
+                        </cells>
+                    </ColumnListItem>
+                </Table>
+            </VBox>
+        </content>
+        <beginButton>
+            <Button text="{i18n>calendar.confirm}"
+                    type="Emphasized"
+                    enabled="{= ${edit>/calendarEntries}.length > 0 }"
+                    press=".onConfirmCustomCalendar"/>
+        </beginButton>
+        <endButton>
+            <Button text="{i18n>common.cancel}" press=".onCloseCustomCalendarDialog"/>
+        </endButton>
+    </Dialog>
+</core:FragmentDefinition>

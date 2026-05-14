@@ -1,0 +1,121 @@
+{
+  "_version": "1.82.0",
+  "sap.app": {
+    "id": "scheduler",
+    "type": "application",
+    "i18n": "i18n/i18n.properties",
+    "applicationVersion": { "version": "0.0.1" },
+    "title": "{{appTitle}}",
+    "description": "{{appDescription}}",
+    "resources": "resources.json",
+    "crossNavigation": {
+      "inbounds": {
+        "TaskChainScheduler-manage": {
+          "signature": { "parameters": {}, "additionalParameters": "allowed" },
+          "semanticObject": "TaskChainScheduler",
+          "action": "manage",
+          "title": "{{appTitle}}",
+          "icon": "sap-icon://calendar"
+        }
+      }
+    },
+    "dataSources": {
+      "mainService": {
+        "uri": "odata/v4/services/",
+        "type": "OData",
+        "settings": {
+          "annotations": [],
+          "odataVersion": "4.0"
+        }
+      },
+      "schedulerApi": {
+        "uri": "v1/scheduler/",
+        "type": "JSON",
+        "settings": {}
+      }
+    }
+  },
+  "sap.cloud": {
+    "public": true,
+    "service": "taskchainutilities.service"
+  },
+  "sap.ui": {
+    "technology": "UI5",
+    "icons": { "icon": "sap-icon://calendar" },
+    "deviceTypes": { "desktop": true, "tablet": true, "phone": true }
+  },
+  "sap.ui5": {
+    "flexEnabled": false,
+    "rootView": {
+      "viewName": "scheduler.view.App",
+      "type": "XML",
+      "async": true,
+      "id": "appRootView"
+    },
+    "dependencies": {
+      "minUI5Version": "1.143.0",
+      "libs": {
+        "sap.m": {},
+        "sap.ushell": {},
+        "sap.ui.core": {},
+        "sap.ui.layout": {},
+        "sap.ui.unified": {},
+        "sap.f": {}
+      }
+    },
+    "contentDensities": { "compact": true, "cozy": true },
+    "models": {
+      "i18n": {
+        "type": "sap.ui.model.resource.ResourceModel",
+        "settings": { "bundleName": "scheduler.i18n.i18n" }
+      },
+      "": {
+        "dataSource": "mainService",
+        "preload": true,
+        "settings": {
+          "operationMode": "Server",
+          "autoExpandSelect": true,
+          "earlyRequests": true
+        }
+      },
+      "view": {
+        "type": "sap.ui.model.json.JSONModel"
+      }
+    },
+    "resources": {
+      "css": [{ "uri": "css/style.css" }]
+    },
+    "routing": {
+      "config": {
+        "routerClass": "sap.m.routing.Router",
+        "controlAggregation": "pages",
+        "controlId": "app",
+        "viewType": "XML",
+        "viewPath": "scheduler.view",
+        "async": true
+      },
+      "routes": [
+        {
+          "pattern": "",
+          "name": "scheduleList",
+          "target": "scheduleList"
+        },
+        {
+          "pattern": "calendar",
+          "name": "scheduleCalendar",
+          "target": "scheduleCalendar"
+        },
+        {
+          "pattern": "schedule/{scheduleId}",
+          "name": "scheduleDetail",
+          "target": "scheduleDetail"
+        }
+      ],
+      "targets": {
+        "scheduleList":    { "viewName": "ScheduleList",    "viewLevel": 1 },
+        "scheduleCalendar":{ "viewName": "ScheduleCalendar","viewLevel": 1 },
+        "scheduleDetail":  { "viewName": "ScheduleDetail",  "viewLevel": 2 }
+      }
+    }
+  }
+}

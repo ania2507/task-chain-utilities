@@ -1,0 +1,23 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core">
+    <SelectDialog
+        title="{i18n>picker.title}"
+        noDataText="{i18n>picker.noData}"
+        multiSelect="true"
+        items="{ path: '/Taskchain' }"
+        search=".onPickerSearch"
+        liveChange=".onPickerSearch"
+        confirm=".onPickerConfirm"
+        cancel=".onPickerClose"
+        growing="true"
+        growingThreshold="100">
+        <StandardListItem
+            title="{name}"
+            description="{businessName}"
+            info="{spaceId}"
+            icon="sap-icon://product"
+            iconDensityAware="false"
+            iconInset="false"/>
+    </SelectDialog>
+</core:FragmentDefinition>

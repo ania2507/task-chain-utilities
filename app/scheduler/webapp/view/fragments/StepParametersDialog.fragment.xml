@@ -1,0 +1,23 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:f="sap.ui.layout.form">
+    <Dialog title="{i18n>steps.title}" contentWidth="640px" contentHeight="480px">
+        <content>
+            <VBox class="sapUiSmallMargin">
+                <Text text="{i18n>steps.intro}" class="sapUiSmallMarginBottom"/>
+                <TextArea value="{edit>/parameters}"
+                          rows="14"
+                          growing="false"
+                          width="100%"
+                          placeholder="{i18n>steps.placeholder}"/>
+            </VBox>
+        </content>
+        <beginButton>
+            <Button text="{i18n>common.save}" type="Emphasized" press=".onSaveStepParameters"/>
+        </beginButton>
+        <endButton>
+            <Button text="{i18n>common.cancel}" press=".onCloseStepParameters"/>
+        </endButton>
+    </Dialog>
+</core:FragmentDefinition>

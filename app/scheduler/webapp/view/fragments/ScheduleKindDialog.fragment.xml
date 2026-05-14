@@ -1,0 +1,45 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core">
+    <Dialog title="{i18n>kind.title}" contentWidth="520px">
+        <content>
+            <VBox class="sapUiSmallMargin">
+                <Title text="Task Chain - {edit>/taskchain}" level="H3" class="sapUiTinyMarginBottom"/>
+                <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }" class="sapUiSmallMarginBottom"/>
+                <Text text="{i18n>kind.intro}" class="sapUiSmallMarginBottom"/>
+                <List mode="None" showSeparators="Inner">
+                    <CustomListItem type="Active" press=".onPickKindOnDemand">
+                        <HBox alignItems="Center" class="sapUiSmallMargin">
+                            <core:Icon src="sap-icon://play" size="2rem" color="#0a6ed1" class="sapUiSmallMarginEnd"/>
+                            <VBox>
+                                <Title text="{i18n>kind.onDemand.title}" level="H4"/>
+                                <Text text="{i18n>kind.onDemand.desc}"/>
+                            </VBox>
+                        </HBox>
+                    </CustomListItem>
+                    <CustomListItem type="Active" press=".onPickKindCustomCalendar">
+                        <HBox alignItems="Center" class="sapUiSmallMargin">
+                            <core:Icon src="sap-icon://appointment-2" size="2rem" color="#0a6ed1" class="sapUiSmallMarginEnd"/>
+                            <VBox>
+                                <Title text="{i18n>kind.customCalendar.title}" level="H4"/>
+                                <Text text="{i18n>kind.customCalendar.desc}"/>
+                            </VBox>
+                        </HBox>
+                    </CustomListItem>
+                    <CustomListItem type="Active" press=".onPickKindTrafficLights">
+                        <HBox alignItems="Center" class="sapUiSmallMargin">
+                            <core:Icon src="sap-icon://activity-2" size="2rem" color="#0a6ed1" class="sapUiSmallMarginEnd"/>
+                            <VBox>
+                                <Title text="{i18n>kind.trafficLights.title}" level="H4"/>
+                                <Text text="{i18n>kind.trafficLights.desc}"/>
+                            </VBox>
+                        </HBox>
+                    </CustomListItem>
+                </List>
+            </VBox>
+        </content>
+        <endButton>
+            <Button text="{i18n>common.cancel}" press=".onCloseKindDialog"/>
+        </endButton>
+    </Dialog>
+</core:FragmentDefinition>

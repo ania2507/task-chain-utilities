@@ -582,6 +582,127 @@ def get_taskchain_dag():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@bp.route("/taskchain-schedules", methods=["GET"])
+@flask_access_validation(required_scope="read")
+def get_taskchain_schedules():
+    """Return native DSP task chain schedules.
+
+    Reads from a HANA consumption view that exposes DWC_TENANT_OWNER.TASK_SCHEDULE
+    (or equivalent). The fully-qualified view name is configurable via env
+    DSP_SCHEDULES_VIEW (default: ORCHESTRATION.3VR_TASK_SCHEDULES_01).
+
+    Expected view columns (case-insensitive, aliased on read):
+      - taskchain | OBJECT_NAME | TASK_NAME           -> technical name
+      - spaceId   | SPACE_ID                          -> DSP space
+      - cronExpression | CRON_EXPRESSION              -> cron string
+      - timezone  | TIMEZONE | TIME_ZONE              -> tz name
+      - nextRunAt | NEXT_RUN_AT | NEXT_EXECUTION      -> timestamp
+      - isActive  | IS_ACTIVE | ACTIVE | STATUS       -> boolean / status
+      - scheduleId | SCHEDULE_ID                      -> identifier
+
+    If the view does not exist (yet), returns success=true with an empty list
+    so that the UI can render gracefully.
+    """
+    from flask import current_app
+    from datetime import date, datetime as _dt
+
+    view_name = os.environ.get("DSP_SCHEDULES_VIEW", "ORCHESTRATION.3VR_TASK_SCHEDULES_01")
+
+    space_filter = (request.args.get("spaceId") or "").strip() or None
+    taskchain_filter = (request.args.get("taskchain") or "").strip() or None
+
+    # SELECT * with a defensive limit; map columns case-insensitively after fetch.
+    where_parts = []
+    params: list = []
+    if space_filter:
+        where_parts.append('UPPER("SPACE_ID") = UPPER(?)')
+        params.append(space_filter)
+    if taskchain_filter:
+        # Try both common technical-name columns
+        where_parts.append('(UPPER("OBJECT_NAME") = UPPER(?) OR UPPER("TASK_NAME") = UPPER(?))')
+        params.append(taskchain_filter)
+        params.append(taskchain_filter)
+    where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+    sql = f'SELECT * FROM "{view_name.split(".")[0]}"."{view_name.split(".")[1]}" {where_sql} LIMIT 2000'
+
+    try:
+        db_query_executor = current_app.extensions["taskchain"]["db_query_executor"]
+        rows = db_query_executor.query(sql, tuple(params))
+    except Exception as e:
+        msg = str(e)
+        # View not deployed yet → return empty list gracefully (UI keeps working)
+        not_found_markers = (
+            "invalid table name",
+            "could not find",
+            "not found",
+            "feature not supported",
+            "sql syntax error",
+            "no such table",
+        )
+        if any(m in msg.lower() for m in not_found_markers):
+            return jsonify({
+                "success": True,
+                "view": view_name,
+                "available": False,
+                "message": f"View {view_name} not available yet",
+                "data": [],
+                "rowCount": 0,
+            }), 200
+        return jsonify({"success": False, "view": view_name, "error": msg, "data": []}), 500
+
+    def _ci_get(d: dict, *aliases):
+        if not isinstance(d, dict):
+            return None
+        # Build lowercase map once per row would be cheaper, but rows are small
+        for a in aliases:
+            for k in d.keys():
+                if str(k).lower() == a.lower():
+                    return d[k]
+        return None
+
+    def _to_bool_active(v):
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return bool(v)
+        s = str(v).strip().upper()
+        if s in ("TRUE", "Y", "YES", "1", "ACTIVE", "ENABLED", "RUNNING"):
+            return True
+        if s in ("FALSE", "N", "NO", "0", "INACTIVE", "DISABLED", "PAUSED", "STOPPED"):
+            return False
+        return None
+
+    def _isoformat(v):
+        if v is None:
+            return None
+        if isinstance(v, (date, _dt)):
+            return v.isoformat()
+        return str(v)
+
+    schedules = []
+    for r in rows or []:
+        schedules.append({
+            "taskchain": _ci_get(r, "taskchain", "OBJECT_NAME", "TASK_NAME"),
+            "spaceId": _ci_get(r, "spaceId", "SPACE_ID"),
+            "cronExpression": _ci_get(r, "cronExpression", "CRON_EXPRESSION", "CRON"),
+            "timezone": _ci_get(r, "timezone", "TIMEZONE", "TIME_ZONE"),
+            "nextRunAt": _isoformat(_ci_get(r, "nextRunAt", "NEXT_RUN_AT", "NEXT_EXECUTION")),
+            "isActive": _to_bool_active(_ci_get(r, "isActive", "IS_ACTIVE", "ACTIVE", "STATUS")),
+            "scheduleId": _ci_get(r, "scheduleId", "SCHEDULE_ID"),
+        })
+
+    return jsonify({
+        "success": True,
+        "view": view_name,
+        "available": True,
+        "data": schedules,
+        "rowCount": len(schedules),
+    }), 200
+
+
 @bp.route("/taskchain-runs", methods=["GET", "POST"])
 @flask_access_validation(required_scope="read")
 def get_taskchain_runs():

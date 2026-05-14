@@ -355,30 +355,84 @@ module.exports = cds.service.impl(async function () {
      */
     async function fetchTaskchainsFromDSP(authHeader = null) {
         try {
+            // Mappa SCHEMA_NAME -> SPACE_ID dalla view 3VR_SPACE_SCHEMAS_01
+            let spaceMap = {};
+            try {
+                const spaceRows = await dbQuery(
+                    `SELECT "SPACE_ID" AS "spaceId", "SCHEMA_NAME" AS "schemaName"
+                       FROM "ORCHESTRATION"."3VR_SPACE_SCHEMAS_01"`,
+                    [],
+                    authHeader
+                );
+                for (const row of spaceRows) {
+                    if (row.schemaName && row.spaceId) {
+                        spaceMap[String(row.schemaName).toUpperCase()] = row.spaceId;
+                    }
+                    if (row.spaceId) {
+                        spaceMap[String(row.spaceId).toUpperCase()] = row.spaceId;
+                    }
+                }
+                console.log('[DIAG] spaceMap entries:', Object.keys(spaceMap).length);
+            } catch (e) {
+                console.warn('[DIAG] Could not read ORCHESTRATION.3VR_SPACE_SCHEMAS_01:', e.message);
+            }
+
             const rows = await dbQuery(
                 `SELECT
-                    "NAME"                                       AS "name",
-                    JSON_VALUE("JSON", '$."#spaceName"')         AS "spaceId",
-                    JSON_VALUE("JSON", '$.business_name')        AS "businessName",
-                    JSON_VALUE("JSON", '$.owner')                AS "owner",
-                    "DEPLOYED_BY"                                AS "deployedBy",
-                    "DEPLOYED_AT"                                AS "deployedAt",
-                    JSON_VALUE("JSON", '$.modification_date')    AS "modificationDate"
+                    "NAME"          AS "name",
+                    "DEPLOYED_BY"   AS "deployedBy",
+                    "DEPLOYED_AT"   AS "deployedAt",
+                    "JSON"          AS "rawJson"
                  FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01"
                  WHERE "REPOSITORY_OBJECT_TYPE" = 'DWC_TASKCHAIN'`,
                 [],
                 authHeader
             );
 
-            const taskchains = rows.map(row => ({
-                name: row.name,
-                spaceId: row.spaceId || '',
-                businessName: row.businessName || row.name,
-                owner: row.owner || row.deployedBy || '',
-                deployedBy: row.deployedBy || '',
-                deployedAt: row.deployedAt || null,
-                modificationDate: row.modificationDate || null,
-            }));
+            // Parsing del payload JSON in JS (gestisce correttamente la chiave "#spaceName")
+            const taskchains = rows.map(r => {
+                let payload = {};
+                try {
+                    payload = typeof r.rawJson === 'string' ? JSON.parse(r.rawJson) : (r.rawJson || {});
+                } catch (e) {
+                    payload = {};
+                }
+                const rawSpace = payload['#spaceName']
+                              || payload.spaceName
+                              || payload.spaceId
+                              || payload.space_id
+                              || '';
+                const upper = String(rawSpace).toUpperCase();
+                const resolvedSpace = spaceMap[upper] || rawSpace;
+                return {
+                    name: r.name,
+                    deployedBy: r.deployedBy,
+                    deployedAt: r.deployedAt,
+                    businessName: payload.business_name || payload.businessName || '',
+                    spaceId: resolvedSpace,
+                    modificationDate: payload.modification_date || payload.modificationDate || '',
+                    owner: payload.owner || ''
+                };
+            });
+
+            // === DIAGNOSTICA: breakdown per space ===
+            const breakdown = {};
+            const sample = {};
+            for (const tc of taskchains) {
+                const key = tc.spaceId || '(empty #spaceName)';
+                breakdown[key] = (breakdown[key] || 0) + 1;
+                if (!sample[key]) sample[key] = tc.name;
+            }
+            console.log('[DIAG] Taskchain count per #spaceName:', JSON.stringify(breakdown));
+            console.log('[DIAG] Sample taskchain per space:', JSON.stringify(sample));
+
+            // Cerca specificamente 1TC_FI00_IBP_03
+            const targetRow = rows.find(r => r.name === '1TC_FI00_IBP_03');
+            if (targetRow) {
+                console.log('[DIAG] 1TC_FI00_IBP_03 rawJson:', targetRow.rawJson);
+            } else {
+                console.log('[DIAG] 1TC_FI00_IBP_03 NOT FOUND in view 3VR_DEPL_METADATA_01');
+            }
 
             console.log(`✅ Fetched ${taskchains.length} taskchains from DSP HANA (3VR_DEPL_METADATA_01)`);
             return taskchains;

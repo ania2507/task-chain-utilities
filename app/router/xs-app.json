@@ -27,6 +27,18 @@
       "authenticationType": "xsuaa"
     },
     {
+      "source": "^/scheduler/odata/(.*)$",
+      "target": "/odata/$1",
+      "destination": "srv-api",
+      "authenticationType": "xsuaa"
+    },
+    {
+      "source": "^/scheduler/v1/(.*)$",
+      "target": "/v1/$1",
+      "destination": "py-srv-api",
+      "authenticationType": "xsuaa"
+    },
+    {
       "source": "^/webapp/api/rules/(.*)$",
       "target": "/$1",
       "destination": "py-srv-api",

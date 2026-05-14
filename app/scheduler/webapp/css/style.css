@@ -1,0 +1,7 @@
+.scheduler-kpi-tile {
+    margin: 0.25rem;
+    min-width: 8rem;
+}
+.scheduler-status-success { color: #107e3e; }
+.scheduler-status-error   { color: #bb0000; }
+.scheduler-status-running { color: #0a6ed1; }
