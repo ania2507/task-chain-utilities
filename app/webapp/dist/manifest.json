@@ -186,7 +186,7 @@
 								"body": {
 									"sections": {
 										"customCodeEditorSection": {
-											"template": "tcuwebapp.ext.fragment.CodeEditor",
+											"template": "webapp.ext.fragment.CodeEditor",
 											"title": "Python Code Editor"
 										}
 									}
