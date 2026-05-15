@@ -52,8 +52,8 @@ modules:
     build-result: resources/
     requires:
     - artifacts:
-      - webapp.zip
-      name: webapp
+      - conditionalrules.zip
+      name: conditionalrules
       target-path: resources/
     - artifacts:
       - skipoverrides.zip
@@ -97,9 +97,9 @@ modules:
         existing_destinations_policy: update
   build-parameters:
     no-source: true
-- name: webapp
+- name: conditionalrules
   type: html5
-  path: app/webapp
+  path: app/conditionalrules
   build-parameters:
     build-result: dist
     builder: custom

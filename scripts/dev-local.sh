@@ -52,7 +52,7 @@ done
 echo "Starting CAP/UI5 (cds watch) on port $CAP_PORT"
 
 echo "URLs:"
-echo "  - UI (via cds watch):  http://localhost:$CAP_PORT/webapp/index.html"
+echo "  - UI (via cds watch):  http://localhost:$CAP_PORT/conditionalrules/index.html"
 echo "  - OData:               http://localhost:$CAP_PORT/odata/v4/services/"
 echo "  - Python docs:         http://localhost:$PY_SRV_PORT/docs"
 

@@ -20,7 +20,7 @@
   "scripts": {
     "dev": "bash scripts/dev-local.sh",
     "start": "cds-serve",
-    "watch-webapp": "cds watch --open webapp/index.html?sap-ui-xx-viewCache=false --livereload false",
+    "watch-webapp": "cds watch --open conditionalrules/index.html?sap-ui-xx-viewCache=false --livereload false",
     "watch-project1": "cds watch --open project1/index.html?sap-ui-xx-viewCache=false --livereload false",
     "undeploy": "cf undeploy task-chain-utilities --delete-services --delete-service-keys --delete-service-brokers",
     "build": "rimraf resources mta_archives && mbt build",
@@ -49,7 +49,7 @@
     }
   },
   "sapux": [
-    "app/webapp",
+    "app/conditionalrules",
     "app/skipoverrides",
     "app/monitoring"
   ]

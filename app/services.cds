@@ -1,1 +1,1 @@
-using from './webapp/annotations';
+using from './conditionalrules/annotations';

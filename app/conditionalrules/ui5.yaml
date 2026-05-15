@@ -2,7 +2,7 @@
 
 specVersion: "4.0"
 metadata:
-  name: webapp
+  name: conditionalrules
 type: application
 server:
   customMiddleware:

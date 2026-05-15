@@ -14,7 +14,7 @@ sap.ui.define([
 
     var ValueState = coreLibrary.ValueState;
 
-    return ControllerExtension.extend("webapp.ext.controller.ObjectPageExt", {
+    return ControllerExtension.extend("conditionalrules.ext.controller.ObjectPageExt", {
         // this section allows to extend lifecycle hooks or override public methods of the base controller
         override: {
             onInit: function () {
@@ -30,8 +30,8 @@ sap.ui.define([
             
             // Try multiple possible IDs
             var aIds = [
-                "webapp::RuleTableObjectPage--fe::CustomSubSection::customCodeEditorSection--pythonCodeEditor",
-                "webapp::RuleTableObjectPage--fe::CustomSubSection::CodeEditorSection--pythonCodeEditor",
+                "conditionalrules::RuleTableObjectPage--fe::CustomSubSection::customCodeEditorSection--pythonCodeEditor",
+                "conditionalrules::RuleTableObjectPage--fe::CustomSubSection::CodeEditorSection--pythonCodeEditor",
                 "pythonCodeEditor"
             ];
             
@@ -271,7 +271,7 @@ sap.ui.define([
             
             // Production (managed approuter / WorkZone): resolve against the app's
             // HTML5-repo content path so the request goes through xs-app.json routing.
-            return sap.ui.require.toUrl("webapp");
+            return sap.ui.require.toUrl("conditionalrules");
         }
     });
 });

@@ -41,6 +41,9 @@ py-srv/.env
 dsp-credentials.json
 hana-multi-schema-credentials.json
 
+# Utility documents 
+docs/
+
 # Python cache
 __pycache__/
 *.pyc
