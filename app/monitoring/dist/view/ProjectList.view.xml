@@ -2,103 +2,113 @@
     xmlns="sap.m"
     xmlns:mvc="sap.ui.core.mvc"
     xmlns:f="sap.f"
-    xmlns:fcard="sap.f.cards"
     xmlns:core="sap.ui.core"
     controllerName="monitoring.controller.ProjectList"
     displayBlock="true">
 
-    <Page id="projectListPage" 
-        title="{i18n>projectList.title}"
-        showNavButton="false">
-        
-        <customHeader>
-            <Bar id="projectListHeader">
-                <contentMiddle>
-                    <Title id="pageTitle" text="{i18n>projectList.title}" level="H4"/>
-                </contentMiddle>
-                <contentRight>
-                    <Button id="btnNewProject"
-                        text="{i18n>projectList.newProject}"
-                        icon="sap-icon://add"
-                        type="Emphasized"
-                        press=".onNewProject"/>
-                </contentRight>
-            </Bar>
-        </customHeader>
+    <f:DynamicPage id="projectListPage" fitContent="true">
 
-        <subHeader>
-            <Toolbar id="searchToolbar">
-                <SearchField id="projectSearchField" 
-                    placeholder="Search projects..." 
-                    width="300px"
-                    liveChange=".onSearchProjects"/>
-                <ToolbarSpacer/>
-                <Button id="btnRefresh"
-                    icon="sap-icon://refresh"
-                    tooltip="{i18n>common.refresh}"
-                    press=".onRefresh"/>
-            </Toolbar>
-        </subHeader>
+        <f:title>
+            <f:DynamicPageTitle>
+                <f:heading>
+                    <VariantManagement id="variantManagement" selectedKey="standard">
+                        <items>
+                            <VariantItem key="standard" title="Standard" rename="false" remove="false"/>
+                        </items>
+                    </VariantManagement>
+                </f:heading>
+                <f:snappedContent>
+                    <HBox wrap="Wrap">
+                        <Label text="{i18n>common.search}" class="sapUiTinyMarginEnd"/>
+                        <Text text="{monitoring>/filterSummary}"/>
+                    </HBox>
+                </f:snappedContent>
+            </f:DynamicPageTitle>
+        </f:title>
 
-        <content>
-            <Table id="projectsTable"
-                items="{monitoring>/filteredProjects}"
-                growing="true"
-                growingThreshold="20"
-                mode="SingleSelectMaster"
-                itemPress=".onProjectPress">
-                <headerToolbar>
-                    <Toolbar id="tableToolbar">
-                        <Title text="{= ${monitoring>/filteredProjects}.length } Projects" level="H5"/>
-                    </Toolbar>
-                </headerToolbar>
-                <columns>
-                    <Column id="colName">
-                        <Text text="Project Name"/>
-                    </Column>
-                    <Column id="colDescription" minScreenWidth="Tablet" demandPopin="true">
-                        <Text text="Description"/>
-                    </Column>
-                    <Column id="colChains" width="8rem" hAlign="Center">
-                        <Text text="Task Chains"/>
-                    </Column>
-                    <Column id="colActions" width="5rem" hAlign="Center">
-                        <Text text=""/>
-                    </Column>
-                </columns>
-                <items>
-                    <ColumnListItem id="projectRow" type="Navigation">
-                        <cells>
-                            <!-- Name -->
-                            <VBox>
-                                <Text text="{monitoring>name}" class="sapMTextBold"/>
-                            </VBox>
-                            <!-- Description -->
-                            <Text text="{monitoring>description}" wrapping="false"/>
-                            <!-- Chains count -->
-                            <ObjectNumber number="{= ${monitoring>taskChainsList} ? ${monitoring>taskChainsList}.length : 0}" emphasized="false"/>
-                            <!-- Actions -->
-                            <Button
-                                icon="sap-icon://delete"
+        <f:header>
+            <f:DynamicPageHeader pinnable="true">
+                <HBox wrap="Wrap" class="sapUiTinyMarginBegin sapUiTinyMarginTop sapUiTinyMarginEnd">
+                    <VBox class="sapUiTinyMarginEnd">
+                        <Label text="{i18n>common.search}" labelFor="projectSearchField"/>
+                        <SearchField id="projectSearchField"
+                            placeholder="Search projects..."
+                            width="250px"
+                            search=".onSearchProjects"
+                            liveChange=".onSearchProjects"/>
+                    </VBox>
+                </HBox>
+            </f:DynamicPageHeader>
+        </f:header>
+
+        <f:content>
+            <VBox>
+                <Table id="projectsTable"
+                    items="{monitoring>/filteredProjects}"
+                    growing="true"
+                    growingThreshold="20"
+                    mode="SingleSelectMaster"
+                    itemPress=".onProjectPress">
+                    <headerToolbar>
+                        <OverflowToolbar>
+                            <Title text="{= ${monitoring>/filteredProjects}.length + ' Projects'}" level="H5"/>
+                            <ToolbarSpacer/>
+                            <Button id="btnRefresh"
+                                icon="sap-icon://refresh"
                                 type="Transparent"
-                                tooltip="{i18n>common.delete}"
-                                press=".onDeleteProject"/>
-                        </cells>
-                    </ColumnListItem>
-                </items>
-            </Table>
-            
-            <!-- Empty state -->
-            <IllustratedMessage id="noProjectsMessage"
-                visible="{= !${monitoring>/filteredProjects} || ${monitoring>/filteredProjects}.length === 0}"
-                illustrationType="sapIllus-EmptyList"
-                title="No Projects Found"
-                description="Create a new monitoring project to get started">
-                <additionalContent>
-                    <Button text="Create Project" type="Emphasized" press=".onNewProject"/>
-                </additionalContent>
-            </IllustratedMessage>
-        </content>
+                                tooltip="{i18n>common.refresh}"
+                                press=".onRefresh"/>
+                            <Button id="btnNewProject"
+                                text="{i18n>projectList.newProject}"
+                                icon="sap-icon://add"
+                                type="Emphasized"
+                                press=".onNewProject"/>
+                        </OverflowToolbar>
+                    </headerToolbar>
+                    <columns>
+                        <Column id="colName">
+                            <Text text="Project Name"/>
+                        </Column>
+                        <Column id="colDescription" minScreenWidth="Tablet" demandPopin="true">
+                            <Text text="Description"/>
+                        </Column>
+                        <Column id="colChains" width="8rem" hAlign="Center">
+                            <Text text="Task Chains"/>
+                        </Column>
+                        <Column id="colActions" width="5rem" hAlign="Center">
+                            <Text text=""/>
+                        </Column>
+                    </columns>
+                    <items>
+                        <ColumnListItem id="projectRow" type="Navigation">
+                            <cells>
+                                <VBox>
+                                    <Text text="{monitoring>name}" class="sapMTextBold"/>
+                                </VBox>
+                                <Text text="{monitoring>description}" wrapping="false"/>
+                                <ObjectNumber number="{= ${monitoring>taskChainsList} ? ${monitoring>taskChainsList}.length : 0}" emphasized="false"/>
+                                <Button
+                                    icon="sap-icon://delete"
+                                    type="Transparent"
+                                    tooltip="{i18n>common.delete}"
+                                    press=".onDeleteProject"/>
+                            </cells>
+                        </ColumnListItem>
+                    </items>
+                </Table>
 
-    </Page>
+                <!-- Empty state -->
+                <IllustratedMessage id="noProjectsMessage"
+                    visible="{= !${monitoring>/filteredProjects} || ${monitoring>/filteredProjects}.length === 0}"
+                    illustrationType="sapIllus-EmptyList"
+                    title="No Projects Found"
+                    description="Create a new monitoring project to get started">
+                    <additionalContent>
+                        <Button text="Create Project" type="Emphasized" press=".onNewProject"/>
+                    </additionalContent>
+                </IllustratedMessage>
+            </VBox>
+        </f:content>
+
+    </f:DynamicPage>
 </mvc:View>
