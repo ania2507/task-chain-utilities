@@ -241,6 +241,27 @@ sap.ui.define([
             this._refreshSchedulesForRows();
         },
 
+        onSearchTaskchains: function (oEvt) {
+            var sQuery = (oEvt.getParameter("newValue") !== undefined
+                ? oEvt.getParameter("newValue")
+                : oEvt.getParameter("query")) || "";
+            var sQ = sQuery.toLowerCase().trim();
+            var oTable = this.byId("taskchainsTable");
+            if (!oTable) return;
+            var oBinding = oTable.getBinding("items");
+            if (!oBinding) return;
+            if (!sQ) {
+                oBinding.filter([]);
+                return;
+            }
+            var aFilters = [
+                new Filter("spaceId", FilterOperator.Contains, sQ),
+                new Filter("name", FilterOperator.Contains, sQ),
+                new Filter("businessName", FilterOperator.Contains, sQ)
+            ];
+            oBinding.filter(new Filter({ filters: aFilters, and: false }));
+        },
+
         // ------------------------------------------------------------
         // "Add Task Chain" -> open DSP picker
         // ------------------------------------------------------------
@@ -387,49 +408,45 @@ sap.ui.define([
 
         onPickKindOnDemand: function () {
             console.log("[Scheduler] onPickKindOnDemand fired, pendingRow=", this._pendingRow);
-            MessageToast.show("On Demand clicked");
             this._closeKindDialog();
             var row = this._pendingRow;
+            this._pendingRow = null;
             if (!row) { console.warn("[Scheduler] no pendingRow"); return; }
-            // Prepare model defaults for On Demand
-            var now = new Date();
-            this._editModel.setData(Object.assign({}, EMPTY, {
-                name: row.businessName || row.name,
-                targetType: "DSP",
-                spaceId: row.spaceId || "",
-                taskchain: row.name,
-                chainLocked: true,
-                scheduleKind: "ON_DEMAND",
-                onDemandModeIndex: 0,
-                onDemandDate: now.toISOString().slice(0, 10),
-                onDemandTime: ("0" + now.getHours()).slice(-2) + ":" + ("0" + now.getMinutes()).slice(-2),
-                parameters: ""
-            }));
-            this._openOnDemandDialog();
+            // Navigate to the dedicated On Demand page instead of opening a popup
+            this.getRouter().navTo("onDemand", {
+                "?query": {
+                    spaceId: row.spaceId || "",
+                    taskchain: row.name || "",
+                    name: row.businessName || row.name || ""
+                }
+            });
         },
 
         onPickKindCustomCalendar: function () {
             this._closeKindDialog();
             var row = this._pendingRow;
+            this._pendingRow = null;
             if (!row) return;
-            this._editModel.setData(Object.assign({}, EMPTY, {
-                name: row.businessName || row.name,
-                targetType: "DSP",
-                spaceId: row.spaceId || "",
-                taskchain: row.name,
-                chainLocked: true,
-                scheduleKind: "CUSTOM_CALENDAR",
-                calendarFileStatus: "",
-                calendarEntries: [],
-                parameters: ""
-            }));
-            this._openCustomCalendarDialog();
+            this.getRouter().navTo("customCalendar", {
+                "?query": {
+                    spaceId: row.spaceId || "",
+                    taskchain: row.name || "",
+                    name: row.businessName || row.name || ""
+                }
+            });
         },
 
         onPickKindTrafficLights: function () {
             this._closeKindDialog();
             var row = this._pendingRow; this._pendingRow = null;
-            if (row) this._openNewScheduleForRow(row, "TRAFFIC_LIGHTS");
+            if (!row) return;
+            this.getRouter().navTo("trafficLights", {
+                "?query": {
+                    spaceId: row.spaceId || "",
+                    taskchain: row.name || "",
+                    name: row.businessName || row.name || ""
+                }
+            });
         },
 
         onEditSchedule: function (oEvt) {

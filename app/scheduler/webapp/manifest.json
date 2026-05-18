@@ -109,12 +109,30 @@
           "pattern": "schedule/{scheduleId}",
           "name": "scheduleDetail",
           "target": "scheduleDetail"
+        },
+        {
+          "pattern": "on-demand:?query:",
+          "name": "onDemand",
+          "target": "onDemand"
+        },
+        {
+          "pattern": "custom-calendar:?query:",
+          "name": "customCalendar",
+          "target": "customCalendar"
+        },
+        {
+          "pattern": "traffic-lights:?query:",
+          "name": "trafficLights",
+          "target": "trafficLights"
         }
       ],
       "targets": {
         "scheduleList":    { "viewName": "ScheduleList",    "viewLevel": 1 },
         "scheduleCalendar":{ "viewName": "ScheduleCalendar","viewLevel": 1 },
-        "scheduleDetail":  { "viewName": "ScheduleDetail",  "viewLevel": 2 }
+        "scheduleDetail":  { "viewName": "ScheduleDetail",  "viewLevel": 2 },
+        "onDemand":        { "viewName": "OnDemandPage",    "viewLevel": 2 },
+        "customCalendar":  { "viewName": "CustomCalendarPage", "viewLevel": 2 },
+        "trafficLights":   { "viewName": "TrafficLightsPage",  "viewLevel": 2 }
       }
     }
   }

@@ -1,0 +1,107 @@
+<mvc:View
+    controllerName="scheduler.controller.TrafficLightsPage"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:f="sap.f"
+    xmlns:form="sap.ui.layout.form">
+    <f:DynamicPage id="trafficLightsPage" busy="{edit>/busy}" toggleHeaderOnTitleClick="true">
+        <f:title>
+            <f:DynamicPageTitle>
+                <f:heading>
+                    <HBox alignItems="Center">
+                        <Button icon="sap-icon://nav-back" type="Transparent"
+                                tooltip="{i18n>common.back}" press=".onNavBack"
+                                class="sapUiTinyMarginEnd"/>
+                        <Title text="Task Chain - {edit>/taskchain}" wrapping="true"/>
+                    </HBox>
+                </f:heading>
+                <f:snappedHeading>
+                    <HBox alignItems="Center">
+                        <Button icon="sap-icon://nav-back" type="Transparent"
+                                tooltip="{i18n>common.back}" press=".onNavBack"
+                                class="sapUiTinyMarginEnd"/>
+                        <Title text="Task Chain - {edit>/taskchain}" wrapping="true"/>
+                    </HBox>
+                </f:snappedHeading>
+                <f:expandedContent>
+                    <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }"/>
+                </f:expandedContent>
+                <f:snappedContent>
+                    <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }"/>
+                </f:snappedContent>
+            </f:DynamicPageTitle>
+        </f:title>
+
+        <f:header>
+            <f:DynamicPageHeader pinnable="true">
+                <VBox>
+                    <Text text="{i18n>kind.trafficLights.desc}"/>
+                </VBox>
+            </f:DynamicPageHeader>
+        </f:header>
+
+        <f:content>
+            <VBox class="sapUiResponsiveMargin" width="auto">
+                <Panel headerText="{i18n>kind.trafficLights.title}" expandable="false">
+                    <content>
+                        <form:SimpleForm editable="true" layout="ColumnLayout"
+                                          columnsM="1" columnsL="1" columnsXL="1"
+                                          labelSpanXL="3" labelSpanL="3">
+                            <form:content>
+                                <Label text="{i18n>col.name}" required="true"/>
+                                <Input value="{edit>/name}"/>
+
+                                <Label text="Description"/>
+                                <TextArea value="{edit>/description}" rows="2"/>
+
+                                <Label text="DSP Space"/>
+                                <Input value="{edit>/spaceId}" editable="false"/>
+
+                                <Label text="DSP Taskchain"/>
+                                <Input value="{edit>/taskchain}" editable="false"/>
+
+                                <Label text="Parameters (JSON)"/>
+                                <TextArea value="{edit>/parameters}" rows="3" growing="true"/>
+
+                                <Label text="{i18n>col.cron}" required="true"/>
+                                <Input value="{edit>/cronExpression}" placeholder="m h dom mon dow"/>
+
+                                <Label text="{i18n>col.timezone}"/>
+                                <Input value="{edit>/timezone}"/>
+
+                                <Label text="{i18n>col.active}"/>
+                                <Switch state="{edit>/isActive}"/>
+                            </form:content>
+                        </form:SimpleForm>
+                    </content>
+                </Panel>
+
+                <Panel headerText="{i18n>detail.previewTitle}" expandable="true" expanded="true"
+                       class="sapUiSmallMarginTop">
+                    <headerToolbar>
+                        <Toolbar>
+                            <Title text="{i18n>detail.previewTitle}" level="H4"/>
+                            <ToolbarSpacer/>
+                            <Button icon="sap-icon://show" text="{i18n>common.preview}"
+                                    press=".onPreviewCron" busy="{preview>/busy}"/>
+                        </Toolbar>
+                    </headerToolbar>
+                    <content>
+                        <List items="{preview>/next}">
+                            <StandardListItem title="{preview>}" icon="sap-icon://date-time"/>
+                        </List>
+                    </content>
+                </Panel>
+            </VBox>
+        </f:content>
+
+        <f:footer>
+            <OverflowToolbar>
+                <ToolbarSpacer/>
+                <Button text="{i18n>common.cancel}" press=".onNavBack"/>
+                <Button text="{i18n>common.save}" type="Emphasized" press=".onSave"/>
+            </OverflowToolbar>
+        </f:footer>
+    </f:DynamicPage>
+</mvc:View>

@@ -1,0 +1,85 @@
+<mvc:View
+    controllerName="scheduler.controller.OnDemandPage"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:f="sap.f"
+    xmlns:l="sap.ui.layout">
+    <f:DynamicPage id="onDemandPage" busy="{edit>/busy}" toggleHeaderOnTitleClick="true">
+        <f:title>
+            <f:DynamicPageTitle>
+                <f:heading>
+                    <HBox alignItems="Center">
+                        <Button icon="sap-icon://nav-back" type="Transparent"
+                                tooltip="{i18n>common.back}" press=".onNavBack"
+                                class="sapUiTinyMarginEnd"/>
+                        <Title text="{edit>/taskchain}" wrapping="true"/>
+                    </HBox>
+                </f:heading>
+                <f:snappedHeading>
+                    <HBox alignItems="Center">
+                        <Button icon="sap-icon://nav-back" type="Transparent"
+                                tooltip="{i18n>common.back}" press=".onNavBack"
+                                class="sapUiTinyMarginEnd"/>
+                        <Title text="{edit>/taskchain}" wrapping="true"/>
+                    </HBox>
+                </f:snappedHeading>
+                <f:expandedContent>
+                    <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }"/>
+                </f:expandedContent>
+                <f:snappedContent>
+                    <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }"/>
+                </f:snappedContent>
+            </f:DynamicPageTitle>
+        </f:title>
+
+        <f:header>
+            <f:DynamicPageHeader pinnable="true">
+                <VBox>
+                    <Text text="{i18n>onDemand.intro}"/>
+                </VBox>
+            </f:DynamicPageHeader>
+        </f:header>
+
+        <f:content>
+            <Panel headerText="{i18n>onDemand.title}" class="sapUiResponsiveMargin" width="auto">
+                <content>
+                    <RadioButtonGroup selectedIndex="{edit>/onDemandModeIndex}" columns="1"
+                                      class="sapUiSmallMarginTop sapUiSmallMarginBottom">
+                        <buttons>
+                            <RadioButton text="{i18n>onDemand.runNow}"/>
+                            <RadioButton text="{i18n>onDemand.runAt}"/>
+                        </buttons>
+                    </RadioButtonGroup>
+
+                    <l:HorizontalLayout allowWrapping="true">
+                        <DatePicker value="{edit>/onDemandDate}"
+                                    valueFormat="yyyy-MM-dd"
+                                    displayFormat="long"
+                                    placeholder="{i18n>onDemand.date}"
+                                    enabled="{= ${edit>/onDemandModeIndex} === 1 }"
+                                    class="sapUiTinyMarginEnd"/>
+                        <TimePicker value="{edit>/onDemandTime}"
+                                    valueFormat="HH:mm"
+                                    displayFormat="HH:mm"
+                                    placeholder="{i18n>onDemand.time}"
+                                    enabled="{= ${edit>/onDemandModeIndex} === 1 }"/>
+                    </l:HorizontalLayout>
+
+                    <Button text="{i18n>onDemand.configureSteps}"
+                            icon="sap-icon://settings"
+                            press=".onConfigureStepParameters"
+                            class="sapUiMediumMarginTop"
+                            width="280px"/>
+                </content>
+            </Panel>
+        </f:content>
+
+        <f:footer>
+            <OverflowToolbar>
+                <ToolbarSpacer/>
+                <Button text="{i18n>common.cancel}" press=".onNavBack"/>
+                <Button text="{i18n>onDemand.confirm}" type="Emphasized" press=".onConfirmOnDemand"/>
+            </OverflowToolbar>
+        </f:footer>
+    </f:DynamicPage>
+</mvc:View>

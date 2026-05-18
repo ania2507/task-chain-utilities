@@ -2,20 +2,59 @@
     controllerName="scheduler.controller.ScheduleList"
     xmlns:mvc="sap.ui.core.mvc"
     xmlns="sap.m"
+    xmlns:f="sap.f"
     xmlns:core="sap.ui.core">
-    <Page id="scheduleListPage" title="{i18n>appTitle}" showNavButton="false">
-        <headerContent>
-            <Button icon="sap-icon://refresh" press=".onRefresh" tooltip="{i18n>common.refresh}"/>
-            <Button icon="sap-icon://add" type="Emphasized" text="{i18n>common.addTaskchain}" press=".onAddTaskchain"/>
-        </headerContent>
+    <f:DynamicPage id="scheduleListPage" fitContent="true">
 
-        <content>
+        <f:title>
+            <f:DynamicPageTitle>
+                <f:heading>
+                    <VariantManagement id="variantManagement" selectedKey="standard">
+                        <items>
+                            <VariantItem key="standard" title="Standard" rename="false" remove="false"/>
+                        </items>
+                    </VariantManagement>
+                </f:heading>
+                <f:snappedContent>
+                    <HBox wrap="Wrap">
+                        <Label text="{i18n>common.search}" class="sapUiTinyMarginEnd"/>
+                        <Text text="{page>/searchQuery}"/>
+                    </HBox>
+                </f:snappedContent>
+            </f:DynamicPageTitle>
+        </f:title>
+
+        <f:header>
+            <f:DynamicPageHeader pinnable="true">
+                <HBox wrap="Wrap" class="sapUiTinyMarginBegin sapUiTinyMarginTop sapUiTinyMarginEnd">
+                    <VBox class="sapUiTinyMarginEnd">
+                        <Label text="{i18n>common.search}" labelFor="taskchainSearchField"/>
+                        <SearchField id="taskchainSearchField"
+                            placeholder="{i18n>list.searchPlaceholder}"
+                            width="250px"
+                            value="{page>/searchQuery}"
+                            search=".onSearchTaskchains"
+                            liveChange=".onSearchTaskchains"/>
+                    </VBox>
+                </HBox>
+            </f:DynamicPageHeader>
+        </f:header>
+
+        <f:content>
             <Table id="taskchainsTable"
                    items="{ path: 'page>/rows', sorter: { path: 'spaceId' } }"
                    growing="true"
                    growingThreshold="100"
                    mode="None"
                    noDataText="{i18n>list.empty}">
+                <headerToolbar>
+                    <OverflowToolbar>
+                        <Title text="{= ${page>/rows}.length + ' Task Chains'}" level="H5"/>
+                        <ToolbarSpacer/>
+                        <Button icon="sap-icon://refresh" press=".onRefresh" tooltip="{i18n>common.refresh}"/>
+                        <Button icon="sap-icon://add" type="Emphasized" text="{i18n>common.addTaskchain}" press=".onAddTaskchain"/>
+                    </OverflowToolbar>
+                </headerToolbar>
                 <columns>
                     <Column><Text text="{i18n>col.space}"/></Column>
                     <Column><Text text="{i18n>col.taskchain}"/></Column>
@@ -71,6 +110,6 @@
                     </ColumnListItem>
                 </items>
             </Table>
-        </content>
-    </Page>
+        </f:content>
+    </f:DynamicPage>
 </mvc:View>
