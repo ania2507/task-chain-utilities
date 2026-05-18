@@ -58,6 +58,7 @@ sap.ui.define([
         },
 
         _loadRunsData: function () {
+            this.getOwnerComponent()._setBusy(true);
             var that = this;
             var oModel = this.getView().getModel("compare");
             var sBaseUrl = this._getPySrvUrl();
@@ -89,9 +90,11 @@ sap.ui.define([
                 that._buildComparisonTableColumns(aValidRuns);
                 
                 oModel.setProperty("/loading", false);
+                that.getOwnerComponent()._setBusy(false);
             }).catch(function (error) {
                 console.error("Error loading runs:", error);
                 oModel.setProperty("/loading", false);
+                that.getOwnerComponent()._setBusy(false);
             });
         },
 

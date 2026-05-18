@@ -79,6 +79,7 @@ sap.ui.define([
          * Load run details from DSP API
          */
         _loadRunDetails: function(sRunId, sChainId, sSpaceId, oModel) {
+            this.getOwnerComponent()._setBusy(true);
             var sBaseUrl = this._getPySrvUrl();
             var that = this;
             
@@ -275,6 +276,7 @@ sap.ui.define([
                             oModel.setProperty("/correlationId", sCorrelationId || "corr-" + sRunId);
                             oModel.setProperty("/errorMessage", sErrorMessage);
                             oModel.setProperty("/errorCode", sErrorCode);
+                            that.getOwnerComponent()._setBusy(false);
                         });
                         return; // Exit early, child promises will update model
                     }
@@ -298,11 +300,13 @@ sap.ui.define([
                 oModel.setProperty("/correlationId", sCorrelationId || "corr-" + sRunId);
                 oModel.setProperty("/errorMessage", sErrorMessage);
                 oModel.setProperty("/errorCode", sErrorCode);
-                
+                that.getOwnerComponent()._setBusy(false);
+
             }.bind(this)).catch(function(error) {
                 console.error("Error loading run details:", error);
                 oModel.setProperty("/status", "error");
                 oModel.setProperty("/statusText", "Load Error");
+                that.getOwnerComponent()._setBusy(false);
             });
         },
         

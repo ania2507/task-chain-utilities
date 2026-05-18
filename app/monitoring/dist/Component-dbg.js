@@ -1,8 +1,9 @@
 sap.ui.define([
     "sap/ui/core/UIComponent",
     "sap/ui/model/json/JSONModel",
-    "sap/ui/Device"
-], function (UIComponent, JSONModel, Device) {
+    "sap/ui/Device",
+    "sap/m/BusyDialog"
+], function (UIComponent, JSONModel, Device, BusyDialog) {
     "use strict";
 
     return UIComponent.extend("monitoring.Component", {
@@ -27,6 +28,23 @@ sap.ui.define([
         },
 
         /**
+         * Show or hide the global BusyDialog
+         * @param {boolean} bBusy
+         */
+        _setBusy: function (bBusy) {
+            if (bBusy) {
+                if (!this._oBusyDialog) {
+                    this._oBusyDialog = new BusyDialog();
+                }
+                this._oBusyDialog.open();
+            } else {
+                if (this._oBusyDialog) {
+                    this._oBusyDialog.close();
+                }
+            }
+        },
+
+        /**
          * Initialize the monitoring model from OData backend
          */
         _initMonitoringModel: function () {
@@ -36,12 +54,12 @@ sap.ui.define([
                 selectedProject: null,
                 executions: [],
                 taskChains: [],
-                alerts: [],
-                loading: true
+                alerts: []
             });
             this.setModel(oMonitoringModel, "monitoring");
 
             // Load projects from OData
+            this._setBusy(true);
             this._loadProjectsFromOData();
         },
 
@@ -90,10 +108,10 @@ sap.ui.define([
 
                 oMonitoringModel.setProperty("/projects", aProjects);
                 oMonitoringModel.setProperty("/filteredProjects", aProjects);
-                oMonitoringModel.setProperty("/loading", false);
+                that._setBusy(false);
             }).catch(function (oError) {
                 console.error("Error loading projects from OData:", oError);
-                oMonitoringModel.setProperty("/loading", false);
+                that._setBusy(false);
             });
         },
 
@@ -101,8 +119,7 @@ sap.ui.define([
          * Refresh projects from OData
          */
         refreshProjects: function () {
-            var oMonitoringModel = this.getModel("monitoring");
-            oMonitoringModel.setProperty("/loading", true);
+            this._setBusy(true);
             return this._loadProjectsFromOData();
         },
 

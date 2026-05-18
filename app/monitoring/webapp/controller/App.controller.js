@@ -5,7 +5,6 @@ sap.ui.define([
 
     return BaseController.extend("monitoring.controller.App", {
         onInit: function () {
-            // Apply content density mode (compact/cozy) based on device
             this.getView().addStyleClass(this.getOwnerComponent().getContentDensityClass());
         }
     });

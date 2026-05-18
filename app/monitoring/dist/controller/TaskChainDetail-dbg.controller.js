@@ -68,6 +68,7 @@ sap.ui.define([
             var sApiChainId = sChainName || sChainId;
             
             // Load execution history first (it can provide spaceId if missing)
+            this.getOwnerComponent()._setBusy(true);
             this._loadExecutionHistory(sApiChainId, sSpaceId, oChainDetailModel);
             
             // Load DAG - if spaceId is empty, wait for execution history
@@ -332,10 +333,12 @@ sap.ui.define([
                         oModel.setProperty("/statusText", sStatusText);
                         oModel.setProperty("/executions", aExecutions);
                     }
+                    this.getOwnerComponent()._setBusy(false);
                 }.bind(this))
                 .catch(function(error) {
                     console.error("Error loading execution history:", error);
-                });
+                    this.getOwnerComponent()._setBusy(false);
+                }.bind(this));
         },
         
         /**

@@ -112,6 +112,8 @@ sap.ui.define([
                 return;
             }
 
+            this.getOwnerComponent()._setBusy(true);
+
             // Determine API base URL
             var sBaseUrl = this._getPySrvUrl();
             var that = this;
@@ -263,16 +265,19 @@ sap.ui.define([
                     oDashboardModel.setProperty("/executionChartData", that._generateChartDataFromExecutions(aAllRuns, "related"));
                     oDashboardModel.setProperty("/topFailingTasks", that._getTopFailingTasks(aAllRuns));
                     oDashboardModel.setProperty("/loading", false);
+                    that.getOwnerComponent()._setBusy(false);
 
                     // Update project in monitoring model with real data
                     that._updateProjectStats(fSuccessRate, iErrors24h, fAvgDurationP95, aTaskChains.length);
                 }).catch(function(error) {
                     console.error("Error loading node details:", error);
                     oDashboardModel.setProperty("/loading", false);
+                    that.getOwnerComponent()._setBusy(false);
                 });
             }.bind(this)).catch(function(error) {
                 console.error("Error loading executions:", error);
                 oDashboardModel.setProperty("/loading", false);
+                that.getOwnerComponent()._setBusy(false);
             });
         },
 
@@ -614,8 +619,9 @@ sap.ui.define([
 
             console.log("Adding chains to project:", this._sCurrentProjectId);
             // Add chains via OData
+            this.getOwnerComponent()._setBusy(true);
+
             var aPromises = aSelectedChains.map(function(chain) {
-                console.log("Adding chain:", chain.name);
                 return that.getOwnerComponent().addTaskChain(that._sCurrentProjectId, {
                     name: chain.name,
                     spaceId: chain.spaceId,
@@ -625,12 +631,10 @@ sap.ui.define([
             });
 
             Promise.all(aPromises).then(function() {
-                console.log("All chains added successfully");
-                // Reload dashboard after projects model is refreshed
                 that._loadProjectData(that._sCurrentProjectId);
                 MessageToast.show(aSelectedChains.length + " task chain(s) added");
             }).catch(function(oError) {
-                console.error("Error adding chains:", oError);
+                console.error("[Dashboard] Error adding chains:", oError);
                 MessageBox.error("Error adding task chains: " + oError.message);
             });
 
@@ -691,6 +695,7 @@ sap.ui.define([
                 });
 
                 if (oChain && oChain.id) {
+                    this.getOwnerComponent()._setBusy(true);
                     this.getOwnerComponent().removeTaskChain(oChain.id).then(function() {
                         that._loadProjectData(that._sCurrentProjectId);
                         MessageToast.show("Task chain removed");
