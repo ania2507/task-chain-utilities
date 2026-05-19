@@ -4,31 +4,31 @@
     xmlns="sap.m"
     xmlns:f="sap.f"
     xmlns:l="sap.ui.layout">
-    <f:DynamicPage id="onDemandPage" busy="{edit>/busy}" toggleHeaderOnTitleClick="true">
+    <f:DynamicPage id="onDemandPage" busy="{edit>/busy}" toggleHeaderOnTitleClick="true" showFooter="true">
         <f:title>
             <f:DynamicPageTitle>
                 <f:heading>
                     <HBox alignItems="Center">
                         <Button icon="sap-icon://nav-back" type="Transparent"
                                 tooltip="{i18n>common.back}" press=".onNavBack"
-                                class="sapUiTinyMarginEnd"/>
-                        <Title text="{edit>/taskchain}" wrapping="true"/>
+                                class="sapUiSmallMarginEnd"/>
+                        <VBox>
+                            <Title text="Task Chain - {edit>/taskchain}" wrapping="true"/>
+                            <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }"/>
+                        </VBox>
                     </HBox>
                 </f:heading>
                 <f:snappedHeading>
                     <HBox alignItems="Center">
                         <Button icon="sap-icon://nav-back" type="Transparent"
                                 tooltip="{i18n>common.back}" press=".onNavBack"
-                                class="sapUiTinyMarginEnd"/>
-                        <Title text="{edit>/taskchain}" wrapping="true"/>
+                                class="sapUiSmallMarginEnd"/>
+                        <VBox>
+                            <Title text="Task Chain - {edit>/taskchain}" wrapping="true"/>
+                            <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }"/>
+                        </VBox>
                     </HBox>
                 </f:snappedHeading>
-                <f:expandedContent>
-                    <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }"/>
-                </f:expandedContent>
-                <f:snappedContent>
-                    <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }"/>
-                </f:snappedContent>
             </f:DynamicPageTitle>
         </f:title>
 
@@ -43,33 +43,35 @@
         <f:content>
             <Panel headerText="{i18n>onDemand.title}" class="sapUiResponsiveMargin" width="auto">
                 <content>
-                    <RadioButtonGroup selectedIndex="{edit>/onDemandModeIndex}" columns="1"
-                                      class="sapUiSmallMarginTop sapUiSmallMarginBottom">
-                        <buttons>
-                            <RadioButton text="{i18n>onDemand.runNow}"/>
-                            <RadioButton text="{i18n>onDemand.runAt}"/>
-                        </buttons>
-                    </RadioButtonGroup>
+                    <VBox>
+                        <RadioButtonGroup selectedIndex="{edit>/onDemandModeIndex}" columns="1"
+                                          class="sapUiSmallMarginTop sapUiSmallMarginBottom">
+                            <buttons>
+                                <RadioButton text="{i18n>onDemand.runNow}"/>
+                                <RadioButton text="{i18n>onDemand.runAt}"/>
+                            </buttons>
+                        </RadioButtonGroup>
 
-                    <l:HorizontalLayout allowWrapping="true">
-                        <DatePicker value="{edit>/onDemandDate}"
-                                    valueFormat="yyyy-MM-dd"
-                                    displayFormat="long"
-                                    placeholder="{i18n>onDemand.date}"
-                                    enabled="{= ${edit>/onDemandModeIndex} === 1 }"
-                                    class="sapUiTinyMarginEnd"/>
-                        <TimePicker value="{edit>/onDemandTime}"
-                                    valueFormat="HH:mm"
-                                    displayFormat="HH:mm"
-                                    placeholder="{i18n>onDemand.time}"
-                                    enabled="{= ${edit>/onDemandModeIndex} === 1 }"/>
-                    </l:HorizontalLayout>
-
-                    <Button text="{i18n>onDemand.configureSteps}"
-                            icon="sap-icon://settings"
-                            press=".onConfigureStepParameters"
-                            class="sapUiMediumMarginTop"
-                            width="280px"/>
+                        <l:HorizontalLayout allowWrapping="true" class="sapUiLargeMarginBegin">
+                            <DatePicker value="{edit>/onDemandDate}"
+                                        valueFormat="yyyy-MM-dd"
+                                        displayFormat="long"
+                                        placeholder="{i18n>onDemand.date}"
+                                        enabled="{= ${edit>/onDemandModeIndex} === 1 }"
+                                        class="sapUiTinyMarginEnd"/>
+                            <TimePicker value="{edit>/onDemandTime}"
+                                        valueFormat="HH:mm"
+                                        displayFormat="HH:mm"
+                                        placeholder="{i18n>onDemand.time}"
+                                        enabled="{= ${edit>/onDemandModeIndex} === 1 }"/>
+                        </l:HorizontalLayout>
+                        <Button text="{i18n>onDemand.configureSteps}"
+                                icon="sap-icon://settings"
+                                type="Emphasized"
+                                press=".onConfigureStepParameters"
+                                class="sapUiSmallMarginTop"
+                                width="14rem"/>
+                    </VBox>
                 </content>
             </Panel>
         </f:content>

@@ -5,31 +5,31 @@
     xmlns:core="sap.ui.core"
     xmlns:f="sap.f"
     xmlns:u="sap.ui.unified">
-    <f:DynamicPage id="customCalendarPage" busy="{edit>/busy}" toggleHeaderOnTitleClick="true">
+    <f:DynamicPage id="customCalendarPage" busy="{edit>/busy}" toggleHeaderOnTitleClick="true" showFooter="true">
         <f:title>
             <f:DynamicPageTitle>
                 <f:heading>
                     <HBox alignItems="Center">
                         <Button icon="sap-icon://nav-back" type="Transparent"
                                 tooltip="{i18n>common.back}" press=".onNavBack"
-                                class="sapUiTinyMarginEnd"/>
-                        <Title text="Task Chain - {edit>/taskchain}" wrapping="true"/>
+                                class="sapUiSmallMarginEnd"/>
+                        <VBox>
+                            <Title text="Task Chain - {edit>/taskchain}" wrapping="true"/>
+                            <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }"/>
+                        </VBox>
                     </HBox>
                 </f:heading>
                 <f:snappedHeading>
                     <HBox alignItems="Center">
                         <Button icon="sap-icon://nav-back" type="Transparent"
                                 tooltip="{i18n>common.back}" press=".onNavBack"
-                                class="sapUiTinyMarginEnd"/>
-                        <Title text="Task Chain - {edit>/taskchain}" wrapping="true"/>
+                                class="sapUiSmallMarginEnd"/>
+                        <VBox>
+                            <Title text="Task Chain - {edit>/taskchain}" wrapping="true"/>
+                            <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }"/>
+                        </VBox>
                     </HBox>
                 </f:snappedHeading>
-                <f:expandedContent>
-                    <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }"/>
-                </f:expandedContent>
-                <f:snappedContent>
-                    <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }"/>
-                </f:snappedContent>
             </f:DynamicPageTitle>
         </f:title>
 

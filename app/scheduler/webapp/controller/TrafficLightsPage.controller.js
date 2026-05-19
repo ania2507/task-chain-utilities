@@ -2,8 +2,9 @@ sap.ui.define([
     "scheduler/controller/BaseController",
     "sap/ui/model/json/JSONModel",
     "sap/m/MessageToast",
+    "sap/ui/core/Fragment",
     "sap/ui/core/routing/History"
-], function (BaseController, JSONModel, MessageToast, History) {
+], function (BaseController, JSONModel, MessageToast, Fragment, History) {
     "use strict";
 
     var DEFAULTS = {
@@ -19,6 +20,11 @@ sap.ui.define([
         timezone: "Europe/Rome",
         isActive: true,
         scheduleKind: "TRAFFIC_LIGHTS",
+        currentState: "GREEN",
+        checkInterval: "15",
+        autoReset: true,
+        autoResetState: "GREY",
+        timeout: "48",
         busy: false
     };
 
@@ -57,6 +63,36 @@ sap.ui.define([
             } else {
                 this.getRouter().navTo("scheduleList", {}, true);
             }
+        },
+
+        onConfigureStepParameters: function () {
+            var oView = this.getView();
+            if (!this._pStepDialog) {
+                this._pStepDialog = Fragment.load({
+                    id: oView.getId(),
+                    name: "scheduler.view.fragments.StepParametersDialog",
+                    controller: this
+                }).then(function (oDialog) {
+                    oView.addDependent(oDialog);
+                    oDialog.setModel(this._editModel, "edit");
+                    return oDialog;
+                }.bind(this));
+            }
+            this._pStepDialog.then(function (oDialog) { oDialog.open(); });
+        },
+
+        onCloseStepParameters: function () {
+            if (this._pStepDialog) this._pStepDialog.then(function (d) { d.close(); });
+        },
+
+        onSaveStepParameters: function () {
+            var s = this._editModel.getProperty("/parameters");
+            if (s && String(s).trim()) {
+                try { JSON.parse(s); }
+                catch (e) { this.error("Step parameters must be valid JSON: " + e.message); return; }
+            }
+            this.onCloseStepParameters();
+            MessageToast.show(this.i18n("steps.saved") || "Parameters saved");
         },
 
         onPreviewCron: function () {

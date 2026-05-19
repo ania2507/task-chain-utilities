@@ -5,31 +5,31 @@
     xmlns:core="sap.ui.core"
     xmlns:f="sap.f"
     xmlns:form="sap.ui.layout.form">
-    <f:DynamicPage id="trafficLightsPage" busy="{edit>/busy}" toggleHeaderOnTitleClick="true">
+    <f:DynamicPage id="trafficLightsPage" busy="{edit>/busy}" toggleHeaderOnTitleClick="true" showFooter="true">
         <f:title>
             <f:DynamicPageTitle>
                 <f:heading>
                     <HBox alignItems="Center">
                         <Button icon="sap-icon://nav-back" type="Transparent"
                                 tooltip="{i18n>common.back}" press=".onNavBack"
-                                class="sapUiTinyMarginEnd"/>
-                        <Title text="Task Chain - {edit>/taskchain}" wrapping="true"/>
+                                class="sapUiSmallMarginEnd"/>
+                        <VBox>
+                            <Title text="Task Chain - {edit>/taskchain}" wrapping="true"/>
+                            <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }"/>
+                        </VBox>
                     </HBox>
                 </f:heading>
                 <f:snappedHeading>
                     <HBox alignItems="Center">
                         <Button icon="sap-icon://nav-back" type="Transparent"
                                 tooltip="{i18n>common.back}" press=".onNavBack"
-                                class="sapUiTinyMarginEnd"/>
-                        <Title text="Task Chain - {edit>/taskchain}" wrapping="true"/>
+                                class="sapUiSmallMarginEnd"/>
+                        <VBox>
+                            <Title text="Task Chain - {edit>/taskchain}" wrapping="true"/>
+                            <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }"/>
+                        </VBox>
                     </HBox>
                 </f:snappedHeading>
-                <f:expandedContent>
-                    <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }"/>
-                </f:expandedContent>
-                <f:snappedContent>
-                    <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }"/>
-                </f:snappedContent>
             </f:DynamicPageTitle>
         </f:title>
 
@@ -45,52 +45,66 @@
             <VBox class="sapUiResponsiveMargin" width="auto">
                 <Panel headerText="{i18n>kind.trafficLights.title}" expandable="false">
                     <content>
-                        <form:SimpleForm editable="true" layout="ColumnLayout"
-                                          columnsM="1" columnsL="1" columnsXL="1"
-                                          labelSpanXL="3" labelSpanL="3">
-                            <form:content>
-                                <Label text="{i18n>col.name}" required="true"/>
-                                <Input value="{edit>/name}"/>
+                        <VBox>
+                            <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                <Label text="Current State" width="10rem"/>
+                                <Select selectedKey="{edit>/currentState}">
+                                    <core:Item key="GREEN"  text="🟢 GREEN — ready to run"/>
+                                    <core:Item key="YELLOW" text="🟡 YELLOW — running"/>
+                                    <core:Item key="RED"    text="🔴 RED — disabled"/>
+                                    <core:Item key="GREY"   text="⚪ GREY — on hold"/>
+                                </Select>
+                            </HBox>
 
-                                <Label text="Description"/>
-                                <TextArea value="{edit>/description}" rows="2"/>
+                            <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                <Label text="Check Interval" width="10rem"/>
+                                <Select selectedKey="{edit>/checkInterval}">
+                                    <core:Item key="5"  text="Every 5 min"/>
+                                    <core:Item key="15" text="Every 15 min"/>
+                                    <core:Item key="30" text="Every 30 min"/>
+                                    <core:Item key="60" text="Every hour"/>
+                                </Select>
+                            </HBox>
 
-                                <Label text="DSP Space"/>
-                                <Input value="{edit>/spaceId}" editable="false"/>
+                            <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                <Label text="Auto-reset" width="10rem"/>
+                                <CheckBox selected="{edit>/autoReset}" text="After run → resets to"/>
+                                <Select selectedKey="{edit>/autoResetState}" class="sapUiTinyMarginBegin">
+                                    <core:Item key="GREY" text="⚪ GREY — on hold"/>
+                                    <core:Item key="RED"  text="🔴 RED — disabled"/>
+                                </Select>
+                            </HBox>
 
-                                <Label text="DSP Taskchain"/>
-                                <Input value="{edit>/taskchain}" editable="false"/>
+                            <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                <Label text="Timeout" width="10rem"/>
+                                <Select selectedKey="{edit>/timeout}">
+                                    <core:Item key="24" text="24h — alert if not triggered"/>
+                                    <core:Item key="48" text="48h — alert if not triggered"/>
+                                    <core:Item key="72" text="72h — alert if not triggered"/>
+                                </Select>
+                            </HBox>
 
-                                <Label text="Parameters (JSON)"/>
-                                <TextArea value="{edit>/parameters}" rows="3" growing="true"/>
+                            <HBox alignItems="Center" wrap="Wrap" class="sapUiSmallMarginTop">
+                                <core:Icon src="sap-icon://circle-task-2" color="#e74c3c" class="sapUiTinyMarginEnd"/>
+                                <Text text="DISABLE" class="sapUiSmallMarginEnd"/>
+                                <core:Icon src="sap-icon://circle-task-2" color="#f1c40f" class="sapUiTinyMarginEnd sapUiSmallMarginBegin"/>
+                                <Text text="RUNNING" class="sapUiSmallMarginEnd"/>
+                                <core:Icon src="sap-icon://circle-task-2" color="#2ecc71" class="sapUiTinyMarginEnd sapUiSmallMarginBegin"/>
+                                <Text text="ENABLE (← current state)" class="sapUiSmallMarginEnd"/>
+                                <core:Icon src="sap-icon://circle-task-2" color="#bdc3c7" class="sapUiTinyMarginEnd sapUiSmallMarginBegin"/>
+                                <Text text="ON HOLD"/>
+                            </HBox>
 
-                                <Label text="{i18n>col.cron}" required="true"/>
-                                <Input value="{edit>/cronExpression}" placeholder="m h dom mon dow"/>
+                            <Text text="An external user sets the traffic lights to 🟢."
+                                  class="sapUiSmallMarginTop"/>
+                            <Text text="The chain runs automatically when green. Resets to 🔴 after run (if enabled)."/>
 
-                                <Label text="{i18n>col.timezone}"/>
-                                <Input value="{edit>/timezone}"/>
-
-                                <Label text="{i18n>col.active}"/>
-                                <Switch state="{edit>/isActive}"/>
-                            </form:content>
-                        </form:SimpleForm>
-                    </content>
-                </Panel>
-
-                <Panel headerText="{i18n>detail.previewTitle}" expandable="true" expanded="true"
-                       class="sapUiSmallMarginTop">
-                    <headerToolbar>
-                        <Toolbar>
-                            <Title text="{i18n>detail.previewTitle}" level="H4"/>
-                            <ToolbarSpacer/>
-                            <Button icon="sap-icon://show" text="{i18n>common.preview}"
-                                    press=".onPreviewCron" busy="{preview>/busy}"/>
-                        </Toolbar>
-                    </headerToolbar>
-                    <content>
-                        <List items="{preview>/next}">
-                            <StandardListItem title="{preview>}" icon="sap-icon://date-time"/>
-                        </List>
+                            <HBox justifyContent="End" class="sapUiSmallMarginTop">
+                                <Button text="Configure Step Parameters" icon="sap-icon://settings"
+                                        type="Emphasized" press=".onConfigureStepParameters"
+                                        width="14rem"/>
+                            </HBox>
+                        </VBox>
                     </content>
                 </Panel>
             </VBox>
