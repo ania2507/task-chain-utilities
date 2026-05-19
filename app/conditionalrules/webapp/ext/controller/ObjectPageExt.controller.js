@@ -127,8 +127,11 @@ sap.ui.define([
                 }
             })
             .catch(function(oError) {
-                MessageBox.error("Error calling validation service: " + oError.message + 
-                    "\n\nMake sure Python service is running on port 8080");
+                var sHost = window.location.hostname;
+                var sHint = (sHost === "localhost" || sHost === "127.0.0.1")
+                    ? "\n\nMake sure Python service is running on port 8080"
+                    : "\n\nCheck that the Python service destination is reachable";
+                MessageBox.error("Error calling validation service: " + oError.message + sHint);
             });
         },
 
@@ -234,8 +237,11 @@ sap.ui.define([
             })
             .catch(function(oError) {
                 oDialog.close();
-                MessageBox.error("Error calling test service: " + oError.message +
-                    "\n\nMake sure Python service is running on port 8080");
+                var sHost = window.location.hostname;
+                var sHint = (sHost === "localhost" || sHost === "127.0.0.1")
+                    ? "\n\nMake sure Python service is running on port 8080"
+                    : "\n\nCheck that the Python service destination is reachable";
+                MessageBox.error("Error calling test service: " + oError.message + sHint);
             });
         },
 
@@ -243,9 +249,9 @@ sap.ui.define([
          * Fetch wrapper with CORS mode - handles JSON responses including errors
          */
         _fetchWithRetry: function(sUrl, oOptions) {
-            // Add CORS mode
-            oOptions.mode = "cors";
-            
+            // Include credentials (session cookies) so the approuter can authenticate the request
+            oOptions.credentials = "include";
+
             return fetch(sUrl, oOptions)
                 .then(function(response) {
                     return response.json().then(function(data) {
@@ -268,10 +274,13 @@ sap.ui.define([
                 // Development: Python service on port 8080
                 return "http://localhost:8080";
             }
-            
-            // Production (managed approuter / WorkZone): resolve against the app's
-            // HTML5-repo content path so the request goes through xs-app.json routing.
-            return sap.ui.require.toUrl("conditionalrules");
+
+            // Production (WorkZone / managed approuter): derive the app prefix from
+            // the current URL so /v1/... is routed through xs-app.json correctly.
+            // e.g. https://host/conditionalrules/index.html → /conditionalrules
+            var sPathname = window.location.pathname;
+            var sAppRoot = sPathname.substring(0, sPathname.lastIndexOf("/"));
+            return window.location.origin + sAppRoot;
         }
     });
 });

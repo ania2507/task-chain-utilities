@@ -575,13 +575,13 @@ sap.ui.define([
             var aAllChains = this._oAvailableChainsModel.getProperty("/chains") || [];
 
             var aFiltered = aAllChains.filter(function(chain) {
-                // Space filter: matches spaceId and technical name (gray row)
+                // Space filter: matches only spaceId (e.g. "IFP")
                 var bSpaceMatch = !sSpaceFilter ||
-                    (chain.spaceId || "").toLowerCase().indexOf(sSpaceFilter) >= 0 ||
-                    (chain.name || "").toLowerCase().indexOf(sSpaceFilter) >= 0;
-                // Chain filter: matches only the business name (bold title)
+                    (chain.spaceId || "").toLowerCase().indexOf(sSpaceFilter) >= 0;
+                // Chain filter: matches business name (bold title) and technical name
                 var bChainMatch = !sChainFilter ||
-                    (chain.businessName || "").toLowerCase().indexOf(sChainFilter) >= 0;
+                    (chain.businessName || "").toLowerCase().indexOf(sChainFilter) >= 0 ||
+                    (chain.name || "").toLowerCase().indexOf(sChainFilter) >= 0;
                 return bSpaceMatch && bChainMatch;
             });
 

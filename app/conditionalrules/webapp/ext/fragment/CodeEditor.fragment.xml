@@ -18,13 +18,13 @@
                 text="Validate Syntax"
                 icon="sap-icon://syntax"
                 type="Emphasized"
-                press=".extension.webapp.ext.controller.ObjectPageExt.onValidateRule"
+                press=".extension.conditionalrules.ext.controller.ObjectPageExt.onValidateRule"
                 class="sapUiSmallMarginEnd"/>
             <Button id="btnTestRule"
                 text="Test Rule"
                 icon="sap-icon://play"
                 type="Accept"
-                press=".extension.webapp.ext.controller.ObjectPageExt.onTestRule"/>
+                press=".extension.conditionalrules.ext.controller.ObjectPageExt.onTestRule"/>
         </HBox>
     </VBox>
     
