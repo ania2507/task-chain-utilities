@@ -48,6 +48,7 @@ sap.ui.define([
                 taskchain: oQuery.taskchain || ""
             }));
             this._previewModel.setProperty("/next", []);
+            this._consumeStepParametersResult();
         },
 
         formatBusinessName: function (v) {
@@ -66,19 +67,23 @@ sap.ui.define([
         },
 
         onConfigureStepParameters: function () {
-            var oView = this.getView();
-            if (!this._pStepDialog) {
-                this._pStepDialog = Fragment.load({
-                    id: oView.getId(),
-                    name: "scheduler.view.fragments.StepParametersDialog",
-                    controller: this
-                }).then(function (oDialog) {
-                    oView.addDependent(oDialog);
-                    oDialog.setModel(this._editModel, "edit");
-                    return oDialog;
-                }.bind(this));
+            var d = this._editModel.getData();
+            this.getRouter().navTo("stepParameters", {
+                "?query": {
+                    spaceId: d.spaceId || "",
+                    taskchain: d.taskchain || "",
+                    name: d.name || "",
+                    returnTo: "trafficLights"
+                }
+            });
+        },
+
+        _consumeStepParametersResult: function () {
+            var oComp = this.getOwnerComponent();
+            var s = oComp && oComp._stepParamsState;
+            if (s && s.taskchain === this._editModel.getProperty("/taskchain") && s.parametersJson) {
+                this._editModel.setProperty("/parameters", s.parametersJson);
             }
-            this._pStepDialog.then(function (oDialog) { oDialog.open(); });
         },
 
         onCloseStepParameters: function () {

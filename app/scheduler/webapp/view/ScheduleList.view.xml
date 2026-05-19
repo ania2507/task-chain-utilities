@@ -70,8 +70,9 @@
                             <ObjectIdentifier title="{page>name}" text="{page>businessName}"/>
 
                             <VBox>
-                                <Text text="{ path: 'page>scheduleText', formatter: '.formatScheduleText' }"
-                                      visible="{= ${page>hasInfo} }"/>
+                                <ObjectStatus text="{i18n>status.scheduled}" state="Success"
+                                              icon="sap-icon://accept"
+                                              visible="{= !!${page>hasInfo} }"/>
                                 <ObjectStatus text="{i18n>status.notScheduled}" state="None"
                                               visible="{= !${page>hasInfo} }"/>
                             </VBox>

@@ -545,16 +545,33 @@ def get_taskchain_dag():
                 node_id = node.get("id")
                 node_type = node.get("type", "TASK")
                 task_id = node.get("taskIdentifier", {})
-                
+
                 # Get execution status for this node
                 exec_info = node_statuses.get(node_id, {})
-                
+
+                # Best-effort extraction of a human-readable label/description
+                label = (
+                    node.get("label")
+                    or node.get("name")
+                    or node.get("displayName")
+                    or task_id.get("label")
+                    or task_id.get("name")
+                    or task_id.get("displayName")
+                )
+                description = (
+                    node.get("description")
+                    or node.get("comment")
+                    or task_id.get("description")
+                )
+
                 nodes.append({
                     "id": node_id,
                     "type": node_type,
                     "objectId": task_id.get("objectId") or exec_info.get("objectId"),
                     "applicationId": task_id.get("applicationId"),
                     "spaceId": task_id.get("spaceId"),
+                    "label": label,
+                    "description": description,
                     "status": exec_info.get("status", "pending"),
                     "ignoreError": node.get("ignoreError", False),
                     "taskLogId": exec_info.get("taskLogId")
@@ -589,7 +606,7 @@ def get_taskchain_schedules():
 
     Reads from a HANA consumption view that exposes DWC_TENANT_OWNER.TASK_SCHEDULE
     (or equivalent). The fully-qualified view name is configurable via env
-    DSP_SCHEDULES_VIEW (default: ORCHESTRATION.3VR_TASK_SCHEDULES_01).
+    DSP_SCHEDULES_VIEW (default: ORCHESTRATION.3VR_DWC_TASK_SCHEDULES_01).
 
     Expected view columns (case-insensitive, aliased on read):
       - taskchain | OBJECT_NAME | TASK_NAME           -> technical name
@@ -606,7 +623,7 @@ def get_taskchain_schedules():
     from flask import current_app
     from datetime import date, datetime as _dt
 
-    view_name = os.environ.get("DSP_SCHEDULES_VIEW", "ORCHESTRATION.3VR_TASK_SCHEDULES_01")
+    view_name = os.environ.get("DSP_SCHEDULES_VIEW", "ORCHESTRATION.3VR_DWC_TASK_SCHEDULES_01")
 
     space_filter = (request.args.get("spaceId") or "").strip() or None
     taskchain_filter = (request.args.get("taskchain") or "").strip() or None
@@ -618,9 +635,8 @@ def get_taskchain_schedules():
         where_parts.append('UPPER("SPACE_ID") = UPPER(?)')
         params.append(space_filter)
     if taskchain_filter:
-        # Try both common technical-name columns
-        where_parts.append('(UPPER("OBJECT_NAME") = UPPER(?) OR UPPER("TASK_NAME") = UPPER(?))')
-        params.append(taskchain_filter)
+        # The DWC view uses OBJECT_ID for the technical chain name
+        where_parts.append('UPPER("OBJECT_ID") = UPPER(?)')
         params.append(taskchain_filter)
     where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
@@ -682,16 +698,47 @@ def get_taskchain_schedules():
             return v.isoformat()
         return str(v)
 
+    def _compute_next_run(cron_expr, tz_name, is_active):
+        """Compute the next run datetime from a cron expression in the given timezone."""
+        if not cron_expr or is_active is False:
+            return None
+        try:
+            from croniter import croniter
+            try:
+                from zoneinfo import ZoneInfo
+                tz = ZoneInfo(tz_name) if tz_name else ZoneInfo("UTC")
+            except Exception:
+                tz = None
+            now = _dt.now(tz) if tz else _dt.utcnow()
+            itr = croniter(str(cron_expr).strip(), now)
+            nxt = itr.get_next(_dt)
+            return nxt.isoformat()
+        except Exception:
+            return None
+
     schedules = []
     for r in rows or []:
+        cron_expr = _ci_get(r, "cronExpression", "CRON", "CRON_EXPRESSION")
+        tz_name = _ci_get(r, "timezone", "TZ_NAME", "TIMEZONE", "TIME_ZONE")
+        is_active = _to_bool_active(_ci_get(r, "isActive", "ACTIVATION_STATUS", "IS_ACTIVE", "ACTIVE", "STATUS"))
+        view_next = _isoformat(_ci_get(r, "nextRunAt", "NEXT_RUN_AT", "NEXT_EXECUTION"))
+        next_run = view_next or _compute_next_run(cron_expr, tz_name, is_active)
         schedules.append({
-            "taskchain": _ci_get(r, "taskchain", "OBJECT_NAME", "TASK_NAME"),
+            "taskchain": _ci_get(r, "taskchain", "OBJECT_ID", "OBJECT_NAME", "TASK_NAME"),
             "spaceId": _ci_get(r, "spaceId", "SPACE_ID"),
-            "cronExpression": _ci_get(r, "cronExpression", "CRON_EXPRESSION", "CRON"),
-            "timezone": _ci_get(r, "timezone", "TIMEZONE", "TIME_ZONE"),
-            "nextRunAt": _isoformat(_ci_get(r, "nextRunAt", "NEXT_RUN_AT", "NEXT_EXECUTION")),
-            "isActive": _to_bool_active(_ci_get(r, "isActive", "IS_ACTIVE", "ACTIVE", "STATUS")),
+            "applicationId": _ci_get(r, "applicationId", "APPLICATION_ID"),
+            "activity": _ci_get(r, "activity", "ACTIVITY"),
+            "description": _ci_get(r, "description", "DESCRIPTION"),
+            "cronExpression": cron_expr,
+            "timezone": tz_name,
+            "validFrom": _isoformat(_ci_get(r, "validFrom", "VALID_FROM")),
+            "validTo": _isoformat(_ci_get(r, "validTo", "VALID_TO")),
+            "nextRunAt": next_run,
+            "isActive": is_active,
+            "activationStatus": _ci_get(r, "activationStatus", "ACTIVATION_STATUS"),
             "scheduleId": _ci_get(r, "scheduleId", "SCHEDULE_ID"),
+            "externalScheduleId": _ci_get(r, "externalScheduleId", "EXTERNAL_SCHEDULE_ID"),
+            "frequency": _ci_get(r, "frequency", "FREQUENCY"),
         })
 
     return jsonify({

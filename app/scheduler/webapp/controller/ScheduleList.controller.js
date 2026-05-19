@@ -486,23 +486,18 @@ sap.ui.define([
         },
 
         onConfigureStepParameters: function () {
-            var oView = this.getView();
-            if (!this._pStepDialog) {
-                this._pStepDialog = Fragment.load({
-                    id: oView.getId(),
-                    name: "scheduler.view.fragments.StepParametersDialog",
-                    controller: this
-                }).then(function (oDialog) {
-                    oView.addDependent(oDialog);
-                    oDialog.setModel(this._editModel, "edit");
-                    return oDialog;
-                }.bind(this));
-            } else {
-                this._pStepDialog.then(function (oDialog) {
-                    oDialog.setModel(this._editModel, "edit");
-                }.bind(this));
-            }
-            this._pStepDialog.then(function (oDialog) { oDialog.open(); });
+            var d = this._editModel.getData();
+            // Close any open dialog (OnDemand/CustomCalendar) before navigating away
+            if (this._pOnDemandDialog) this._pOnDemandDialog.then(function (x) { x.close(); });
+            if (this._pCustomCalendarDialog) this._pCustomCalendarDialog.then(function (x) { x.close(); });
+            this.getRouter().navTo("stepParameters", {
+                "?query": {
+                    spaceId: d.spaceId || "",
+                    taskchain: d.taskchain || "",
+                    name: d.name || "",
+                    returnTo: "scheduleList"
+                }
+            });
         },
 
         onCloseStepParameters: function () {

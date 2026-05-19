@@ -124,6 +124,11 @@
           "pattern": "traffic-lights:?query:",
           "name": "trafficLights",
           "target": "trafficLights"
+        },
+        {
+          "pattern": "step-parameters:?query:",
+          "name": "stepParameters",
+          "target": "stepParameters"
         }
       ],
       "targets": {
@@ -132,7 +137,8 @@
         "scheduleDetail":  { "viewName": "ScheduleDetail",  "viewLevel": 2 },
         "onDemand":        { "viewName": "OnDemandPage",    "viewLevel": 2 },
         "customCalendar":  { "viewName": "CustomCalendarPage", "viewLevel": 2 },
-        "trafficLights":   { "viewName": "TrafficLightsPage",  "viewLevel": 2 }
+        "trafficLights":   { "viewName": "TrafficLightsPage",  "viewLevel": 2 },
+        "stepParameters":  { "viewName": "StepParametersPage", "viewLevel": 3 }
       }
     }
   }

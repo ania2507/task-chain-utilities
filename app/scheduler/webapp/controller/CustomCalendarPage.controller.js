@@ -49,6 +49,7 @@ sap.ui.define([
                 busy: false
             });
             this._loadCalendarEntries();
+            this._consumeStepParametersResult();
         },
 
         formatBusinessName: function (v) {
@@ -412,19 +413,43 @@ sap.ui.define([
         },
 
         onConfigureStepParameters: function () {
-            var oView = this.getView();
-            if (!this._pStepDialog) {
-                this._pStepDialog = Fragment.load({
-                    id: oView.getId(),
-                    name: "scheduler.view.fragments.StepParametersDialog",
-                    controller: this
-                }).then(function (oDialog) {
-                    oView.addDependent(oDialog);
-                    oDialog.setModel(this._editModel, "edit");
-                    return oDialog;
-                }.bind(this));
+            var d = this._editModel.getData();
+            this.getRouter().navTo("stepParameters", {
+                "?query": {
+                    spaceId: d.spaceId || "",
+                    taskchain: d.taskchain || "",
+                    name: d.name || d.taskchain || "",
+                    returnTo: "customCalendar"
+                }
+            });
+        },
+
+        _consumeStepParametersResult: function () {
+            var oComp = this.getOwnerComponent();
+            var s = oComp && oComp._stepParamsState;
+            if (!s || s.taskchain !== this._editModel.getProperty("/taskchain") || !s.parametersJson) return;
+            // Single-shot consume
+            oComp._stepParamsState = null;
+            if (this._calendarRowCtx) {
+                var oRow = this._calendarRowCtx.getObject();
+                try { this._editModel.setProperty(this._calendarRowCtx.getPath() + "/parameters", s.parametersJson); } catch (e) { /* ignore */ }
+                if (oRow && oRow.ID) {
+                    var oModel = this.getModel();
+                    var oList = oModel.bindList("/CalendarEntry", undefined, undefined, [
+                        new Filter("ID", FilterOperator.EQ, oRow.ID)
+                    ]);
+                    oList.requestContexts(0, 1).then(function (aCtx) {
+                        if (!aCtx.length) return;
+                        aCtx[0].setProperty("parameters", s.parametersJson);
+                        return oModel.submitBatch(oModel.getUpdateGroupId());
+                    }).catch(function (err) {
+                        console.warn("Could not persist step parameters:", err && err.message);
+                    });
+                }
+                this._calendarRowCtx = null;
+            } else {
+                this._editModel.setProperty("/parameters", s.parametersJson);
             }
-            this._pStepDialog.then(function (oDialog) { oDialog.open(); });
         },
 
         onCloseStepParameters: function () {

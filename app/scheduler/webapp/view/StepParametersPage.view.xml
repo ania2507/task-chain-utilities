@@ -1,0 +1,124 @@
+<mvc:View
+    controllerName="scheduler.controller.StepParametersPage"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:f="sap.f"
+    xmlns:l="sap.ui.layout">
+    <f:DynamicPage id="stepParametersPage" busy="{edit>/busy}" toggleHeaderOnTitleClick="true" showFooter="true">
+        <f:title>
+            <f:DynamicPageTitle>
+                <f:heading>
+                    <HBox alignItems="Center">
+                        <Button icon="sap-icon://nav-back" type="Transparent"
+                                tooltip="{i18n>common.back}" press=".onNavBack"
+                                class="sapUiSmallMarginEnd"/>
+                        <VBox>
+                            <Title text="Step Parameters — {edit>/taskchain}" wrapping="true"/>
+                            <Text text="Each execution can carry its own step parameters"/>
+                        </VBox>
+                    </HBox>
+                </f:heading>
+            </f:DynamicPageTitle>
+        </f:title>
+
+        <f:content>
+            <l:Splitter height="100%">
+                <!-- LEFT: chain steps list -->
+                <Panel headerText="Chain Steps (click to add params)"
+                       width="auto" class="sapUiSmallMargin"
+                       layoutData="{ &quot;Type&quot;: &quot;sap.ui.layout.SplitterLayoutData&quot;, &quot;size&quot;: &quot;360px&quot; }">
+                    <content>
+                        <List items="{edit>/steps}" mode="SingleSelectMaster"
+                              selectionChange=".onStepSelect"
+                              noDataText="No steps loaded">
+                            <ObjectListItem
+                                title="{edit>name}"
+                                intro="{edit>order}"
+                                selected="{edit>selected}"
+                                type="Active"
+                                press=".onStepPress">
+                                <attributes>
+                                    <ObjectAttribute text="{edit>objectId}" visible="{= !!${edit>objectId} &amp;&amp; ${edit>objectId} !== ${edit>name} }"/>
+                                    <ObjectAttribute text="{edit>description}" visible="{= !!${edit>description} }"/>
+                                    <ObjectAttribute text="{= ${edit>params}.length + ' params'}"/>
+                                    <ObjectAttribute text="{= ${edit>allowParams} ? 'Parameter allowed' : 'Parameter not allowed' }"/>
+                                </attributes>
+                            </ObjectListItem>
+                        </List>
+                        <Text text="Select a step to see / edit its params"
+                              class="sapUiSmallMargin"
+                              visible="{= !${edit>/selectedStepId} }"/>
+                    </content>
+                </Panel>
+
+                <!-- RIGHT: parameters of the selected step -->
+                <Panel headerText="{= 'Parameters for ' + (${edit>/selectedStepName} || '(no step selected)') }"
+                       width="auto" class="sapUiSmallMargin">
+                    <content>
+                        <VBox visible="{= !!${edit>/selectedStepId} }">
+                            <Title text="Configured parameters:" level="H5" class="sapUiSmallMarginBottom"/>
+                            <Table items="{edit>/selectedStepParams}" noDataText="No parameters yet">
+                                <columns>
+                                    <Column><Text text="Param Key"/></Column>
+                                    <Column><Text text="Param Value"/></Column>
+                                    <Column hAlign="Center" width="6rem"><Text text="Active"/></Column>
+                                    <Column hAlign="End" width="7rem"><Text text=""/></Column>
+                                </columns>
+                                <ColumnListItem>
+                                    <cells>
+                                        <Text text="{edit>key}"/>
+                                        <Text text="{edit>value}"/>
+                                        <core:Icon src="{= ${edit>active} ? 'sap-icon://accept' : 'sap-icon://decline' }"
+                                                   color="{= ${edit>active} ? '#2ecc71' : '#bdc3c7' }"/>
+                                        <HBox justifyContent="End">
+                                            <Button icon="sap-icon://edit" type="Transparent"
+                                                    press=".onEditParam"
+                                                    tooltip="Edit"/>
+                                            <Button icon="sap-icon://delete" type="Reject"
+                                                    press=".onDeleteParam"
+                                                    tooltip="Delete"/>
+                                        </HBox>
+                                    </cells>
+                                </ColumnListItem>
+                            </Table>
+
+                            <Panel headerText="Add New Parameter" class="sapUiSmallMarginTop"
+                                   expandable="true" expanded="true">
+                                <content>
+                                    <VBox class="sapUiSmallMargin">
+                                        <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                            <Label text="Param Key:" width="9rem"/>
+                                            <Input value="{edit>/newParam/key}" width="20rem"/>
+                                        </HBox>
+                                        <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                            <Label text="Param Value:" width="9rem"/>
+                                            <Input value="{edit>/newParam/value}" width="20rem"/>
+                                        </HBox>
+                                        <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                            <Label text="Active:" width="9rem"/>
+                                            <CheckBox selected="{edit>/newParam/active}"/>
+                                        </HBox>
+                                        <HBox class="sapUiSmallMarginTop">
+                                            <Button text="Confirm" type="Accept" icon="sap-icon://accept"
+                                                    press=".onAddParam" class="sapUiTinyMarginEnd"/>
+                                            <Button text="Cancel" press=".onResetNewParam"/>
+                                        </HBox>
+                                    </VBox>
+                                </content>
+                            </Panel>
+                        </VBox>
+                    </content>
+                </Panel>
+            </l:Splitter>
+        </f:content>
+
+        <f:footer>
+            <OverflowToolbar>
+                <ToolbarSpacer/>
+                <Button text="{i18n>common.cancel}" press=".onNavBack"/>
+                <Button text="{i18n>common.save}" type="Emphasized" press=".onSave"/>
+            </OverflowToolbar>
+        </f:footer>
+    </f:DynamicPage>
+</mvc:View>
