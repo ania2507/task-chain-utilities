@@ -115,111 +115,134 @@ sap.ui.define([
          */
         _generateDagSvgFromData: function(aNodes, aLinks) {
             if (!aNodes || aNodes.length === 0) {
-                return '<svg width="800" height="100"><text x="400" y="50" text-anchor="middle" fill="#666">No DAG data available</text></svg>';
+                return '<svg width="400" height="60"><text x="200" y="35" text-anchor="middle" fill="#6a6d70" font-size="13" font-family="Arial,sans-serif">No DAG data available</text></svg>';
             }
-            
-            // Calculate layout - organize nodes by levels (BFS from START)
+
+            // Layout constants — left-to-right
+            var NW = 165;   // node width
+            var NH = 58;    // node height
+            var H_GAP = 55; // horizontal gap between levels
+            var V_GAP = 20; // vertical gap between nodes in same level
+            var PAD_Y = 30;
+            var PAD_LEFT = 30;
+            var BEGIN_W = 52; // space reserved for Begin circle + gap
+
+            // Separate START node from regular nodes
+            var oStartNode = aNodes.find(function(n) { return n.type === "START"; });
+            var aRegular = aNodes.filter(function(n) { return n.type !== "START"; });
+
+            // BFS levels
             var oLevels = this._calculateDagLevels(aNodes, aLinks);
-            var iMaxLevel = Math.max.apply(null, Object.values(oLevels));
-            var aNodesPerLevel = [];
-            for (var i = 0; i <= iMaxLevel; i++) {
-                aNodesPerLevel[i] = aNodes.filter(function(n) { return oLevels[n.id] === i; });
+            if (oStartNode) {
+                aRegular.forEach(function(n) { oLevels[n.id] = oLevels[n.id] - 1; });
             }
-            
-            // SVG dimensions
-            var iNodeWidth = 140;
-            var iNodeHeight = 40;
-            var iLevelSpacing = 180;
-            var iNodeSpacing = 60;
-            var iPadding = 40;
-            
-            var iMaxNodesInLevel = Math.max.apply(null, aNodesPerLevel.map(function(l) { return l.length; }));
-            var iSvgWidth = (iMaxLevel + 1) * iLevelSpacing + iPadding * 2;
-            var iSvgHeight = Math.max(300, iMaxNodesInLevel * (iNodeHeight + iNodeSpacing) + iPadding * 2);
-            
-            var aSvgParts = [];
-            aSvgParts.push('<svg width="' + iSvgWidth + '" height="' + iSvgHeight + '" xmlns="http://www.w3.org/2000/svg">');
-            aSvgParts.push('<style>');
-            aSvgParts.push('.node-success { fill: #107e3e; }');
-            aSvgParts.push('.node-error { fill: #bb0000; }');
-            aSvgParts.push('.node-running { fill: #0854a0; }');
-            aSvgParts.push('.node-pending { fill: #6a6d70; }');
-            aSvgParts.push('.node-start { fill: #0854a0; }');
-            aSvgParts.push('.node-text { fill: white; font-size: 11px; font-family: "72", Arial, sans-serif; }');
-            aSvgParts.push('.edge { stroke: #6a6d70; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }');
-            aSvgParts.push('</style>');
-            aSvgParts.push('<defs>');
-            aSvgParts.push('<marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">');
-            aSvgParts.push('<polygon points="0 0, 10 3.5, 0 7" fill="#6a6d70"/>');
-            aSvgParts.push('</marker>');
-            aSvgParts.push('</defs>');
-            
-            // Calculate node positions
-            var oNodePositions = {};
-            for (var level = 0; level <= iMaxLevel; level++) {
-                var aLevelNodes = aNodesPerLevel[level];
-                var iLevelHeight = aLevelNodes.length * (iNodeHeight + iNodeSpacing) - iNodeSpacing;
-                var iStartY = (iSvgHeight - iLevelHeight) / 2;
-                
-                aLevelNodes.forEach(function(node, idx) {
-                    var x = iPadding + level * iLevelSpacing;
-                    var y = iStartY + idx * (iNodeHeight + iNodeSpacing);
-                    oNodePositions[node.id] = { x: x, y: y };
+
+            var iMaxLevel = aRegular.length > 0
+                ? Math.max.apply(null, aRegular.map(function(n) { return oLevels[n.id] || 0; }))
+                : 0;
+
+            // Group by level
+            var aByLevel = [];
+            for (var i = 0; i <= iMaxLevel; i++) {
+                aByLevel[i] = aRegular.filter(function(n) { return (oLevels[n.id] || 0) === i; });
+            }
+
+            // Canvas size (left-to-right)
+            var iMaxRows = Math.max.apply(null, aByLevel.map(function(a) { return a.length; })) || 1;
+            var iSvgW = PAD_LEFT + BEGIN_W + (iMaxLevel + 1) * (NW + H_GAP) + PAD_LEFT;
+            var iSvgH = Math.max(NH + PAD_Y * 2, iMaxRows * NH + (iMaxRows - 1) * V_GAP + PAD_Y * 2);
+
+            // Node positions: level → X, position within level → Y (centered)
+            var oPos = {};
+            aByLevel.forEach(function(aLevel, iLvl) {
+                var iColH = aLevel.length * NH + (aLevel.length - 1) * V_GAP;
+                var iStartY = (iSvgH - iColH) / 2;
+                aLevel.forEach(function(n, iRow) {
+                    oPos[n.id] = {
+                        x: PAD_LEFT + BEGIN_W + iLvl * (NW + H_GAP),
+                        y: iStartY + iRow * (NH + V_GAP)
+                    };
+                });
+            });
+
+            var p = [];
+
+            p.push('<svg width="' + iSvgW + '" height="' + iSvgH + '" xmlns="http://www.w3.org/2000/svg">');
+            p.push('<style>');
+            p.push('.dn-title{font:bold 11px "72",Arial,sans-serif;fill:#1d2d3e}');
+            p.push('.dn-sub{font:10px "72",Arial,sans-serif;fill:#6a6d70}');
+            p.push('.dn-begin{font:11px "72",Arial,sans-serif;fill:#1d2d3e;text-anchor:middle}');
+            p.push('</style>');
+            p.push('<defs>');
+            p.push('<marker id="arr" markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto">');
+            p.push('<polygon points="0,0 7,3.5 0,7" fill="#1473e6"/>');
+            p.push('</marker>');
+            p.push('</defs>');
+
+            // BEGIN circle (vertically centered, on the left)
+            var iBR = 16;
+            var iBX = PAD_LEFT + iBR;
+            var iBY = iSvgH / 2;
+            p.push('<circle cx="' + iBX + '" cy="' + iBY + '" r="' + iBR + '" fill="white" stroke="#1473e6" stroke-width="1.5"/>');
+            p.push('<polygon points="' + (iBX - 5) + ',' + (iBY - 7) + ' ' + (iBX - 5) + ',' + (iBY + 7) + ' ' + (iBX + 8) + ',' + iBY + '" fill="#1473e6"/>');
+            p.push('<text x="' + iBX + '" y="' + (iBY + iBR + 13) + '" class="dn-begin">Begin</text>');
+
+            // Edges from BEGIN to level-0 nodes
+            if (aByLevel[0]) {
+                aByLevel[0].forEach(function(n) {
+                    var op = oPos[n.id];
+                    var x1 = iBX + iBR, y1 = iBY;
+                    var x2 = op.x,      y2 = op.y + NH / 2;
+                    var mX = (x1 + x2) / 2;
+                    p.push('<path d="M' + x1 + ',' + y1 + ' L' + mX + ',' + y1 + ' L' + mX + ',' + y2 + ' L' + (x2 - 5) + ',' + y2 + '" stroke="#1473e6" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>');
                 });
             }
-            
-            // Draw edges first (so they're behind nodes)
-            aLinks.forEach(function(link) {
-                var fromPos = oNodePositions[link.from];
-                var toPos = oNodePositions[link.to];
-                if (fromPos && toPos) {
-                    var x1 = fromPos.x + iNodeWidth;
-                    var y1 = fromPos.y + iNodeHeight / 2;
-                    var x2 = toPos.x;
-                    var y2 = toPos.y + iNodeHeight / 2;
-                    
-                    // Draw curved path
-                    var midX = (x1 + x2) / 2;
-                    aSvgParts.push('<path class="edge" d="M ' + x1 + ' ' + y1 + ' C ' + midX + ' ' + y1 + ', ' + midX + ' ' + y2 + ', ' + x2 + ' ' + y2 + '"/>');
-                }
+
+            // Edges between regular nodes
+            aLinks.forEach(function(lnk) {
+                var fp = oPos[lnk.from], tp = oPos[lnk.to];
+                if (!fp || !tp) return;
+                var x1 = fp.x + NW,       y1 = fp.y + NH / 2;
+                var x2 = tp.x,             y2 = tp.y + NH / 2;
+                var mX = (x1 + x2) / 2;
+                p.push('<path d="M' + x1 + ',' + y1 + ' L' + mX + ',' + y1 + ' L' + mX + ',' + y2 + ' L' + (x2 - 5) + ',' + y2 + '" stroke="#1473e6" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>');
             });
-            
-            // Draw nodes
-            aNodes.forEach(function(node) {
-                var pos = oNodePositions[node.id];
-                if (!pos) return;
-                
-                var sClass = "node-pending";
-                if (node.type === "START") {
-                    sClass = "node-start";
-                } else if (node.status === "success") {
-                    sClass = "node-success";
-                } else if (node.status === "error") {
-                    sClass = "node-error";
-                } else if (node.status === "running") {
-                    sClass = "node-running";
+
+            // Node cards
+            var that = this;
+            aRegular.forEach(function(n) {
+                var op = oPos[n.id];
+                if (!op) return;
+                var x = op.x, y = op.y;
+
+                // Border colour by status
+                var sBorder = n.status === "error" ? "#bb0000" : n.status === "running" ? "#e9730c" : "#1473e6";
+
+                // Card background + border (uniform 1.5px all around)
+                p.push('<rect x="' + x + '" y="' + y + '" width="' + NW + '" height="' + NH + '" rx="4" fill="white" stroke="' + sBorder + '" stroke-width="1.5"/>');
+
+                // Title (truncated)
+                var sType = n.taskType || n.type || "";
+                var sName = n.objectId || n.name || ("Node " + n.id);
+                if (sName.length > 20) { sName = sName.substring(0, 19) + "..."; }
+                p.push('<text x="' + (x + 12) + '" y="' + (y + 22) + '" class="dn-title">' + that._escapeXml(sName) + '</text>');
+
+                // Subtitle
+                var sSub = sType.length > 22 ? sType.substring(0, 21) + "..." : sType;
+                if (sSub) {
+                    p.push('<text x="' + (x + 12) + '" y="' + (y + 38) + '" class="dn-sub">' + that._escapeXml(sSub) + '</text>');
                 }
-                
-                // Node rectangle
-                aSvgParts.push('<rect class="' + sClass + '" x="' + pos.x + '" y="' + pos.y + '" width="' + iNodeWidth + '" height="' + iNodeHeight + '" rx="5"/>');
-                
-                // Node label
-                var sLabel = node.type === "START" ? "START" : (node.objectId || "Task " + node.id);
-                if (sLabel.length > 18) {
-                    sLabel = sLabel.substring(0, 16) + "...";
-                }
-                aSvgParts.push('<text class="node-text" x="' + (pos.x + iNodeWidth / 2) + '" y="' + (pos.y + iNodeHeight / 2 + 4) + '" text-anchor="middle">' + sLabel + '</text>');
-                
-                // Status icon (small circle)
-                if (node.type !== "START") {
-                    var sIconColor = node.status === "success" ? "#fff" : node.status === "error" ? "#fff" : "#ccc";
-                    var sIcon = node.status === "success" ? "✓" : node.status === "error" ? "✗" : "○";
-                    aSvgParts.push('<text x="' + (pos.x + 10) + '" y="' + (pos.y + iNodeHeight / 2 + 4) + '" fill="' + sIconColor + '" font-size="12">' + sIcon + '</text>');
-                }
+
+
             });
-            
-            aSvgParts.push('</svg>');
-            return aSvgParts.join('');
+
+            p.push('</svg>');
+            return p.join('');
+        },
+
+        _escapeXml: function(s) {
+            if (!s) return '';
+            return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
         },
         
         /**

@@ -560,22 +560,32 @@ sap.ui.define([
          * Filter chains based on search input
          */
         onChainSearchChange: function (oEvent) {
-            // Use setTimeout to ensure model is updated from binding
-            setTimeout(function() {
-                var sSpaceFilter = (this._oAvailableChainsModel.getProperty("/searchSpace") || "").toLowerCase().trim();
-                var sChainFilter = (this._oAvailableChainsModel.getProperty("/searchChain") || "").toLowerCase().trim();
-                var aAllChains = this._oAvailableChainsModel.getProperty("/chains") || [];
-                
-                var aFiltered = aAllChains.filter(function(chain) {
-                    var bSpaceMatch = !sSpaceFilter || (chain.spaceId || "").toLowerCase().indexOf(sSpaceFilter) >= 0;
-                    var bChainMatch = !sChainFilter || 
-                        (chain.name || "").toLowerCase().indexOf(sChainFilter) >= 0 ||
-                        (chain.businessName || "").toLowerCase().indexOf(sChainFilter) >= 0;
-                    return bSpaceMatch && bChainMatch;
-                });
-                
-                this._oAvailableChainsModel.setProperty("/chainsFiltered", aFiltered);
-            }.bind(this), 0);
+            var sNewValue = oEvent.getParameter("newValue") || "";
+            var oSource = oEvent.getSource();
+            var oSpaceInput = this.byId("searchSpaceInput");
+            var oChainInput = this.byId("searchChainInput");
+
+            var sSpaceFilter = (oSpaceInput === oSource ? sNewValue : (oSpaceInput ? oSpaceInput.getValue() : "")).toLowerCase().trim();
+            var sChainFilter = (oChainInput === oSource ? sNewValue : (oChainInput ? oChainInput.getValue() : "")).toLowerCase().trim();
+
+            // Keep model in sync
+            this._oAvailableChainsModel.setProperty("/searchSpace", oSpaceInput ? oSpaceInput.getValue() : "");
+            this._oAvailableChainsModel.setProperty("/searchChain", oChainInput ? oChainInput.getValue() : "");
+
+            var aAllChains = this._oAvailableChainsModel.getProperty("/chains") || [];
+
+            var aFiltered = aAllChains.filter(function(chain) {
+                // Space filter: matches spaceId and technical name (gray row)
+                var bSpaceMatch = !sSpaceFilter ||
+                    (chain.spaceId || "").toLowerCase().indexOf(sSpaceFilter) >= 0 ||
+                    (chain.name || "").toLowerCase().indexOf(sSpaceFilter) >= 0;
+                // Chain filter: matches only the business name (bold title)
+                var bChainMatch = !sChainFilter ||
+                    (chain.businessName || "").toLowerCase().indexOf(sChainFilter) >= 0;
+                return bSpaceMatch && bChainMatch;
+            });
+
+            this._oAvailableChainsModel.setProperty("/chainsFiltered", aFiltered);
         },
 
         /**
