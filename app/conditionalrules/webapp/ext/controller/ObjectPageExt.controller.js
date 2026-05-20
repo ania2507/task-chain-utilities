@@ -254,8 +254,13 @@ sap.ui.define([
 
             return fetch(sUrl, oOptions)
                 .then(function(response) {
+                    var sContentType = response.headers.get("content-type") || "";
+                    if (!response.ok && !sContentType.includes("application/json")) {
+                        return response.text().then(function(sText) {
+                            throw new Error("HTTP " + response.status + ": " + sText.substring(0, 200));
+                        });
+                    }
                     return response.json().then(function(data) {
-                        // Return data along with response status
                         data._httpStatus = response.status;
                         data._httpOk = response.ok;
                         return data;

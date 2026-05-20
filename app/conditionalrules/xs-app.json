@@ -12,7 +12,7 @@
     {
       "source": "^/v1/(.*)$",
       "target": "/v1/$1",
-      "destination": "task-chain-utilities-py-srv",
+      "destination": "py-srv-api",
       "authenticationType": "xsuaa",
       "csrfProtection": false
     },
