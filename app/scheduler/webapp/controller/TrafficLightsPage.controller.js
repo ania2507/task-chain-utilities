@@ -49,6 +49,21 @@ sap.ui.define([
             }));
             this._previewModel.setProperty("/next", []);
             this._consumeStepParametersResult();
+            if (oQuery.scheduleID) {
+                this._loadSchedule(oQuery.scheduleID);
+            }
+        },
+
+        _loadSchedule: function (sId) {
+            var oModel = this.getModel();
+            if (!oModel) return;
+            var oBind = oModel.bindContext("/Schedule('" + sId + "')");
+            oBind.requestObject().then(function (obj) {
+                if (!obj) return;
+                this._editModel.setData(Object.assign({}, DEFAULTS, obj));
+            }.bind(this)).catch(function (err) {
+                this.error("Could not load schedule: " + (err && err.message || err));
+            }.bind(this));
         },
 
         formatBusinessName: function (v) {
@@ -124,7 +139,6 @@ sap.ui.define([
                 return;
             }
             var oModel = this.getModel();
-            var oList = oModel.bindList("/Schedule");
 
             var payload = {
                 name: d.name, description: d.description,
@@ -136,10 +150,23 @@ sap.ui.define([
 
             this._editModel.setProperty("/busy", true);
             var that = this;
-            var oCtxNew = oList.create(payload);
-            oCtxNew.created().then(function () {
+            var pSaved;
+            if (d.ID) {
+                // UPDATE existing schedule
+                var oCtxBind = oModel.bindContext("/Schedule('" + d.ID + "')");
+                pSaved = oCtxBind.requestObject().then(function () {
+                    var oCtx = oCtxBind.getBoundContext();
+                    Object.keys(payload).forEach(function (k) { oCtx.setProperty(k, payload[k]); });
+                    return oModel.submitBatch(oModel.getUpdateGroupId());
+                });
+            } else {
+                var oList = oModel.bindList("/Schedule");
+                var oCtxNew = oList.create(payload);
+                pSaved = oCtxNew.created();
+            }
+            pSaved.then(function () {
                 that._editModel.setProperty("/busy", false);
-                that.toast(that.i18n("msg.created", [d.name]));
+                that.toast(that.i18n(d.ID ? "msg.updated" : "msg.created", [d.name]));
                 that.onNavBack();
             }).catch(function (err) {
                 that._editModel.setProperty("/busy", false);

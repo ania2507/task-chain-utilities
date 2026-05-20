@@ -96,12 +96,13 @@
                                         text="{i18n>common.schedule}"
                                         press=".onScheduleTaskchain"
                                         tooltip="{i18n>tip.createSchedule}"
-                                        visible="{= !${page>hasSchedule} }"/>
-                                <Button icon="sap-icon://edit"
-                                        text="{i18n>common.edit}"
-                                        press=".onEditSchedule"
-                                        tooltip="{i18n>tip.editSchedule}"
-                                        visible="{= ${page>hasSchedule} }"/>
+                                        visible="{= !${page>hasEntries} }"/>
+                                <Button icon="sap-icon://overflow"
+                                        type="Emphasized"
+                                        text="{= ${page>entriesCount} + ' ' + ${i18n>col.schedule} }"
+                                        press=".onShowSchedules"
+                                        tooltip="{i18n>common.viewSchedules}"
+                                        visible="{= !!${page>hasEntries} }"/>
                                 <Button icon="sap-icon://decline"
                                         type="Transparent"
                                         tooltip="{i18n>common.remove}"

@@ -1,0 +1,52 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core">
+    <ResponsivePopover
+        id="schedulesPopover"
+        title="{popover>/title}"
+        placement="Auto"
+        contentWidth="22rem">
+        <content>
+            <List items="{popover>/entries}"
+                  noDataText="No schedules"
+                  showSeparators="Inner">
+                <CustomListItem>
+                    <HBox class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTopBottom"
+                          alignItems="Center" justifyContent="SpaceBetween">
+                        <VBox>
+                            <ObjectStatus
+                                text="{popover>label}"
+                                state="{popover>state}"
+                                icon="{popover>icon}"/>
+                            <Text text="{popover>description}" class="sapUiTinyMarginTop"/>
+                            <Text text="{ path: 'popover>nextRunAt', formatter: '.formatDate' }"
+                                  class="sapUiTinyText"/>
+                        </VBox>
+                        <HBox alignItems="Center">
+                            <Button icon="sap-icon://edit"
+                                    type="Transparent"
+                                    tooltip="{i18n>common.edit}"
+                                    press=".onEditEntry"
+                                    visible="{popover>canEdit}"/>
+                            <Button icon="sap-icon://decline"
+                                    type="Transparent"
+                                    tooltip="{i18n>common.delete}"
+                                    press=".onDeleteEntry"
+                                    visible="{popover>canDelete}"/>
+                        </HBox>
+                    </HBox>
+                </CustomListItem>
+            </List>
+        </content>
+        <footer>
+            <OverflowToolbar>
+                <Button icon="sap-icon://add"
+                        text="{i18n>common.schedule}"
+                        type="Emphasized"
+                        press=".onAddScheduleFromPopover"/>
+                <ToolbarSpacer/>
+                <Button text="{i18n>common.close}" press=".onCloseSchedulesPopover"/>
+            </OverflowToolbar>
+        </footer>
+    </ResponsivePopover>
+</core:FragmentDefinition>

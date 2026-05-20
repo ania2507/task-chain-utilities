@@ -97,18 +97,52 @@ sap.ui.define([
                 return map;
             }.bind(this)).catch(function () { return {}; });
 
+            // Custom Calendar entries (HDI) - keep FULL list per row so the
+            // popover can show every persisted date.
+            var oCalList = oModel.bindList("/CalendarEntry", undefined, undefined, undefined, {
+                $select: "ID,spaceId,taskchain,runDate,runTime,timezone,active,source"
+            });
+            var pCal = oCalList.requestContexts(0, 1000).then(function (aCtx) {
+                var map = {};
+                var now = new Date();
+                aCtx.forEach(function (c) {
+                    var o = c.getObject();
+                    if (!o.taskchain || o.active === false) return;
+                    var iso = (o.runDate || "") + "T" + (o.runTime || "00:00") + ":00";
+                    var dt = new Date(iso);
+                    if (isNaN(dt.getTime()) || dt < now) return;
+                    var k = this._rowKey(o.spaceId, o.taskchain);
+                    (map[k] = map[k] || []).push({
+                        ID: o.ID,
+                        spaceId: o.spaceId,
+                        taskchain: o.taskchain,
+                        runDate: o.runDate,
+                        runTime: o.runTime,
+                        nextRunAt: dt.toISOString(),
+                        timezone: o.timezone,
+                        source: o.source || "calendar",
+                        _dt: dt
+                    });
+                }.bind(this));
+                // Sort each list earliest-first
+                Object.keys(map).forEach(function (k) { map[k].sort(function (a, b) { return a._dt - b._dt; }); });
+                return map;
+            }.bind(this)).catch(function () { return {}; });
+
             var pDsp = this.callScheduler.bind(this) ?
                 this._fetchDspSchedules().catch(function () { return {}; }) :
                 Promise.resolve({});
 
-            return Promise.all([pApp, pDsp]).then(function (results) {
+            return Promise.all([pApp, pDsp, pCal]).then(function (results) {
                 var appMap = results[0] || {};
                 var dspMap = results[1] || {};
+                var calMap = results[2] || {};
 
                 rows.forEach(function (r) {
                     var k = this._rowKey(r.spaceId, r.name);
                     var s = appMap[k];
                     var d = dspMap[k];
+                    var cList = calMap[k] || [];
 
                     // Reset
                     r.hasSchedule = false;
@@ -126,32 +160,84 @@ sap.ui.define([
                     r.typeIcon = null;
                     r.source = null;
 
+                    // Build full entries list (one item per persisted schedule).
+                    var entries = [];
                     if (s) {
-                        r.hasSchedule = true;
+                        entries.push({
+                            kind: "app",
+                            scheduleID: s.ID,
+                            label: "App schedule",
+                            description: this._formatCronHuman(s.cronExpression, s.timezone) || s.cronExpression,
+                            icon: "sap-icon://play",
+                            state: s.isActive ? "Success" : "None",
+                            nextRunAt: s.nextRunAt,
+                            isActive: !!s.isActive,
+                            timezone: s.timezone,
+                            spaceId: s.spaceId,
+                            taskchain: s.taskchain,
+                            canEdit: true,
+                            canDelete: true
+                        });
+                    }
+                    cList.forEach(function (c) {
+                        var isOnDemand = c.source === "onDemand";
+                        entries.push({
+                            kind: c.source || "calendar",
+                            calendarEntryID: c.ID,
+                            label: isOnDemand ? "On demand" : "Custom calendar",
+                            description: c.runDate + " " + (c.runTime || ""),
+                            icon: isOnDemand ? "sap-icon://time-entry-request" : "sap-icon://appointment-2",
+                            state: "Success",
+                            nextRunAt: c.nextRunAt,
+                            isActive: true,
+                            timezone: c.timezone,
+                            spaceId: c.spaceId,
+                            taskchain: c.taskchain,
+                            canEdit: true,
+                            canDelete: true
+                        });
+                    });
+                    if (d) {
+                        entries.push({
+                            kind: "dsp",
+                            label: "Standard DSP",
+                            description: this._formatCronHuman(d.cronExpression, d.timezone) || d.cronExpression,
+                            icon: "sap-icon://product",
+                            state: "Information",
+                            nextRunAt: d.nextRunAt,
+                            isActive: d.isActive !== false,
+                            timezone: d.timezone,
+                            spaceId: r.spaceId,
+                            taskchain: r.name,
+                            canEdit: false,
+                            canDelete: false
+                        });
+                    }
+                    // Sort: earliest next-run first; entries without nextRunAt last.
+                    entries.sort(function (a, b) {
+                        var ta = a.nextRunAt ? new Date(a.nextRunAt).getTime() : Infinity;
+                        var tb = b.nextRunAt ? new Date(b.nextRunAt).getTime() : Infinity;
+                        return ta - tb;
+                    });
+                    r.entries = entries;
+                    r.entriesCount = entries.length;
+                    r.hasEntries = entries.length > 0;
+
+                    // Summary fields come from the earliest entry.
+                    var top = entries[0];
+                    if (top) {
                         r.hasInfo = true;
-                        r.scheduleID = s.ID;
-                        r.scheduleName = s.name;
-                        r.cronExpression = s.cronExpression;
-                        r.timezone = s.timezone;
-                        r.isActive = !!s.isActive;
-                        r.nextRunAt = s.nextRunAt;
-                        r.scheduleText = this._formatCronHuman(s.cronExpression, s.timezone);
-                        r.typeLabel = "App schedule";
-                        r.typeState = s.isActive ? "Success" : "None";
-                        r.typeIcon  = "sap-icon://play";
-                        r.source = "app";
-                    } else if (d) {
-                        r.hasDspSchedule = true;
-                        r.hasInfo = true;
-                        r.cronExpression = d.cronExpression;
-                        r.timezone = d.timezone;
-                        r.isActive = d.isActive !== false; // null treated as active
-                        r.nextRunAt = d.nextRunAt;
-                        r.scheduleText = this._formatCronHuman(d.cronExpression, d.timezone);
-                        r.typeLabel = "Standard DSP";
-                        r.typeState = "Information";
-                        r.typeIcon  = "sap-icon://product";
-                        r.source = "dsp";
+                        r.hasSchedule = top.kind === "app";
+                        r.hasDspSchedule = top.kind === "dsp";
+                        r.scheduleID = (top.kind === "app") ? top.scheduleID : null;
+                        r.nextRunAt = top.nextRunAt;
+                        r.timezone = top.timezone;
+                        r.isActive = top.isActive;
+                        r.typeLabel = top.label;
+                        r.typeState = top.state;
+                        r.typeIcon = top.icon;
+                        r.source = top.kind;
+                        r.scheduleText = top.description;
                     }
                 }.bind(this));
 
@@ -452,6 +538,146 @@ sap.ui.define([
         onEditSchedule: function (oEvt) {
             var oCtx = oEvt.getSource().getBindingContext("page");
             this._openEditExistingSchedule(oCtx.getObject());
+        },
+
+        // ------------------------------------------------------------
+        // Schedules popover: shows every persisted schedule for a row
+        // (app cron, custom calendar, on-demand, DSP), with per-entry
+        // edit / delete buttons.
+        // ------------------------------------------------------------
+        _ensurePopoverModel: function () {
+            if (!this._popoverModel) {
+                this._popoverModel = new JSONModel({ title: "", row: null, entries: [] });
+            }
+            return this._popoverModel;
+        },
+
+        onShowSchedules: function (oEvt) {
+            var oBtn = oEvt.getSource();
+            var oCtx = oBtn.getBindingContext("page");
+            var row = oCtx.getObject();
+            var oModel = this._ensurePopoverModel();
+            oModel.setData({
+                title: row.businessName || row.name,
+                row: row,
+                entries: (row.entries || []).slice()
+            });
+            var oView = this.getView();
+            if (!this._pSchedulesPopover) {
+                this._pSchedulesPopover = Fragment.load({
+                    id: oView.getId(),
+                    name: "scheduler.view.fragments.SchedulesPopover",
+                    controller: this
+                }).then(function (oPop) {
+                    oView.addDependent(oPop);
+                    oPop.setModel(oModel, "popover");
+                    return oPop;
+                }).catch(function (e) {
+                    console.error("[Scheduler] SchedulesPopover load failed", e);
+                    MessageToast.show("Popover load failed: " + (e && e.message || e));
+                });
+            } else {
+                this._pSchedulesPopover.then(function (oPop) { oPop.setModel(oModel, "popover"); });
+            }
+            this._pSchedulesPopover.then(function (oPop) { oPop.openBy(oBtn); });
+        },
+
+        onCloseSchedulesPopover: function () {
+            if (this._pSchedulesPopover) {
+                this._pSchedulesPopover.then(function (p) { p.close(); });
+            }
+        },
+
+        onEditEntry: function (oEvt) {
+            var oEntryCtx = oEvt.getSource().getBindingContext("popover");
+            if (!oEntryCtx) return;
+            var e = oEntryCtx.getObject();
+            this.onCloseSchedulesPopover();
+            if (e.kind === "app" && e.scheduleID) {
+                this.getRouter().navTo("trafficLights", {
+                    "?query": {
+                        spaceId: e.spaceId || "",
+                        taskchain: e.taskchain || "",
+                        name: e.taskchain || "",
+                        scheduleID: e.scheduleID
+                    }
+                });
+                return;
+            }
+            if (e.kind === "calendar") {
+                this.getRouter().navTo("customCalendar", {
+                    "?query": {
+                        spaceId: e.spaceId || "",
+                        taskchain: e.taskchain || "",
+                        name: e.taskchain || "",
+                        entryId: e.calendarEntryID || ""
+                    }
+                });
+                return;
+            }
+            if (e.kind === "onDemand") {
+                this.getRouter().navTo("onDemand", {
+                    "?query": {
+                        spaceId: e.spaceId || "",
+                        taskchain: e.taskchain || "",
+                        name: e.taskchain || "",
+                        entryId: e.calendarEntryID || ""
+                    }
+                });
+                return;
+            }
+        },
+
+        onDeleteEntry: function (oEvt) {
+            var oEntryCtx = oEvt.getSource().getBindingContext("popover");
+            if (!oEntryCtx) return;
+            var e = oEntryCtx.getObject();
+            var that = this;
+            MessageBox.confirm("Delete this schedule?", {
+                onClose: function (sAction) {
+                    if (sAction !== MessageBox.Action.OK) return;
+                    that._deleteEntry(e).then(function () {
+                        that.onCloseSchedulesPopover();
+                        that._refreshSchedulesForRows();
+                    }).catch(function (err) {
+                        that.error(err && err.message || String(err));
+                    });
+                }
+            });
+        },
+
+        _deleteEntry: function (e) {
+            var oModel = this.getModel();
+            if (!oModel) return Promise.reject(new Error("No OData model"));
+            if (e.kind === "app" && e.scheduleID) {
+                var oCtxBind = oModel.bindContext("/Schedule(" + this._key(e.scheduleID) + ")");
+                return oCtxBind.requestObject().then(function () {
+                    return oCtxBind.getBoundContext().delete();
+                });
+            }
+            if ((e.kind === "calendar" || e.kind === "onDemand") && e.calendarEntryID) {
+                var oCalBind = oModel.bindContext("/CalendarEntry(" + this._key(e.calendarEntryID) + ")");
+                return oCalBind.requestObject().then(function () {
+                    return oCalBind.getBoundContext().delete();
+                });
+            }
+            return Promise.reject(new Error("This schedule cannot be deleted from the app."));
+        },
+
+        onAddScheduleFromPopover: function () {
+            var oModel = this._ensurePopoverModel();
+            var row = oModel.getProperty("/row");
+            this.onCloseSchedulesPopover();
+            if (!row) return;
+            this._pendingRow = row;
+            this._editModel.setData(Object.assign({}, EMPTY, {
+                name: row.businessName || row.name,
+                taskchain: row.name,
+                spaceId: row.spaceId || "",
+                targetType: "DSP",
+                chainLocked: true
+            }));
+            this._openKindDialog();
         },
 
         // ------------------------------------------------------------

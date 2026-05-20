@@ -540,7 +540,55 @@ def get_taskchain_dag():
             tc_data = dag_data["taskchains"].get(taskchain, {})
             raw_nodes = tc_data.get("nodes", [])
             raw_links = tc_data.get("links", [])
-            
+
+            # ----------------------------------------------------------
+            # Look up business names for the objects referenced by the
+            # nodes from the DSP deployment-metadata view. The label is
+            # stored either at the top level (`@EndUserText.label`, used
+            # by replication flows) or nested in `csn.<category>.<name>.
+            # @EndUserText.label` (used by transformation flows etc.).
+            # ----------------------------------------------------------
+            object_ids = sorted({
+                (n.get("taskIdentifier") or {}).get("objectId")
+                for n in raw_nodes
+                if (n.get("taskIdentifier") or {}).get("objectId")
+            })
+            business_name_map = {}
+            if object_ids:
+                try:
+                    placeholders = ",".join(["?"] * len(object_ids))
+                    meta_sql = (
+                        'SELECT "NAME", "JSON" FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" '
+                        f'WHERE "NAME" IN ({placeholders})'
+                    )
+                    meta_rows = db_query_executor.query(meta_sql, tuple(object_ids))
+                    for mr in meta_rows or []:
+                        nm = mr.get("NAME") or mr.get("name")
+                        raw_json = mr.get("JSON") or mr.get("json")
+                        if not nm or not raw_json:
+                            continue
+                        try:
+                            md = json.loads(raw_json)
+                        except Exception:
+                            continue
+                        # 1) Top-level @EndUserText.label
+                        lbl = md.get("@EndUserText.label") or md.get("label") or md.get("business_name")
+                        # 2) csn.<category>.<NAME>.@EndUserText.label
+                        if not lbl:
+                            csn = md.get("csn") if isinstance(md.get("csn"), dict) else None
+                            if csn:
+                                for cat_val in csn.values():
+                                    if isinstance(cat_val, dict):
+                                        obj = cat_val.get(nm)
+                                        if isinstance(obj, dict):
+                                            lbl = obj.get("@EndUserText.label") or obj.get("label")
+                                            if lbl:
+                                                break
+                        if lbl:
+                            business_name_map[nm] = lbl
+                except Exception as _e:  # metadata view may be missing — fall back silently
+                    business_name_map = {}
+
             for node in raw_nodes:
                 node_id = node.get("id")
                 node_type = node.get("type", "TASK")
@@ -549,9 +597,13 @@ def get_taskchain_dag():
                 # Get execution status for this node
                 exec_info = node_statuses.get(node_id, {})
 
+                obj_id = task_id.get("objectId") or exec_info.get("objectId")
+                business_name = business_name_map.get(obj_id) if obj_id else None
+
                 # Best-effort extraction of a human-readable label/description
                 label = (
-                    node.get("label")
+                    business_name
+                    or node.get("label")
                     or node.get("name")
                     or node.get("displayName")
                     or task_id.get("label")
@@ -567,10 +619,11 @@ def get_taskchain_dag():
                 nodes.append({
                     "id": node_id,
                     "type": node_type,
-                    "objectId": task_id.get("objectId") or exec_info.get("objectId"),
+                    "objectId": obj_id,
                     "applicationId": task_id.get("applicationId"),
                     "spaceId": task_id.get("spaceId"),
                     "label": label,
+                    "businessName": business_name,
                     "description": description,
                     "status": exec_info.get("status", "pending"),
                     "ignoreError": node.get("ignoreError", False),

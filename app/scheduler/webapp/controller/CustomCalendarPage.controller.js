@@ -264,7 +264,8 @@ sap.ui.define([
                     runTime: e.rawTime || (e.time || "").replace(/\s*CET.*$/i, ""),
                     timezone: e.timezone || "Europe/Rome",
                     active: !!e.active,
-                    parameters: e.parameters || ""
+                    parameters: e.parameters || "",
+                    source: "calendar"
                 });
                 return oCtx.created();
             });

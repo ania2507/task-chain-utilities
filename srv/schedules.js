@@ -40,7 +40,7 @@ function getAuthHeader(req) {
 }
 
 module.exports = function (srv) {
-    const { Schedule, ScheduleRun } = srv.entities;
+    const { Schedule, ScheduleRun, CalendarEntry } = srv.entities;
 
     // Resync after any persistence-affecting event
     async function notifySync(req) {
@@ -56,6 +56,12 @@ module.exports = function (srv) {
     }
 
     srv.after(['CREATE', 'UPDATE', 'DELETE'], Schedule, async (_data, req) => notifySync(req));
+
+    // CalendarEntry changes (Custom Calendar + On-Demand scheduled) also
+    // trigger a sync so py-srv reloads the one-shot date jobs from HDI.
+    if (CalendarEntry) {
+        srv.after(['CREATE', 'UPDATE', 'DELETE'], CalendarEntry, async (_data, req) => notifySync(req));
+    }
 
     // ----------------------------------------------------------------
     // Bound actions

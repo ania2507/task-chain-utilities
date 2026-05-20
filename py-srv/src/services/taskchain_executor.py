@@ -323,12 +323,23 @@ class TaskchainExecutor:
 
     @staticmethod
     def _dsp_run_task_chain(spaceid: str, taskchain_name: str) -> str:
-        """Launch a DSP task chain via REST API and return the logId."""
+        """Launch a DSP task chain via the directexecute endpoint and return the logId.
+
+        DSP's native scheduler uses applicationId=TASK_CHAINS, activity=RUN_CHAIN
+        on /dwaas-core/tf/directexecute. The REST path
+        /api/v1/tasks/spaces/{space}/chains/{name} returns 404 in this tenant.
+        """
         conn = TaskchainExecutor._get_dsp_connection()
-        url = f"{conn['base_url']}/api/v1/tasks/spaces/{spaceid}/chains/{taskchain_name}"
+        url = f"{conn['base_url']}/dwaas-core/tf/directexecute"
+        body = json.dumps({
+            "applicationId": "TASK_CHAINS",
+            "spaceId": spaceid,
+            "objectId": taskchain_name,
+            "activity": "RUN_CHAIN",
+        }).encode("utf-8")
         req = urllib.request.Request(
             url,
-            data=b"{}",
+            data=body,
             headers={
                 "Authorization": f"Bearer {conn['access_token']}",
                 "Content-Type": "application/json",
@@ -337,8 +348,20 @@ class TaskchainExecutor:
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        logid = data.get("logId")
+            raw = resp.read().decode("utf-8")
+        try:
+            data = json.loads(raw) if raw else {}
+        except Exception:
+            data = {"raw": raw}
+        # directexecute returns various shapes; try common keys for the log/run id
+        logid = (
+            data.get("logId")
+            or data.get("taskLogId")
+            or data.get("logID")
+            or data.get("id")
+            or (data.get("result") or {}).get("logId")
+            if isinstance(data, dict) else None
+        )
         if not logid:
             raise RuntimeError(f"DSP task chain launch did not return a logId. Response: {data}")
         return str(logid)

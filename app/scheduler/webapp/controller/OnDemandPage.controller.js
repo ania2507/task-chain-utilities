@@ -34,6 +34,7 @@ sap.ui.define([
                 name: oQuery.name || oQuery.taskchain || "",
                 spaceId: oQuery.spaceId || "",
                 taskchain: oQuery.taskchain || "",
+                entryId: oQuery.entryId || null,
                 onDemandModeIndex: 0,
                 onDemandDate: now.toISOString().slice(0, 10),
                 onDemandTime: ("0" + now.getHours()).slice(-2) + ":" + ("0" + now.getMinutes()).slice(-2),
@@ -41,6 +42,25 @@ sap.ui.define([
                 busy: false
             });
             this._consumeStepParametersResult();
+            if (oQuery.entryId) {
+                this._loadEntry(oQuery.entryId);
+            }
+        },
+
+        _loadEntry: function (sId) {
+            var oModel = this.getModel();
+            if (!oModel) return;
+            var oBind = oModel.bindContext("/CalendarEntry('" + sId + "')");
+            oBind.requestObject().then(function (obj) {
+                if (!obj) return;
+                this._editModel.setProperty("/entryId", obj.ID);
+                this._editModel.setProperty("/onDemandModeIndex", 1);
+                this._editModel.setProperty("/onDemandDate", obj.runDate || "");
+                this._editModel.setProperty("/onDemandTime", obj.runTime || "");
+                this._editModel.setProperty("/parameters", obj.parameters || "");
+            }.bind(this)).catch(function (err) {
+                this.error("Could not load schedule: " + (err && err.message || err));
+            }.bind(this));
         },
 
         formatBusinessName: function (v) {
@@ -135,10 +155,45 @@ sap.ui.define([
                     return;
                 }
                 payload.runAt = d.onDemandDate + "T" + d.onDemandTime + ":00";
-                this.callScheduler("/schedule-once", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
+
+                // Persist a CalendarEntry to HDI so the schedule survives restarts
+                // and shows up on the first page. If we are editing an existing
+                // entry (entryId), update it in place instead of creating a new one.
+                var oModel = this.getModel();
+                var pPersist = Promise.resolve();
+                if (oModel) {
+                    if (d.entryId) {
+                        var oCtxBind = oModel.bindContext("/CalendarEntry('" + d.entryId + "')");
+                        pPersist = oCtxBind.requestObject().then(function () {
+                            var oCtx = oCtxBind.getBoundContext();
+                            oCtx.setProperty("runDate", d.onDemandDate);
+                            oCtx.setProperty("runTime", d.onDemandTime);
+                            oCtx.setProperty("parameters", d.parameters && String(d.parameters).trim() ? d.parameters : "");
+                            oCtx.setProperty("active", true);
+                            return oModel.submitBatch(oModel.getUpdateGroupId());
+                        });
+                    } else {
+                        var oList = oModel.bindList("/CalendarEntry");
+                        var oCtxNew = oList.create({
+                            spaceId: d.spaceId,
+                            taskchain: d.taskchain,
+                            runDate: d.onDemandDate,
+                            runTime: d.onDemandTime,
+                            timezone: "Europe/Rome",
+                            active: true,
+                            parameters: d.parameters && String(d.parameters).trim() ? d.parameters : "",
+                            source: "onDemand"
+                        });
+                        pPersist = oCtxNew.created();
+                    }
+                }
+
+                pPersist.then(function () {
+                    return that.callScheduler("/schedule-once", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(payload)
+                    });
                 }).then(function () {
                     that._editModel.setProperty("/busy", false);
                     that.toast(that.i18n("msg.created", [d.name || d.taskchain]));

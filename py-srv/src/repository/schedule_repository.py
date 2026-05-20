@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 SCHEDULE_TBL = "CONDITIONAL_APP_SCHEDULES_SCHEDULE"
 RUN_TBL = "CONDITIONAL_APP_SCHEDULES_SCHEDULERUN"
+CALENDAR_TBL = "CONDITIONAL_APP_SCHEDULES_CALENDARENTRY"
 
 
 class ScheduleRepository:
@@ -180,6 +181,35 @@ class ScheduleRepository:
             conn.close()
         return run_id
 
+    # ------------------------------------------------------------------
+    # Custom calendar entries (one-shot future runs persisted in HDI)
+    # ------------------------------------------------------------------
+    def list_active_calendar_entries(self) -> List[Dict[str, Any]]:
+        """Return all active CalendarEntry rows whose runDate is today or later."""
+        if self._use_mem:
+            return []
+        sql = (
+            f"SELECT ID, SPACEID, TASKCHAIN, RUNDATE, RUNTIME, TIMEZONE, ACTIVE, PARAMETERS "
+            f"FROM {CALENDAR_TBL} "
+            f"WHERE ACTIVE = TRUE AND RUNDATE >= CURRENT_DATE"
+        )
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(sql)
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+            cur.close()
+            return [_row_to_calendar(r) for r in rows]
+        except Exception as e:
+            logger.warning("list_active_calendar_entries failed: %s", e)
+            return []
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
 
 def _row_to_schedule(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
@@ -193,4 +223,19 @@ def _row_to_schedule(row: Dict[str, Any]) -> Dict[str, Any]:
         "cronExpression": row.get("CRONEXPRESSION"),
         "timezone": row.get("TIMEZONE") or "Europe/Rome",
         "isActive": bool(row.get("ISACTIVE")),
+    }
+
+
+def _row_to_calendar(row: Dict[str, Any]) -> Dict[str, Any]:
+    rd = row.get("RUNDATE")
+    rt = row.get("RUNTIME") or ""
+    return {
+        "ID": row.get("ID"),
+        "spaceId": row.get("SPACEID"),
+        "taskchain": row.get("TASKCHAIN"),
+        "runDate": rd.isoformat() if hasattr(rd, "isoformat") else (str(rd) if rd else None),
+        "runTime": rt,
+        "timezone": row.get("TIMEZONE") or "Europe/Rome",
+        "active": bool(row.get("ACTIVE")),
+        "parameters": row.get("PARAMETERS"),
     }

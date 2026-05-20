@@ -67,4 +67,5 @@ entity CalendarEntry : cuid, managed {
   timezone    : String(50)   default 'Europe/Rome' @title: 'Timezone';
   active      : Boolean      default true @title: 'Active';
   parameters  : LargeString  @title: 'Parameters JSON';
+  source      : String(20)   default 'calendar' @title: 'Source'; // 'calendar' | 'onDemand'
 }

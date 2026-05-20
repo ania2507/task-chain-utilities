@@ -101,8 +101,72 @@ class SchedulerService:
                     logger.exception("Failed to register schedule %s", sch.get("ID"))
                     errors.append(f"{sch.get('ID')}: {e}")
 
-            logger.info("Scheduler sync complete: %d active schedules loaded", loaded)
-            return {"status": "ok", "loaded": loaded, "errors": errors}
+            # Also register persisted Custom Calendar / On-Demand entries
+            # (one-shot date triggers stored in HDI).
+            cal_loaded = 0
+            try:
+                cal_loaded = self._register_calendar_entries()
+            except Exception as e:
+                logger.exception("Failed to register calendar entries")
+                errors.append(f"calendar: {e}")
+
+            logger.info(
+                "Scheduler sync complete: %d cron schedules + %d calendar entries loaded",
+                loaded, cal_loaded,
+            )
+            return {"status": "ok", "loaded": loaded, "calendar_loaded": cal_loaded, "errors": errors}
+
+    def _register_calendar_entries(self) -> int:
+        """Register one-shot APScheduler jobs for active CalendarEntry rows."""
+        if not self._scheduler or not hasattr(self._repo, "list_active_calendar_entries"):
+            return 0
+        entries = self._repo.list_active_calendar_entries() or []
+        now = datetime.now(timezone.utc)
+        count = 0
+        for e in entries:
+            try:
+                space_id = e.get("spaceId")
+                taskchain = e.get("taskchain")
+                run_date = e.get("runDate")  # YYYY-MM-DD
+                run_time = e.get("runTime") or "00:00"  # HH:mm
+                tz = e.get("timezone") or "Europe/Rome"
+                if not (space_id and taskchain and run_date):
+                    continue
+                iso = f"{run_date}T{run_time}:00"
+                run_at = datetime.fromisoformat(iso)
+                if run_at.tzinfo is None and ZoneInfo:
+                    run_at = run_at.replace(tzinfo=ZoneInfo(tz))
+                if run_at <= now:
+                    continue
+                params = None
+                if e.get("parameters"):
+                    try:
+                        params = json.loads(e["parameters"])
+                    except Exception:
+                        params = None
+                job_id = f"cal::{e.get('ID') or (space_id + '::' + taskchain + '::' + iso)}"
+                sch = {
+                    "ID": job_id,
+                    "targetType": "DSP",
+                    "spaceId": space_id,
+                    "taskchain": taskchain,
+                    "parameters": json.dumps(params) if params else None,
+                }
+                if hasattr(self._repo, "_mem_schedules"):
+                    self._repo._mem_schedules[job_id] = sch
+                self._scheduler.add_job(
+                    self._fire,
+                    trigger="date",
+                    run_date=run_at,
+                    id=job_id,
+                    kwargs={"schedule_id": job_id, "manual": False, "schedule": sch},
+                    replace_existing=True,
+                    misfire_grace_time=300,
+                )
+                count += 1
+            except Exception:
+                logger.exception("Failed to register calendar entry %s", e.get("ID"))
+        return count
 
     def _register(self, schedule: Dict[str, Any]) -> None:
         if not self._scheduler:
