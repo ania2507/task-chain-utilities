@@ -40,10 +40,6 @@
         </content>
         <footer>
             <OverflowToolbar>
-                <Button icon="sap-icon://add"
-                        text="{i18n>common.schedule}"
-                        type="Emphasized"
-                        press=".onAddScheduleFromPopover"/>
                 <ToolbarSpacer/>
                 <Button text="{i18n>common.close}" press=".onCloseSchedulesPopover"/>
             </OverflowToolbar>

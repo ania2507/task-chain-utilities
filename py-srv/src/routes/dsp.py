@@ -484,8 +484,100 @@ def get_taskchain_dag():
             rows = db_query_executor.query(sql, (space_id, taskchain))
         
         if not rows:
-            return jsonify({"success": False, "error": "Task chain run not found"}), 404
-        
+            # Task chain has never run — build the DAG from deployment metadata
+            meta_rows = db_query_executor.query(
+                'SELECT "JSON" FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" '
+                'WHERE "NAME" = ? ORDER BY "DEPLOYED_AT" DESC LIMIT 1',
+                (taskchain,)
+            )
+            if not meta_rows:
+                return jsonify({"success": False, "error": "Task chain not found"}), 404
+
+            raw = (meta_rows[0].get("JSON") or meta_rows[0].get("json") or "")
+            try:
+                tc_meta = json.loads(raw) if raw else {}
+            except Exception:
+                tc_meta = {}
+
+            raw_nodes, raw_links = [], []
+            tc_section = (tc_meta.get("taskchains") or {}).get(taskchain)
+            if isinstance(tc_section, dict):
+                raw_nodes = tc_section.get("nodes") or []
+                raw_links = tc_section.get("links") or []
+
+            object_ids = sorted({
+                (n.get("taskIdentifier") or {}).get("objectId")
+                for n in raw_nodes
+                if (n.get("taskIdentifier") or {}).get("objectId")
+            })
+            business_name_map = {}
+            if object_ids:
+                try:
+                    ph = ",".join(["?"] * len(object_ids))
+                    bname_rows = db_query_executor.query(
+                        f'SELECT "NAME", "JSON" FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" WHERE "NAME" IN ({ph})',
+                        tuple(object_ids)
+                    )
+                    for mr in bname_rows or []:
+                        nm = mr.get("NAME") or mr.get("name")
+                        rj = mr.get("JSON") or mr.get("json")
+                        if not nm or not rj:
+                            continue
+                        try:
+                            md = json.loads(rj)
+                        except Exception:
+                            continue
+                        lbl = md.get("@EndUserText.label") or md.get("label") or md.get("business_name")
+                        if not lbl:
+                            csn = md.get("csn") if isinstance(md.get("csn"), dict) else None
+                            if csn:
+                                for cat_val in csn.values():
+                                    if isinstance(cat_val, dict):
+                                        obj = cat_val.get(nm)
+                                        if isinstance(obj, dict):
+                                            lbl = obj.get("@EndUserText.label") or obj.get("label")
+                                            if lbl:
+                                                break
+                        if lbl:
+                            business_name_map[nm] = lbl
+                except Exception:
+                    pass
+
+            nodes, links = [], []
+            for node in raw_nodes:
+                task_id = node.get("taskIdentifier") or {}
+                obj_id = task_id.get("objectId") or node.get("objectId")
+                business_name = business_name_map.get(obj_id) if obj_id else None
+                nodes.append({
+                    "id": node.get("id"),
+                    "type": node.get("type", "TASK"),
+                    "objectId": obj_id,
+                    "applicationId": task_id.get("applicationId"),
+                    "spaceId": task_id.get("spaceId"),
+                    "label": business_name or node.get("label") or node.get("name") or node.get("displayName") or task_id.get("label") or task_id.get("name"),
+                    "businessName": business_name,
+                    "description": node.get("description") or node.get("comment") or task_id.get("description"),
+                    "status": "pending",
+                    "ignoreError": node.get("ignoreError", False),
+                    "taskLogId": None
+                })
+            for link in raw_links:
+                links.append({
+                    "id": link.get("id"),
+                    "from": link.get("startNode", {}).get("nodeId"),
+                    "to": link.get("endNode", {}).get("nodeId"),
+                    "statusRequired": link.get("startNode", {}).get("statusRequired", "ANY")
+                })
+            return jsonify({
+                "success": True,
+                "chainTaskLogId": None,
+                "taskChainName": taskchain,
+                "spaceId": space_id,
+                "overallStatus": "never_run",
+                "nodes": nodes,
+                "links": links
+            }), 200
+
         row = rows[0]
         chain_task_log_id = row.get("chainTaskLogId")
         
@@ -801,6 +893,201 @@ def get_taskchain_schedules():
         "data": schedules,
         "rowCount": len(schedules),
     }), 200
+
+
+@bp.route("/taskchain-steps", methods=["GET"])
+@flask_access_validation(required_scope="read")
+def get_taskchain_steps():
+    """Return the distinct steps (objectId + businessName) for a task chain.
+
+    Reads the task chain deployment-manifest JSON from DEPL_METADATA.
+    The manifest embeds the node/task list and is available even before the
+    first execution.  Business names are enriched from DEPL_METADATA.
+
+    Query params:
+    - spaceId  (required)
+    - taskchain (required)
+    """
+    from flask import current_app
+    import json as _json
+
+    space_id  = request.args.get("spaceId")
+    taskchain = request.args.get("taskchain")
+
+    if not space_id or not taskchain:
+        return jsonify({"success": False, "error": "spaceId and taskchain are required"}), 400
+
+    try:
+        db_query_executor = current_app.extensions["taskchain"]["db_query_executor"]
+
+        # ------------------------------------------------------------------
+        # Helper: look up business names for a list of objectIds
+        # ------------------------------------------------------------------
+        def _build_business_name_map(object_ids):
+            bmap = {}
+            if not object_ids:
+                return bmap
+            try:
+                ph = ",".join(["?"] * len(object_ids))
+                rows = db_query_executor.query(
+                    f'SELECT "NAME", "JSON" FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" WHERE "NAME" IN ({ph})',
+                    tuple(object_ids)
+                )
+                for mr in (rows or []):
+                    nm  = mr.get("NAME") or mr.get("name")
+                    raw = mr.get("JSON") or mr.get("json")
+                    if not nm or not raw:
+                        continue
+                    try:
+                        md = _json.loads(raw)
+                    except Exception:
+                        continue
+                    lbl = (md.get("@EndUserText.label") or md.get("label")
+                           or md.get("business_name") or md.get("businessName"))
+                    if not lbl:
+                        csn = md.get("csn") if isinstance(md.get("csn"), dict) else None
+                        if csn:
+                            for cat_val in csn.values():
+                                if isinstance(cat_val, dict):
+                                    obj = cat_val.get(nm)
+                                    if isinstance(obj, dict):
+                                        lbl = obj.get("@EndUserText.label") or obj.get("label")
+                                        if lbl:
+                                            break
+                    if lbl:
+                        bmap[nm] = lbl
+            except Exception:
+                pass
+            return bmap
+
+        # ------------------------------------------------------------------
+        # Read step IDs and descriptions from the deployment manifest JSON.
+        # Query WITHOUT REPOSITORY_OBJECT_TYPE filter first so we find the
+        # entry regardless of how the type is stored in this environment.
+        # ------------------------------------------------------------------
+        tc_meta = db_query_executor.query(
+            'SELECT "JSON", "REPOSITORY_OBJECT_TYPE" '
+            'FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" '
+            'WHERE "NAME" = ? '
+            'ORDER BY "DEPLOYED_AT" DESC LIMIT 1',
+            (taskchain,)
+        )
+
+        debug_info = {
+            "metadataFound": bool(tc_meta),
+            "repoType": tc_meta[0].get("REPOSITORY_OBJECT_TYPE") if tc_meta else None,
+            "topLevelKeys": [],
+            "patternMatched": None,
+        }
+
+        if not tc_meta:
+            return jsonify({"success": True, "steps": [], "debug": debug_info}), 200
+
+        raw = tc_meta[0].get("JSON") or tc_meta[0].get("json") or ""
+        try:
+            tc_data = _json.loads(raw) if raw else {}
+        except Exception:
+            tc_data = {}
+
+        debug_info["topLevelKeys"] = list(tc_data.keys()) if isinstance(tc_data, dict) else []
+
+        # Walk every value recursively looking for a list of dicts that each
+        # contain an objectId-like key.  This handles any unknown nesting depth.
+        def _find_node_lists(obj, depth=0):
+            """Return all lists-of-dicts found in obj that look like step nodes."""
+            if depth > 6:
+                return []
+            results = []
+            if isinstance(obj, list):
+                if obj and all(isinstance(x, dict) for x in obj):
+                    # Check if any dict has an objectId-like key
+                    def _has_obj_id(d):
+                        return (d.get("objectId") or d.get("taskId")
+                                or (d.get("taskIdentifier") or {}).get("objectId"))
+                    if any(_has_obj_id(x) for x in obj):
+                        results.append(obj)
+                for item in obj:
+                    results.extend(_find_node_lists(item, depth + 1))
+            elif isinstance(obj, dict):
+                for v in obj.values():
+                    results.extend(_find_node_lists(v, depth + 1))
+            return results
+
+        # Priority: well-known paths first, then exhaustive scan
+        raw_nodes = []
+
+        # Pattern A: taskchains.<name>.nodes  (mirrors the runtime DAG format)
+        tc_section = (tc_data.get("taskchains") or {}).get(taskchain)
+        if isinstance(tc_section, dict):
+            raw_nodes = tc_section.get("nodes") or []
+            if raw_nodes: debug_info["patternMatched"] = "taskchains.<name>.nodes"
+
+        if not raw_nodes:
+            for key in ("nodes", "tasks", "steps"):
+                if tc_data.get(key):
+                    raw_nodes = tc_data[key]
+                    debug_info["patternMatched"] = f"top-level '{key}'"
+                    break
+
+        if not raw_nodes:
+            for key in ("definition", "taskchainDefinition", "taskchain", "chain"):
+                sub = tc_data.get(key)
+                if isinstance(sub, dict):
+                    for nkey in ("nodes", "tasks", "steps"):
+                        if sub.get(nkey):
+                            raw_nodes = sub[nkey]
+                            debug_info["patternMatched"] = f"{key}.{nkey}"
+                            break
+                if raw_nodes:
+                    break
+
+        # Exhaustive recursive scan as last resort
+        if not raw_nodes:
+            candidates = _find_node_lists(tc_data)
+            if candidates:
+                raw_nodes = candidates[0]
+                debug_info["patternMatched"] = "recursive-scan"
+
+        if not raw_nodes:
+            return jsonify({"success": True, "steps": [], "debug": debug_info}), 200
+
+        # Extract objectIds
+        object_ids_ordered = []
+        seen = set()
+        for node in raw_nodes:
+            if not isinstance(node, dict):
+                continue
+            task_id = node.get("taskIdentifier") or {}
+            obj_id = (
+                task_id.get("objectId")
+                or node.get("objectId")
+                or node.get("taskId")
+                or node.get("id")
+                or ""
+            )
+            if obj_id and obj_id not in seen:
+                seen.add(obj_id)
+                object_ids_ordered.append((obj_id, node))
+
+        if not object_ids_ordered:
+            return jsonify({"success": True, "steps": [], "debug": debug_info}), 200
+
+        bmap  = _build_business_name_map([o for o, _ in object_ids_ordered])
+        steps = []
+        for i, (obj_id, node) in enumerate(object_ids_ordered):
+            task_id = node.get("taskIdentifier") or {}
+            steps.append({
+                "id":            node.get("id") or obj_id,
+                "order":         i + 1,
+                "objectId":      obj_id,
+                "applicationId": task_id.get("applicationId") or node.get("applicationId") or "",
+                "businessName":  bmap.get(obj_id) or "",
+            })
+
+        return jsonify({"success": True, "steps": steps, "debug": debug_info}), 200
+
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @bp.route("/taskchain-runs", methods=["GET", "POST"])

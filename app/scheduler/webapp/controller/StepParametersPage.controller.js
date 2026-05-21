@@ -7,12 +7,6 @@ sap.ui.define([
 ], function (BaseController, JSONModel, MessageToast, MessageBox, History) {
     "use strict";
 
-    var DEFAULT_STEPS = [
-        { id: "s1", order: "Step 1", name: "Extract Data",   allowParams: true,  params: [] },
-        { id: "s2", order: "Step 2", name: "Transform Data", allowParams: false, params: [] },
-        { id: "s3", order: "Step 3", name: "Load Data",      allowParams: true,  params: [] },
-        { id: "s4", order: "Step 4", name: "Notify",         allowParams: false, params: [] }
-    ];
 
     function _newParam() {
         return { key: "", value: "", active: true };
@@ -70,24 +64,24 @@ sap.ui.define([
 
         _loadStepsFromDsp: function (sSpaceId, sTaskchain) {
             var that = this;
-            var fallback = function () {
-                that._editModel.setProperty("/steps",
-                    DEFAULT_STEPS.map(function (s) { return Object.assign({}, s, { params: s.params.slice() }); })
-                );
-            };
             if (!sSpaceId || !sTaskchain) {
-                fallback();
+                this._editModel.setProperty("/steps", []);
                 this._editModel.setProperty("/busy", false);
                 return;
             }
-            var sUrl = "v1/dsp/taskchain-dag?spaceId=" + encodeURIComponent(sSpaceId)
+
+            function parseJson(txt) {
+                try { return txt ? JSON.parse(txt) : {}; } catch (e) { return {}; }
+            }
+
+            // 1. Try the DAG endpoint (uses last run's structure + business names).
+            var sDagUrl = "v1/dsp/taskchain-dag?spaceId=" + encodeURIComponent(sSpaceId)
                 + "&taskchain=" + encodeURIComponent(sTaskchain);
-            fetch(sUrl, { headers: { "Content-Type": "application/json" } })
+
+            fetch(sDagUrl, { headers: { "Accept": "application/json" } })
                 .then(function (res) {
                     return res.text().then(function (txt) {
-                        var data;
-                        try { data = txt ? JSON.parse(txt) : {}; } catch (e) { data = {}; }
-                        return { ok: res.ok, data: data };
+                        return { ok: res.ok, data: parseJson(txt) };
                     });
                 })
                 .then(function (r) {
@@ -96,14 +90,15 @@ sap.ui.define([
                         aSteps = r.data.nodes
                             .filter(function (n) {
                                 var t = String(n.type || "TASK").toUpperCase();
-                                return t === "TASK" || t === "REPLICATION_FLOW" || t === "DATA_FLOW" || t === "VIEW_PERSISTENCE";
+                                return t === "TASK" || t === "REPLICATION_FLOW"
+                                    || t === "DATA_FLOW" || t === "VIEW_PERSISTENCE";
                             })
                             .map(function (n, i) {
-                                var sName = n.label || n.objectId || n.id || ("Step " + (i + 1));
                                 return {
                                     id: n.id || ("s" + (i + 1)),
                                     order: "Step " + (i + 1),
-                                    name: sName,
+                                    name: n.objectId || n.id || ("Step " + (i + 1)),
+                                    businessName: n.businessName || n.label || "",
                                     objectId: n.objectId || "",
                                     description: n.description || "",
                                     allowParams: true,
@@ -111,13 +106,42 @@ sap.ui.define([
                                 };
                             });
                     }
-                    if (!aSteps.length) {
-                        fallback();
-                    } else {
-                        that._editModel.setProperty("/steps", aSteps);
+                    if (aSteps.length) {
+                        return aSteps;
                     }
+                    // 2. Fallback: query distinct steps from execution logs.
+                    var sStepsUrl = "v1/dsp/taskchain-steps?spaceId=" + encodeURIComponent(sSpaceId)
+                        + "&taskchain=" + encodeURIComponent(sTaskchain);
+                    return fetch(sStepsUrl, { headers: { "Accept": "application/json" } })
+                        .then(function (res2) {
+                            return res2.text().then(function (txt2) {
+                                return { ok: res2.ok, data: parseJson(txt2) };
+                            });
+                        })
+                        .then(function (r2) {
+                            if (r2.ok && r2.data && r2.data.success && Array.isArray(r2.data.steps)) {
+                                return r2.data.steps.map(function (s) {
+                                    return {
+                                        id: s.id || s.objectId,
+                                        order: "Step " + s.order,
+                                        name: s.objectId || s.id,
+                                        businessName: s.businessName || "",
+                                        objectId: s.objectId || "",
+                                        description: "",
+                                        allowParams: true,
+                                        params: []
+                                    };
+                                });
+                            }
+                            return [];
+                        });
                 })
-                .catch(function () { fallback(); })
+                .then(function (aSteps) {
+                    that._editModel.setProperty("/steps", aSteps || []);
+                })
+                .catch(function () {
+                    that._editModel.setProperty("/steps", []);
+                })
                 .then(function () { that._editModel.setProperty("/busy", false); });
         },
 
@@ -154,8 +178,11 @@ sap.ui.define([
             var oCtx = oItem.getBindingContext("edit");
             if (!oCtx) return;
             var oStep = oCtx.getObject();
+            var sDisplayName = oStep.businessName
+                ? oStep.name + " — " + oStep.businessName
+                : oStep.name;
             this._editModel.setProperty("/selectedStepId", oStep.id);
-            this._editModel.setProperty("/selectedStepName", oStep.order + ": " + oStep.name);
+            this._editModel.setProperty("/selectedStepName", oStep.order + ": " + sDisplayName);
             this._editModel.setProperty("/selectedStepParams", oStep.params || []);
             this._editModel.setProperty("/newParam", _newParam());
         },

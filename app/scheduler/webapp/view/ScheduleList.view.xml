@@ -87,22 +87,18 @@
                                 visible="{= ${page>hasInfo} }"/>
 
                             <HBox justifyContent="End">
-                                <Button icon="sap-icon://media-play"
-                                        tooltip="{i18n>common.runNow}"
-                                        press=".onRunNow"
-                                        visible="{= ${page>hasSchedule} }"/>
                                 <Button icon="sap-icon://activity-items"
                                         type="Emphasized"
                                         text="{i18n>common.schedule}"
                                         press=".onScheduleTaskchain"
                                         tooltip="{i18n>tip.createSchedule}"
-                                        visible="{= !${page>hasEntries} }"/>
-                                <Button icon="sap-icon://overflow"
+                                        visible="{= !${page>hasEntries} &amp;&amp; !${page>/schedulesLoading} }"/>
+                                <Button icon="sap-icon://edit"
                                         type="Emphasized"
-                                        text="{= ${page>entriesCount} + ' ' + ${i18n>col.schedule} }"
-                                        press=".onShowSchedules"
-                                        tooltip="{i18n>common.viewSchedules}"
-                                        visible="{= !!${page>hasEntries} }"/>
+                                        text="{i18n>common.edit}"
+                                        press=".onDirectEditSchedule"
+                                        tooltip="{i18n>common.edit}"
+                                        visible="{= !!${page>hasEntries} &amp;&amp; !${page>hasDspSchedule} }"/>
                                 <Button icon="sap-icon://decline"
                                         type="Transparent"
                                         tooltip="{i18n>common.remove}"

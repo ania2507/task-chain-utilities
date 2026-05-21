@@ -1,10 +1,10 @@
 sap.ui.define([
     "scheduler/controller/BaseController",
     "sap/ui/model/json/JSONModel",
+    "sap/m/MessageBox",
     "sap/m/MessageToast",
-    "sap/ui/core/Fragment",
     "sap/ui/core/routing/History"
-], function (BaseController, JSONModel, MessageToast, Fragment, History) {
+], function (BaseController, JSONModel, MessageBox, MessageToast, History) {
     "use strict";
 
     var DEFAULTS = {
@@ -60,7 +60,11 @@ sap.ui.define([
             var oBind = oModel.bindContext("/Schedule('" + sId + "')");
             oBind.requestObject().then(function (obj) {
                 if (!obj) return;
-                this._editModel.setData(Object.assign({}, DEFAULTS, obj));
+                var tl = {};
+                if (obj.parameters) {
+                    try { tl = JSON.parse(obj.parameters); } catch (_) {}
+                }
+                this._editModel.setData(Object.assign({}, DEFAULTS, obj, tl));
             }.bind(this)).catch(function (err) {
                 this.error("Could not load schedule: " + (err && err.message || err));
             }.bind(this));
@@ -132,6 +136,27 @@ sap.ui.define([
                 .finally(function () { this._previewModel.setProperty("/busy", false); }.bind(this));
         },
 
+        onDelete: function () {
+            var d = this._editModel.getData();
+            if (!d.ID) return;
+            var that = this;
+            MessageBox.confirm("Delete this traffic lights schedule?", {
+                onClose: function (sAction) {
+                    if (sAction !== MessageBox.Action.OK) return;
+                    var oModel = that.getModel();
+                    if (!oModel) return;
+                    var oBind = oModel.bindContext("/Schedule('" + d.ID + "')");
+                    oBind.requestObject().then(function () {
+                        return oBind.getBoundContext().delete();
+                    }).then(function () {
+                        that.onNavBack();
+                    }).catch(function (err) {
+                        that.error(err && err.message || String(err));
+                    });
+                }
+            });
+        },
+
         onSave: function () {
             var d = this._editModel.getData();
             if (!d.name || !d.cronExpression || !d.targetType) {
@@ -140,12 +165,22 @@ sap.ui.define([
             }
             var oModel = this.getModel();
 
+            var tlSettings = {
+                scheduleKind: "TRAFFIC_LIGHTS",
+                currentState: d.currentState || "GREEN",
+                checkInterval: d.checkInterval || "15",
+                autoReset: !!d.autoReset,
+                autoResetState: d.autoResetState || "GREY",
+                timeout: d.timeout || "48"
+            };
             var payload = {
                 name: d.name, description: d.description,
                 targetType: d.targetType, spaceId: d.spaceId, taskchain: d.taskchain,
-                jobTemplate: d.jobTemplate, parameters: d.parameters,
+                jobTemplate: d.jobTemplate,
+                parameters: JSON.stringify(tlSettings),
                 cronExpression: d.cronExpression, timezone: d.timezone,
-                isActive: !!d.isActive
+                isActive: !!d.isActive,
+                scheduleKind: "TRAFFIC_LIGHTS"
             };
 
             this._editModel.setProperty("/busy", true);

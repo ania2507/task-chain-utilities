@@ -49,10 +49,8 @@
                             <HBox alignItems="Center" class="sapUiTinyMarginBottom">
                                 <Label text="Current State" width="10rem"/>
                                 <Select selectedKey="{edit>/currentState}">
-                                    <core:Item key="GREEN"  text="🟢 GREEN — ready to run"/>
-                                    <core:Item key="YELLOW" text="🟡 YELLOW — running"/>
-                                    <core:Item key="RED"    text="🔴 RED — disabled"/>
-                                    <core:Item key="GREY"   text="⚪ GREY — on hold"/>
+                                    <core:Item key="GREEN" text="🟢 GREEN — ready to run"/>
+                                    <core:Item key="RED"   text="🔴 RED — disabled"/>
                                 </Select>
                             </HBox>
 
@@ -112,6 +110,10 @@
 
         <f:footer>
             <OverflowToolbar>
+                <Button text="{i18n>common.delete}" icon="sap-icon://delete"
+                        type="Reject"
+                        press=".onDelete"
+                        visible="{= !!${edit>/ID} }"/>
                 <ToolbarSpacer/>
                 <Button text="{i18n>common.cancel}" press=".onNavBack"/>
                 <Button text="{i18n>common.save}" type="Emphasized" press=".onSave"/>

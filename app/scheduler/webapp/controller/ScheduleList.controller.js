@@ -35,13 +35,14 @@ sap.ui.define([
             this._previewModel = new JSONModel({ next: [], busy: false });
 
             // Page model: rows = task chains the user has added to the list
-            this._pageModel = new JSONModel({ rows: [] });
+            this._pageModel = new JSONModel({ rows: [], schedulesLoading: false });
             this.getView().setModel(this._pageModel, "page");
 
             this.getRouter().getRoute("scheduleList").attachPatternMatched(this._onListMatched, this);
         },
 
         _onListMatched: function () {
+            this._pageModel.setProperty("/schedulesLoading", true);
             this._loadAdded().then(function () {
                 this._refreshSchedulesForRows();
             }.bind(this));
@@ -166,7 +167,7 @@ sap.ui.define([
                         entries.push({
                             kind: "app",
                             scheduleID: s.ID,
-                            label: "App schedule",
+                            label: "Traffic Lights",
                             description: this._formatCronHuman(s.cronExpression, s.timezone) || s.cronExpression,
                             icon: "sap-icon://play",
                             state: s.isActive ? "Success" : "None",
@@ -222,13 +223,14 @@ sap.ui.define([
                     r.entries = entries;
                     r.entriesCount = entries.length;
                     r.hasEntries = entries.length > 0;
+                    // True if ANY entry comes from DSP (not just the top one)
+                    r.hasDspSchedule = entries.some(function (e) { return e.kind === "dsp"; });
 
-                    // Summary fields come from the earliest entry.
+                    // Summary always shows the earliest (next) upcoming entry.
                     var top = entries[0];
                     if (top) {
                         r.hasInfo = true;
                         r.hasSchedule = top.kind === "app";
-                        r.hasDspSchedule = top.kind === "dsp";
                         r.scheduleID = (top.kind === "app") ? top.scheduleID : null;
                         r.nextRunAt = top.nextRunAt;
                         r.timezone = top.timezone;
@@ -242,9 +244,11 @@ sap.ui.define([
                 }.bind(this));
 
                 this._pageModel.setProperty("/rows", rows.slice());
+                this._pageModel.setProperty("/schedulesLoading", false);
             }.bind(this)).catch(function (err) {
                 console.warn("Could not load schedules:", err && err.message);
-            });
+                this._pageModel.setProperty("/schedulesLoading", false);
+            }.bind(this));
         },
 
         _fetchDspSchedules: function () {
@@ -324,6 +328,7 @@ sap.ui.define([
         },
 
         onRefresh: function () {
+            this._pageModel.setProperty("/schedulesLoading", true);
             this._refreshSchedulesForRows();
         },
 
@@ -363,20 +368,48 @@ sap.ui.define([
                     return oDialog;
                 });
             }
-            this._pPicker.then(function (oDialog) { oDialog.open(); });
+            this._pPicker.then(function (oDialog) {
+                // Build and cache exclusion filters so onPickerSearch can
+                // always combine them with the user's search term.
+                var rows = this._pageModel.getProperty("/rows") || [];
+                this._pickerExcludeFilters = rows.map(function (r) {
+                    return new Filter("name", FilterOperator.NE, r.name);
+                });
+                this._applyPickerFilters(oDialog, "");
+                oDialog.open();
+            }.bind(this));
+        },
+
+        // Build the combined filter (exclusion + optional search) and apply it.
+        // In OData v4, passing a flat array to filter() ANDs all entries together.
+        _applyPickerFilters: function (oDialog, sSearch) {
+            var oBinding = oDialog.getBinding("items");
+            if (!oBinding) return;
+
+            // Start with the exclusion filters (one NE per already-added name)
+            var aFilters = (this._pickerExcludeFilters || []).slice();
+
+            // Add an OR-search filter when the user has typed something
+            if (sSearch && sSearch.trim()) {
+                var sQ = sSearch.trim();
+                aFilters.push(new Filter({
+                    filters: [
+                        new Filter("name",         FilterOperator.Contains, sQ),
+                        new Filter("businessName", FilterOperator.Contains, sQ),
+                        new Filter("spaceId",      FilterOperator.Contains, sQ)
+                    ],
+                    and: false
+                }));
+            }
+
+            // Pass as a flat array — OData v4 ANDs the top-level entries
+            oBinding.filter(aFilters);
         },
 
         onPickerSearch: function (oEvt) {
             var sQuery = oEvt.getParameter("value") || oEvt.getParameter("newValue") || "";
-            var oBinding = oEvt.getSource().getBinding("items");
-            if (!oBinding) return;
-            if (!sQuery) { oBinding.filter([]); return; }
-            var aFilters = [
-                new Filter("name",         FilterOperator.Contains, sQuery),
-                new Filter("businessName", FilterOperator.Contains, sQuery),
-                new Filter("spaceId",      FilterOperator.Contains, sQuery)
-            ];
-            oBinding.filter(new Filter({ filters: aFilters, and: false }));
+            var oDialog = oEvt.getSource();
+            this._applyPickerFilters(oDialog, sQuery);
         },
 
         onPickerConfirm: function (oEvt) {
@@ -585,6 +618,45 @@ sap.ui.define([
         onCloseSchedulesPopover: function () {
             if (this._pSchedulesPopover) {
                 this._pSchedulesPopover.then(function (p) { p.close(); });
+            }
+        },
+
+        // Navigate directly to the right scheduling page for a task chain that
+        // already has a non-DSP schedule (one-type-per-chain rule).
+        onDirectEditSchedule: function (oEvt) {
+            var oCtx = oEvt.getSource().getBindingContext("page");
+            var row = oCtx.getObject();
+            var source = row.source; // kind of the top/representative entry
+
+            if (source === "app") {
+                // Traffic Lights / cron-based app schedule
+                this.getRouter().navTo("trafficLights", {
+                    "?query": {
+                        spaceId: row.spaceId || "",
+                        taskchain: row.name || "",
+                        name: row.businessName || row.name || "",
+                        scheduleID: row.scheduleID || ""
+                    }
+                });
+            } else if (source === "calendar") {
+                this.getRouter().navTo("customCalendar", {
+                    "?query": {
+                        spaceId: row.spaceId || "",
+                        taskchain: row.name || "",
+                        name: row.businessName || row.name || ""
+                    }
+                });
+            } else if (source === "onDemand") {
+                // Find the first onDemand entry to get its ID
+                var onDemandEntry = (row.entries || []).find(function (e) { return e.kind === "onDemand"; });
+                this.getRouter().navTo("onDemand", {
+                    "?query": {
+                        spaceId: row.spaceId || "",
+                        taskchain: row.name || "",
+                        name: row.businessName || row.name || "",
+                        entryId: (onDemandEntry && onDemandEntry.calendarEntryID) || ""
+                    }
+                });
             }
         },
 
@@ -1263,6 +1335,13 @@ sap.ui.define([
                 });
                 this._pageModel.setProperty("/rows", rows);
                 this._deleteSavedRow(row.spaceId, row.name);
+                // Reset picker binding so the removed task chain reappears
+                if (this._pPicker) {
+                    this._pPicker.then(function (oDialog) {
+                        var oBinding = oDialog.getBinding("items");
+                        if (oBinding) { oBinding.filter([]); }
+                    });
+                }
             }.bind(this);
 
             if (!row.hasSchedule) { doRemove(); return; }

@@ -31,7 +31,7 @@
                     <content>
                         <List items="{edit>/steps}" mode="SingleSelectMaster"
                               selectionChange=".onStepSelect"
-                              noDataText="No steps loaded">
+                              noDataText="No steps available — the task chain may not have run yet">
                             <ObjectListItem
                                 title="{edit>name}"
                                 intro="{edit>order}"
@@ -39,21 +39,20 @@
                                 type="Active"
                                 press=".onStepPress">
                                 <attributes>
-                                    <ObjectAttribute text="{edit>objectId}" visible="{= !!${edit>objectId} &amp;&amp; ${edit>objectId} !== ${edit>name} }"/>
+                                    <ObjectAttribute title="Business Name" text="{edit>businessName}" visible="{= !!${edit>businessName} }"/>
                                     <ObjectAttribute text="{edit>description}" visible="{= !!${edit>description} }"/>
                                     <ObjectAttribute text="{= ${edit>params}.length + ' params'}"/>
-                                    <ObjectAttribute text="{= ${edit>allowParams} ? 'Parameter allowed' : 'Parameter not allowed' }"/>
                                 </attributes>
                             </ObjectListItem>
                         </List>
                         <Text text="Select a step to see / edit its params"
                               class="sapUiSmallMargin"
-                              visible="{= !${edit>/selectedStepId} }"/>
+                              visible="{= !!${edit>/steps}.length &amp;&amp; !${edit>/selectedStepId} }"/>
                     </content>
                 </Panel>
 
                 <!-- RIGHT: parameters of the selected step -->
-                <Panel headerText="{= 'Parameters for ' + (${edit>/selectedStepName} || '(no step selected)') }"
+                <Panel headerText="{= 'Parameters for: ' + (${edit>/selectedStepName} || '(no step selected)') }"
                        width="auto" class="sapUiSmallMargin">
                     <content>
                         <VBox visible="{= !!${edit>/selectedStepId} }">

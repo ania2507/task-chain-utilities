@@ -78,9 +78,14 @@
 
         <f:footer>
             <OverflowToolbar>
+                <Button text="{i18n>common.delete}" icon="sap-icon://delete"
+                        type="Reject"
+                        press=".onDeleteOnDemand"
+                        visible="{= !!${edit>/entryId} }"/>
                 <ToolbarSpacer/>
                 <Button text="{i18n>common.cancel}" press=".onNavBack"/>
-                <Button text="{i18n>onDemand.confirm}" type="Emphasized" press=".onConfirmOnDemand"/>
+                <Button text="{= ${edit>/onDemandModeIndex} === 1 ? ${i18n>common.save} : ${i18n>onDemand.confirm} }"
+                        type="Emphasized" press=".onConfirmOnDemand"/>
             </OverflowToolbar>
         </f:footer>
     </f:DynamicPage>

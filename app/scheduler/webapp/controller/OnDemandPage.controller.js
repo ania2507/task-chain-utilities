@@ -1,10 +1,10 @@
 sap.ui.define([
     "scheduler/controller/BaseController",
-    "sap/ui/core/Fragment",
     "sap/ui/model/json/JSONModel",
+    "sap/m/MessageBox",
     "sap/m/MessageToast",
     "sap/ui/core/routing/History"
-], function (BaseController, Fragment, JSONModel, MessageToast, History) {
+], function (BaseController, JSONModel, MessageBox, MessageToast, History) {
     "use strict";
 
     return BaseController.extend("scheduler.controller.OnDemandPage", {
@@ -76,6 +76,27 @@ sap.ui.define([
             } else {
                 this.getRouter().navTo("scheduleList", {}, true);
             }
+        },
+
+        onDeleteOnDemand: function () {
+            var d = this._editModel.getData();
+            if (!d.entryId) return;
+            var that = this;
+            MessageBox.confirm("Delete this scheduled run?", {
+                onClose: function (sAction) {
+                    if (sAction !== MessageBox.Action.OK) return;
+                    var oModel = that.getModel();
+                    if (!oModel) return;
+                    var oBind = oModel.bindContext("/CalendarEntry('" + d.entryId + "')");
+                    oBind.requestObject().then(function () {
+                        return oBind.getBoundContext().delete();
+                    }).then(function () {
+                        that.onNavBack();
+                    }).catch(function (err) {
+                        that.error(err && err.message || String(err));
+                    });
+                }
+            });
         },
 
         onConfigureStepParameters: function () {
