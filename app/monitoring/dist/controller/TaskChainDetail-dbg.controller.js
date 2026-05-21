@@ -169,7 +169,7 @@ sap.ui.define([
 
             p.push('<svg width="' + iSvgW + '" height="' + iSvgH + '" xmlns="http://www.w3.org/2000/svg">');
             p.push('<style>');
-            p.push('.dn-title{font:bold 11px "72",Arial,sans-serif;fill:#1d2d3e}');
+            p.push('.dn-title{font:bold 11px "72",Arial,sans-serif}');
             p.push('.dn-sub{font:10px "72",Arial,sans-serif;fill:#6a6d70}');
             p.push('.dn-begin{font:11px "72",Arial,sans-serif;fill:#1d2d3e;text-anchor:middle}');
             p.push('</style>');
@@ -210,30 +210,66 @@ sap.ui.define([
 
             // Node cards
             var that = this;
+            var STRIP_W = 34; // icon strip width
             aRegular.forEach(function(n) {
                 var op = oPos[n.id];
                 if (!op) return;
                 var x = op.x, y = op.y;
+                var cx = x + STRIP_W / 2; // icon center X
+                var cy = y + NH / 2;      // icon center Y
 
-                // Border colour by status
+                // Border + strip colours by status
                 var sBorder = n.status === "error" ? "#bb0000" : n.status === "running" ? "#e9730c" : "#1473e6";
+                var sStrip  = n.status === "error" ? "#fff0f0" : n.status === "running" ? "#fff4eb" : "#eaf3ff";
 
-                // Card background + border (uniform 1.5px all around)
+                // Card white background + border (uniform 1.5px)
                 p.push('<rect x="' + x + '" y="' + y + '" width="' + NW + '" height="' + NH + '" rx="4" fill="white" stroke="' + sBorder + '" stroke-width="1.5"/>');
 
-                // Title (truncated)
-                var sType = n.taskType || n.type || "";
-                var sName = n.objectId || n.name || ("Node " + n.id);
-                if (sName.length > 20) { sName = sName.substring(0, 19) + "..."; }
-                p.push('<text x="' + (x + 12) + '" y="' + (y + 22) + '" class="dn-title">' + that._escapeXml(sName) + '</text>');
+                // Icon strip (tinted, inset 2px so card border shows around all edges)
+                p.push('<rect x="' + (x + 2) + '" y="' + (y + 2) + '" width="' + (STRIP_W - 2) + '" height="' + (NH - 4) + '" fill="' + sStrip + '"/>');
 
-                // Subtitle
-                var sSub = sType.length > 22 ? sType.substring(0, 21) + "..." : sType;
-                if (sSub) {
-                    p.push('<text x="' + (x + 12) + '" y="' + (y + 38) + '" class="dn-sub">' + that._escapeXml(sSub) + '</text>');
+                // Divider line between strip and text area
+                p.push('<line x1="' + (x + STRIP_W) + '" y1="' + (y + 1) + '" x2="' + (x + STRIP_W) + '" y2="' + (y + NH - 1) + '" stroke="' + sBorder + '" stroke-width="1"/>');
+
+                // Type icon (geometric, centred in strip)
+                var sType = (n.taskType || n.type || "").toLowerCase();
+                if (sType.indexOf("chain") !== -1) {
+                    // Chain: two linked rects
+                    p.push('<rect x="' + (cx - 10) + '" y="' + (cy - 5) + '" width="8" height="10" rx="1.5" fill="none" stroke="' + sBorder + '" stroke-width="1.5"/>');
+                    p.push('<rect x="' + (cx + 2)  + '" y="' + (cy - 5) + '" width="8" height="10" rx="1.5" fill="none" stroke="' + sBorder + '" stroke-width="1.5"/>');
+                    p.push('<line x1="' + (cx - 2) + '" y1="' + cy + '" x2="' + (cx + 2) + '" y2="' + cy + '" stroke="' + sBorder + '" stroke-width="2"/>');
+                } else if (sType.indexOf("api") !== -1) {
+                    // API: three horizontal lines (endpoint list)
+                    p.push('<line x1="' + (cx - 8) + '" y1="' + (cy - 5) + '" x2="' + (cx + 8) + '" y2="' + (cy - 5) + '" stroke="' + sBorder + '" stroke-width="2" stroke-linecap="round"/>');
+                    p.push('<line x1="' + (cx - 8) + '" y1="' + cy      + '" x2="' + (cx + 8) + '" y2="' + cy      + '" stroke="' + sBorder + '" stroke-width="2" stroke-linecap="round"/>');
+                    p.push('<line x1="' + (cx - 8) + '" y1="' + (cy + 5) + '" x2="' + (cx + 8) + '" y2="' + (cy + 5) + '" stroke="' + sBorder + '" stroke-width="2" stroke-linecap="round"/>');
+                } else if (sType.indexOf("transform") !== -1 || sType.indexOf("flow") !== -1) {
+                    // Transformation / Flow: diamond
+                    p.push('<polygon points="' + cx + ',' + (cy - 9) + ' ' + (cx + 9) + ',' + cy + ' ' + cx + ',' + (cy + 9) + ' ' + (cx - 9) + ',' + cy + '" fill="none" stroke="' + sBorder + '" stroke-width="1.5"/>');
+                } else {
+                    // Default / TASK: document icon (rect + two text lines)
+                    p.push('<rect x="' + (cx - 6) + '" y="' + (cy - 8) + '" width="12" height="16" rx="1.5" fill="none" stroke="' + sBorder + '" stroke-width="1.5"/>');
+                    p.push('<line x1="' + (cx - 3) + '" y1="' + (cy - 3) + '" x2="' + (cx + 3) + '" y2="' + (cy - 3) + '" stroke="' + sBorder + '" stroke-width="1.5" stroke-linecap="round"/>');
+                    p.push('<line x1="' + (cx - 3) + '" y1="' + (cy + 2) + '" x2="' + (cx + 3) + '" y2="' + (cy + 2) + '" stroke="' + sBorder + '" stroke-width="1.5" stroke-linecap="round"/>');
                 }
 
+                // Clip text to the card's text area (right of strip, inside border)
+                var sClipId = "clip_" + n.id.toString().replace(/[^a-zA-Z0-9_]/g, "_");
+                var iTextX = x + STRIP_W + 2;
+                var iTextW = NW - STRIP_W - 6;
+                p.push('<clipPath id="' + sClipId + '"><rect x="' + iTextX + '" y="' + y + '" width="' + iTextW + '" height="' + NH + '"/></clipPath>');
 
+                // Title + subtitle wrapped in a <g> with tooltip
+                var sName = n.objectId || n.name || ("Node " + n.id);
+                var sSub = (n.taskType || n.type || "");
+                var sTooltip = sName + (sSub ? " (" + sSub + ")" : "");
+                p.push('<g>');
+                p.push('<title>' + that._escapeXml(sTooltip) + '</title>');
+                p.push('<text x="' + (x + STRIP_W + 10) + '" y="' + (y + 22) + '" class="dn-title" fill="' + sBorder + '" clip-path="url(#' + sClipId + ')">' + that._escapeXml(sName) + '</text>');
+                if (sSub) {
+                    p.push('<text x="' + (x + STRIP_W + 10) + '" y="' + (y + 38) + '" class="dn-sub" clip-path="url(#' + sClipId + ')">' + that._escapeXml(sSub) + '</text>');
+                }
+                p.push('</g>');
             });
 
             p.push('</svg>');
