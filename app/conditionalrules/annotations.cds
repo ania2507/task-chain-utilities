@@ -133,6 +133,7 @@ annotate service.Taskchain with @(
         Title : { Value : name },
         Description : { Value : businessName },
     },
+    UI.SelectionFields : [ spaceId, name, businessName ],
     UI.LineItem : [
         { Value : name, Label : 'Technical Name' },
         { Value : businessName, Label : 'Business Name' },
@@ -172,6 +173,128 @@ annotate service.Taskchain with @(
             Target : '@UI.FieldGroup#DeploymentInfo',
         },
     ]
+);
+
+// Value Help (matchcode) per i campi di SkipOverride
+annotate service.SkipOverride with {
+    spaceId @(
+        Common.ValueList : {
+            $Type          : 'Common.ValueListType',
+            CollectionPath : 'TaskchainSpace',
+            Parameters     : [
+                {
+                    $Type             : 'Common.ValueListParameterInOut',
+                    LocalDataProperty : spaceId,
+                    ValueListProperty : 'spaceId',
+                },
+            ],
+        },
+        Common.ValueListWithFixedValues : false
+    );
+    taskchain @(
+        Common.ValueList : {
+            $Type          : 'Common.ValueListType',
+            CollectionPath : 'Taskchain',
+            Parameters     : [
+                {
+                    $Type             : 'Common.ValueListParameterIn',
+                    LocalDataProperty : spaceId,
+                    ValueListProperty : 'spaceId',
+                },
+                {
+                    $Type             : 'Common.ValueListParameterInOut',
+                    LocalDataProperty : taskchain,
+                    ValueListProperty : 'name',
+                },
+                {
+                    $Type             : 'Common.ValueListParameterOut',
+                    LocalDataProperty : spaceId,
+                    ValueListProperty : 'spaceId',
+                },
+                {
+                    $Type             : 'Common.ValueListParameterDisplayOnly',
+                    ValueListProperty : 'businessName',
+                },
+            ],
+        },
+        Common.ValueListWithFixedValues : false
+    );
+    stepId @(
+        Common.ValueList : {
+            $Type          : 'Common.ValueListType',
+            CollectionPath : 'TaskchainStep',
+            Parameters     : [
+                {
+                    $Type             : 'Common.ValueListParameterIn',
+                    LocalDataProperty : spaceId,
+                    ValueListProperty : 'spaceId',
+                },
+                {
+                    $Type             : 'Common.ValueListParameterIn',
+                    LocalDataProperty : taskchain,
+                    ValueListProperty : 'taskchain',
+                },
+                {
+                    $Type             : 'Common.ValueListParameterInOut',
+                    LocalDataProperty : stepId,
+                    ValueListProperty : 'objectId',
+                },
+                {
+                    $Type             : 'Common.ValueListParameterDisplayOnly',
+                    ValueListProperty : 'businessName',
+                },
+            ],
+        },
+        Common.ValueListWithFixedValues : false
+    );
+    stepToBeChecked @(
+        Common.ValueList : {
+            $Type          : 'Common.ValueListType',
+            CollectionPath : 'TaskchainStep',
+            Parameters     : [
+                {
+                    $Type             : 'Common.ValueListParameterIn',
+                    LocalDataProperty : spaceId,
+                    ValueListProperty : 'spaceId',
+                },
+                {
+                    $Type             : 'Common.ValueListParameterIn',
+                    LocalDataProperty : taskchain,
+                    ValueListProperty : 'taskchain',
+                },
+                {
+                    $Type             : 'Common.ValueListParameterInOut',
+                    LocalDataProperty : stepToBeChecked,
+                    ValueListProperty : 'objectId',
+                },
+                {
+                    $Type             : 'Common.ValueListParameterDisplayOnly',
+                    ValueListProperty : 'businessName',
+                },
+            ],
+        },
+        Common.ValueListWithFixedValues : false
+    );
+};
+
+annotate service.TaskchainStep with @(
+    UI.SelectionFields : [ objectId, businessName ],
+);
+
+// Cascading reset: quando cambia un campo padre, FE rilegge i campi dipendenti
+annotate service.SkipOverride with @(
+    Common.SideEffects #SpaceChanged : {
+        SourceProperties : [ spaceId ],
+        TargetProperties : [ 'taskchain', 'stepId', 'stepToBeChecked' ],
+    },
+    Common.SideEffects #TaskchainChanged : {
+        SourceProperties : [ taskchain ],
+        TargetProperties : [ 'stepId', 'stepToBeChecked' ],
+    },
+    Common.SideEffects #StepIdChanged : {
+        SourceProperties : [ stepId ],
+        TargetProperties : [ 'stepToBeChecked' ],
+    },
 );
 
 // Annotations per SkipOverride

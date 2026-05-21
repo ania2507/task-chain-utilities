@@ -960,6 +960,8 @@ def get_taskchain_steps():
                                         lbl = obj.get("@EndUserText.label") or obj.get("label")
                                         if lbl:
                                             break
+                    if not lbl:
+                        logger.warning("[DIAG] businessName not found for '%s'. Top-level keys: %s", nm, list(md.keys())[:15])
                     if lbl:
                         bmap[nm] = lbl
             except Exception:

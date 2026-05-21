@@ -1,7 +1,7 @@
 const cds = require('@sap/cds');
 
 module.exports = cds.service.impl(async function () {
-    const { RuleTable, RuleTaskchainLink, Taskchain } = this.entities;
+    const { RuleTable, RuleTaskchainLink, Taskchain, TaskchainStep, TaskchainSpace, SkipOverride } = this.entities;
 
     // Cache delle taskchain DSP per evitare query ripetute
     let taskchainCache = null;
@@ -33,6 +33,55 @@ module.exports = cds.service.impl(async function () {
         }
     }
 
+    // Handler custom per leggere gli space distinti da DSP (entità virtuale)
+    this.on('READ', TaskchainSpace, async (req) => {
+        let authHeader = null;
+        try {
+            authHeader = (req && req.headers && (req.headers.authorization || req.headers.Authorization))
+                || (req && req._ && req._.req && req._.req.headers && (req._.req.headers.authorization || req._.req.headers.Authorization))
+                || null;
+        } catch (e) { /* ignore */ }
+
+        try {
+            const taskchains = await fetchTaskchainsFromDSP(authHeader);
+            const seen = new Set();
+            const spaces = [];
+            for (const tc of taskchains) {
+                if (tc.spaceId && !seen.has(tc.spaceId)) {
+                    seen.add(tc.spaceId);
+                    spaces.push({ spaceId: tc.spaceId });
+                }
+            }
+            return spaces;
+        } catch (error) {
+            console.warn('⚠️ Could not fetch taskchain spaces:', error.message);
+            return [];
+        }
+    });
+
+    // Handler custom per leggere gli step di una Taskchain da DSP (entità virtuale)
+    this.on('READ', TaskchainStep, async (req) => {
+        let authHeader = null;
+        try {
+            authHeader = (req && req.headers && (req.headers.authorization || req.headers.Authorization))
+                || (req && req._ && req._.req && req._.req.headers && (req._.req.headers.authorization || req._.req.headers.Authorization))
+                || null;
+        } catch (e) { /* ignore */ }
+
+        const filters = extractWhereValues(req.query?.SELECT?.where);
+        const spaceId = filters.spaceId;
+        const taskchain = filters.taskchain;
+
+        if (!spaceId || !taskchain) return [];
+
+        try {
+            return await fetchTaskchainSteps(spaceId, taskchain, authHeader);
+        } catch (error) {
+            console.warn('⚠️ Could not fetch taskchain steps:', error.message);
+            return [];
+        }
+    });
+
     // Handler custom per leggere Taskchain da Datasphere (entità virtuale)
     this.on('READ', Taskchain, async (req) => {
         try {
@@ -47,6 +96,10 @@ module.exports = cds.service.impl(async function () {
             }
 
             const taskchains = await fetchTaskchainsFromDSP(authHeader);
+            const filters = extractWhereValues(req.query?.SELECT?.where);
+            if (filters.spaceId) {
+                return taskchains.filter(tc => tc.spaceId === filters.spaceId);
+            }
             return taskchains;
         } catch (error) {
             console.error('❌ Error fetching taskchains from DSP:', error.message);
@@ -106,6 +159,20 @@ module.exports = cds.service.impl(async function () {
     });
 
     // Quando si crea un nuovo draft, assegna il prossimo RuleNumber
+    // Reset a cascata dei campi dipendenti di SkipOverride
+    this.before('PATCH', SkipOverride.drafts, (req) => {
+        if ('spaceId' in req.data) {
+            req.data.taskchain = null;
+            req.data.stepId = null;
+            req.data.stepToBeChecked = null;
+        } else if ('taskchain' in req.data) {
+            req.data.stepId = null;
+            req.data.stepToBeChecked = null;
+        } else if ('stepId' in req.data) {
+            req.data.stepToBeChecked = null;
+        }
+    });
+
     this.before('NEW', RuleTable.drafts, async (req) => {
         // Trova il massimo RuleNumber tra le entità attive
         const maxActiveResult = await SELECT.one
@@ -302,6 +369,47 @@ module.exports = cds.service.impl(async function () {
             // Opzionale: blocca il save anche se il servizio non è disponibile
             // req.error(503, 'Rule validation service unavailable');
         }
+    }
+
+    /**
+     * Estrae i valori di filtro dal where CQL come mappa { propertyName: value }.
+     */
+    function extractWhereValues(where) {
+        const result = {};
+        if (!Array.isArray(where)) return result;
+        const flat = where.flat ? where.flat(Infinity) : where;
+        for (let i = 0; i < flat.length - 2; i++) {
+            const a = flat[i], op = flat[i + 1], b = flat[i + 2];
+            if (a && a.ref && op === '=' && b && b.val !== undefined) {
+                result[a.ref[a.ref.length - 1]] = b.val;
+            } else if (b && b.ref && op === '=' && a && a.val !== undefined) {
+                result[b.ref[b.ref.length - 1]] = a.val;
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Recupera gli step di una taskchain dal py-srv (/v1/dsp/taskchain-steps).
+     */
+    async function fetchTaskchainSteps(spaceId, taskchain, authHeader) {
+        const pySrvUrl = getPySrvUrl();
+        const headers = {};
+        if (authHeader) headers['Authorization'] = authHeader;
+
+        const url = `${pySrvUrl}/v1/dsp/taskchain-steps?spaceId=${encodeURIComponent(spaceId)}&taskchain=${encodeURIComponent(taskchain)}`;
+        const response = await fetch(url, { headers });
+        const result = await response.json();
+        if (!result.success) return [];
+
+        return (result.steps || []).map(s => ({
+            spaceId,
+            taskchain,
+            objectId: s.objectId || s.id || '',
+            businessName: s.businessName || '',
+            applicationId: s.applicationId || '',
+            stepOrder: s.order || 0,
+        }));
     }
 
     /**
