@@ -87,11 +87,11 @@ sap.ui.define([
                 .then(function (r) {
                     var aSteps = [];
                     if (r.ok && r.data && r.data.success && Array.isArray(r.data.nodes)) {
+                        var _structural = ["BEGIN", "START", "END", "SPLIT", "MERGE", "JOIN", "GATEWAY", "FORK", "CONVERGE"];
                         aSteps = r.data.nodes
                             .filter(function (n) {
                                 var t = String(n.type || "TASK").toUpperCase();
-                                return t === "TASK" || t === "REPLICATION_FLOW"
-                                    || t === "DATA_FLOW" || t === "VIEW_PERSISTENCE";
+                                return _structural.indexOf(t) === -1 && !!n.objectId;
                             })
                             .map(function (n, i) {
                                 return {

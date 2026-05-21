@@ -35,14 +35,13 @@ sap.ui.define([
             this._previewModel = new JSONModel({ next: [], busy: false });
 
             // Page model: rows = task chains the user has added to the list
-            this._pageModel = new JSONModel({ rows: [], schedulesLoading: false });
+            this._pageModel = new JSONModel({ rows: [] });
             this.getView().setModel(this._pageModel, "page");
 
             this.getRouter().getRoute("scheduleList").attachPatternMatched(this._onListMatched, this);
         },
 
         _onListMatched: function () {
-            this._pageModel.setProperty("/schedulesLoading", true);
             this._loadAdded().then(function () {
                 this._refreshSchedulesForRows();
             }.bind(this));
@@ -60,7 +59,7 @@ sap.ui.define([
             return oList.requestContexts(0, 1000).then(function (aCtx) {
                 var rows = aCtx.map(function (c) {
                     var o = c.getObject();
-                    return { spaceId: o.spaceId, name: o.name, businessName: o.businessName || o.name, hasSchedule: false };
+                    return { spaceId: o.spaceId, name: o.name, businessName: o.businessName || o.name, hasSchedule: false, schedulesLoaded: false };
                 });
                 this._pageModel.setProperty("/rows", rows);
             }.bind(this)).catch(function (err) {
@@ -83,6 +82,9 @@ sap.ui.define([
             if (!rows.length) return Promise.resolve();
             var oModel = this.getModel();
             if (!oModel) return Promise.resolve();
+            // Mark all rows as "not yet loaded" so the Schedule button stays hidden during fetch
+            rows.forEach(function (r) { r.schedulesLoaded = false; });
+            this._pageModel.setProperty("/rows", rows.slice());
 
             var oList = oModel.bindList("/Schedule", undefined, undefined, undefined, {
                 $select: "ID,name,spaceId,taskchain,targetType,isActive,cronExpression,timezone,nextRunAt,lastRunStatus"
@@ -199,10 +201,15 @@ sap.ui.define([
                         });
                     });
                     if (d) {
+                        var dspDesc = this._formatCronHuman(d.cronExpression, d.timezone)
+                            || d.cronExpression
+                            || (d.frequency ? d.frequency.charAt(0).toUpperCase() + d.frequency.slice(1).toLowerCase().replace(/_/g, " ") : "")
+                            || d.description
+                            || "";
                         entries.push({
                             kind: "dsp",
                             label: "Standard DSP",
-                            description: this._formatCronHuman(d.cronExpression, d.timezone) || d.cronExpression,
+                            description: dspDesc,
                             icon: "sap-icon://product",
                             state: "Information",
                             nextRunAt: d.nextRunAt,
@@ -241,13 +248,16 @@ sap.ui.define([
                         r.source = top.kind;
                         r.scheduleText = top.description;
                     }
+                    r.schedulesLoaded = true;
                 }.bind(this));
 
                 this._pageModel.setProperty("/rows", rows.slice());
-                this._pageModel.setProperty("/schedulesLoading", false);
             }.bind(this)).catch(function (err) {
                 console.warn("Could not load schedules:", err && err.message);
-                this._pageModel.setProperty("/schedulesLoading", false);
+                // Mark rows as loaded even on error so the UI isn't stuck hidden
+                var rows2 = this._pageModel.getProperty("/rows") || [];
+                rows2.forEach(function (r) { r.schedulesLoaded = true; });
+                this._pageModel.setProperty("/rows", rows2.slice());
             }.bind(this));
         },
 
@@ -328,7 +338,6 @@ sap.ui.define([
         },
 
         onRefresh: function () {
-            this._pageModel.setProperty("/schedulesLoading", true);
             this._refreshSchedulesForRows();
         },
 

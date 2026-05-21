@@ -92,7 +92,7 @@
                                         text="{i18n>common.schedule}"
                                         press=".onScheduleTaskchain"
                                         tooltip="{i18n>tip.createSchedule}"
-                                        visible="{= !${page>hasEntries} &amp;&amp; !${page>/schedulesLoading} }"/>
+                                        visible="{= !!${page>schedulesLoaded} &amp;&amp; !${page>hasEntries} }"/>
                                 <Button icon="sap-icon://edit"
                                         type="Emphasized"
                                         text="{i18n>common.edit}"

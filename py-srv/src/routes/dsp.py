@@ -855,7 +855,13 @@ def get_taskchain_schedules():
             except Exception:
                 tz = None
             now = _dt.now(tz) if tz else _dt.utcnow()
-            itr = croniter(str(cron_expr).strip(), now)
+            expr = str(cron_expr).strip()
+            # DSP sometimes uses 6-field cron (seconds first: "0 0 6 * * *").
+            # croniter expects 5 fields — strip the leading seconds field.
+            parts = expr.split()
+            if len(parts) == 6:
+                expr = " ".join(parts[1:])
+            itr = croniter(expr, now)
             nxt = itr.get_next(_dt)
             return nxt.isoformat()
         except Exception:
@@ -863,10 +869,10 @@ def get_taskchain_schedules():
 
     schedules = []
     for r in rows or []:
-        cron_expr = _ci_get(r, "cronExpression", "CRON", "CRON_EXPRESSION")
-        tz_name = _ci_get(r, "timezone", "TZ_NAME", "TIMEZONE", "TIME_ZONE")
+        cron_expr = _ci_get(r, "cronExpression", "CRON", "CRON_EXPRESSION", "SCHEDULE_PATTERN", "PATTERN", "SCHEDULE")
+        tz_name = _ci_get(r, "timezone", "TZ_NAME", "TIMEZONE", "TIME_ZONE", "CRON_TIMEZONE")
         is_active = _to_bool_active(_ci_get(r, "isActive", "ACTIVATION_STATUS", "IS_ACTIVE", "ACTIVE", "STATUS"))
-        view_next = _isoformat(_ci_get(r, "nextRunAt", "NEXT_RUN_AT", "NEXT_EXECUTION"))
+        view_next = _isoformat(_ci_get(r, "nextRunAt", "NEXT_RUN_AT", "NEXT_EXECUTION", "NEXT_EXECUTION_AT", "NEXT_RUN_TIME", "NEXT_TRIGGER_AT", "NEXT_OCCURRENCE"))
         next_run = view_next or _compute_next_run(cron_expr, tz_name, is_active)
         schedules.append({
             "taskchain": _ci_get(r, "taskchain", "OBJECT_ID", "OBJECT_NAME", "TASK_NAME"),
