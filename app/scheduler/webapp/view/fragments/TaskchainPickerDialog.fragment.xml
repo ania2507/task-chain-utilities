@@ -5,7 +5,7 @@
         title="{i18n>picker.title}"
         noDataText="{i18n>picker.noData}"
         multiSelect="true"
-        items="{ path: '/Taskchain' }"
+        items="{picker>/items}"
         search=".onPickerSearch"
         liveChange=".onPickerSearch"
         confirm=".onPickerConfirm"
@@ -13,9 +13,9 @@
         growing="true"
         growingThreshold="100">
         <StandardListItem
-            title="{name}"
-            description="{businessName}"
-            info="{spaceId}"
+            title="{picker>name}"
+            description="{picker>businessName}"
+            info="{picker>spaceId}"
             icon="sap-icon://product"
             iconDensityAware="false"
             iconInset="false"/>

@@ -26,8 +26,10 @@
             <l:Splitter height="100%">
                 <!-- LEFT: chain steps list -->
                 <Panel headerText="Chain Steps (click to add params)"
-                       width="auto" class="sapUiSmallMargin"
-                       layoutData="{ &quot;Type&quot;: &quot;sap.ui.layout.SplitterLayoutData&quot;, &quot;size&quot;: &quot;360px&quot; }">
+                       width="auto" class="sapUiSmallMargin">
+                    <layoutData>
+                        <l:SplitterLayoutData size="360px"/>
+                    </layoutData>
                     <content>
                         <List items="{edit>/steps}" mode="SingleSelectMaster"
                               selectionChange=".onStepSelect"

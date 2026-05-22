@@ -179,8 +179,7 @@ sap.ui.define([
                 jobTemplate: d.jobTemplate,
                 parameters: JSON.stringify(tlSettings),
                 cronExpression: d.cronExpression, timezone: d.timezone,
-                isActive: !!d.isActive,
-                scheduleKind: "TRAFFIC_LIGHTS"
+                isActive: !!d.isActive
             };
 
             this._editModel.setProperty("/busy", true);

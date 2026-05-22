@@ -102,7 +102,7 @@ sap.ui.define([
 
             // Custom Calendar entries (HDI) - keep FULL list per row so the
             // popover can show every persisted date.
-            var oCalList = oModel.bindList("/CalendarEntry", undefined, undefined, undefined, {
+            var oCalList = oModel.bindList("/ScheduleEntry", undefined, undefined, undefined, {
                 $select: "ID,spaceId,taskchain,runDate,runTime,timezone,active,source"
             });
             var pCal = oCalList.requestContexts(0, 1000).then(function (aCtx) {
@@ -363,62 +363,58 @@ sap.ui.define([
         },
 
         // ------------------------------------------------------------
-        // "Add Task Chain" -> open DSP picker
+        // "Add Task Chain" -> open DSP picker (client-side JSON model)
+        // Taskchain is @cds.persistence.skip (virtual entity): NE filters
+        // are not forwarded to the custom handler, so we load all items once
+        // and filter client-side to exclude already-added task chains.
         // ------------------------------------------------------------
         onAddTaskchain: function () {
             var oView = this.getView();
-            if (!this._pPicker) {
-                this._pPicker = Fragment.load({
-                    id: oView.getId(),
-                    name: "scheduler.view.fragments.TaskchainPickerDialog",
-                    controller: this
-                }).then(function (oDialog) {
-                    oView.addDependent(oDialog);
-                    return oDialog;
-                });
-            }
-            this._pPicker.then(function (oDialog) {
-                // Build and cache exclusion filters so onPickerSearch can
-                // always combine them with the user's search term.
-                var rows = this._pageModel.getProperty("/rows") || [];
-                this._pickerExcludeFilters = rows.map(function (r) {
-                    return new Filter("name", FilterOperator.NE, r.name);
-                });
-                this._applyPickerFilters(oDialog, "");
-                oDialog.open();
-            }.bind(this));
-        },
+            var rows = this._pageModel.getProperty("/rows") || [];
+            var existingKeys = {};
+            rows.forEach(function (r) { existingKeys[this._rowKey(r.spaceId, r.name)] = true; }.bind(this));
 
-        // Build the combined filter (exclusion + optional search) and apply it.
-        // In OData v4, passing a flat array to filter() ANDs all entries together.
-        _applyPickerFilters: function (oDialog, sSearch) {
-            var oBinding = oDialog.getBinding("items");
-            if (!oBinding) return;
+            var oModel = this.getModel();
+            if (!oModel) return;
 
-            // Start with the exclusion filters (one NE per already-added name)
-            var aFilters = (this._pickerExcludeFilters || []).slice();
-
-            // Add an OR-search filter when the user has typed something
-            if (sSearch && sSearch.trim()) {
-                var sQ = sSearch.trim();
-                aFilters.push(new Filter({
-                    filters: [
-                        new Filter("name",         FilterOperator.Contains, sQ),
-                        new Filter("businessName", FilterOperator.Contains, sQ),
-                        new Filter("spaceId",      FilterOperator.Contains, sQ)
-                    ],
-                    and: false
-                }));
+            if (!this._pickerModel) {
+                this._pickerModel = new JSONModel({ items: [], allItems: [] });
+                oView.setModel(this._pickerModel, "picker");
             }
 
-            // Pass as a flat array — OData v4 ANDs the top-level entries
-            oBinding.filter(aFilters);
+            oModel.bindList("/Taskchain").requestContexts(0, 2000).then(function (aCtx) {
+                var allItems = aCtx.map(function (c) { return c.getObject(); });
+                var filtered = allItems.filter(function (o) {
+                    return !existingKeys[this._rowKey(o.spaceId, o.name)];
+                }.bind(this));
+                this._pickerModel.setData({ items: filtered, allItems: filtered });
+
+                if (!this._pPicker) {
+                    this._pPicker = Fragment.load({
+                        id: oView.getId(),
+                        name: "scheduler.view.fragments.TaskchainPickerDialog",
+                        controller: this
+                    }).then(function (oDialog) {
+                        oView.addDependent(oDialog);
+                        return oDialog;
+                    });
+                }
+                this._pPicker.then(function (oDialog) { oDialog.open(); });
+            }.bind(this)).catch(function (err) {
+                console.warn("[Scheduler] Could not load task chains:", err && err.message);
+            });
         },
 
         onPickerSearch: function (oEvt) {
-            var sQuery = oEvt.getParameter("value") || oEvt.getParameter("newValue") || "";
-            var oDialog = oEvt.getSource();
-            this._applyPickerFilters(oDialog, sQuery);
+            var sQuery = (oEvt.getParameter("value") || oEvt.getParameter("newValue") || "").toLowerCase().trim();
+            if (!this._pickerModel) return;
+            var allItems = this._pickerModel.getProperty("/allItems") || [];
+            var filtered = sQuery ? allItems.filter(function (o) {
+                return (o.name || "").toLowerCase().indexOf(sQuery) !== -1
+                    || (o.businessName || "").toLowerCase().indexOf(sQuery) !== -1
+                    || (o.spaceId || "").toLowerCase().indexOf(sQuery) !== -1;
+            }) : allItems;
+            this._pickerModel.setProperty("/items", filtered);
         },
 
         onPickerConfirm: function (oEvt) {
@@ -438,7 +434,7 @@ sap.ui.define([
             var aCreated = [];
 
             aItems.forEach(function (oI) {
-                var o = oI.getBindingContext().getObject();
+                var o = (oI.getBindingContext("picker") || oI.getBindingContext()).getObject();
                 var k = this._rowKey(o.spaceId, o.name);
                 if (existing[k]) return;
                 var newRow = {
@@ -737,7 +733,7 @@ sap.ui.define([
                 });
             }
             if ((e.kind === "calendar" || e.kind === "onDemand") && e.calendarEntryID) {
-                var oCalBind = oModel.bindContext("/CalendarEntry(" + this._key(e.calendarEntryID) + ")");
+                var oCalBind = oModel.bindContext("/ScheduleEntry(" + this._key(e.calendarEntryID) + ")");
                 return oCalBind.requestObject().then(function () {
                     return oCalBind.getBoundContext().delete();
                 });
@@ -1047,7 +1043,7 @@ sap.ui.define([
             if (!oModel) { this._editModel.setProperty("/calendarEntries", []); return Promise.resolve(); }
             var sSpace = this._editModel.getProperty("/spaceId") || "";
             var sChain = this._editModel.getProperty("/taskchain") || "";
-            var oList = oModel.bindList("/CalendarEntry", undefined, [
+            var oList = oModel.bindList("/ScheduleEntry", undefined, [
                 new Sorter("runDate"),
                 new Sorter("runTime")
             ], [
@@ -1086,7 +1082,7 @@ sap.ui.define([
             if (!oModel || !aEntries || !aEntries.length) return Promise.resolve();
             var sSpace = this._editModel.getProperty("/spaceId") || "";
             var sChain = this._editModel.getProperty("/taskchain") || "";
-            var oList = oModel.bindList("/CalendarEntry");
+            var oList = oModel.bindList("/ScheduleEntry");
             var aPromises = aEntries.map(function (e) {
                 var oCtx = oList.create({
                     spaceId: sSpace,
@@ -1171,7 +1167,7 @@ sap.ui.define([
             var that = this;
             if (this._editingEntryId) {
                 // Update via deep-binding path
-                var oList = oModel.bindList("/CalendarEntry", undefined, undefined, [
+                var oList = oModel.bindList("/ScheduleEntry", undefined, undefined, [
                     new Filter("ID", FilterOperator.EQ, this._editingEntryId)
                 ]);
                 oList.requestContexts(0, 1).then(function (aCtx) {
@@ -1189,7 +1185,7 @@ sap.ui.define([
                     that.error(err.message || String(err));
                 });
             } else {
-                var oList2 = oModel.bindList("/CalendarEntry");
+                var oList2 = oModel.bindList("/ScheduleEntry");
                 var oCtx2 = oList2.create({
                     spaceId: d.spaceId || "",
                     taskchain: d.taskchain || "",
@@ -1218,7 +1214,7 @@ sap.ui.define([
                 onClose: function (sAction) {
                     if (sAction !== MessageBox.Action.OK) return;
                     var oModel = that.getModel();
-                    var oList = oModel.bindList("/CalendarEntry", undefined, undefined, [
+                    var oList = oModel.bindList("/ScheduleEntry", undefined, undefined, [
                         new Filter("ID", FilterOperator.EQ, o.ID)
                     ]);
                     oList.requestContexts(0, 1).then(function (aCtx) {
@@ -1257,7 +1253,7 @@ sap.ui.define([
                 if (oRow && oRow.ID) {
                     // Persist parameters to DB
                     var oModel = this.getModel();
-                    var oList = oModel.bindList("/CalendarEntry", undefined, undefined, [
+                    var oList = oModel.bindList("/ScheduleEntry", undefined, undefined, [
                         new Filter("ID", FilterOperator.EQ, oRow.ID)
                     ]);
                     oList.requestContexts(0, 1).then(function (aCtx) {
@@ -1344,13 +1340,6 @@ sap.ui.define([
                 });
                 this._pageModel.setProperty("/rows", rows);
                 this._deleteSavedRow(row.spaceId, row.name);
-                // Reset picker binding so the removed task chain reappears
-                if (this._pPicker) {
-                    this._pPicker.then(function (oDialog) {
-                        var oBinding = oDialog.getBinding("items");
-                        if (oBinding) { oBinding.filter([]); }
-                    });
-                }
             }.bind(this);
 
             if (!row.hasSchedule) { doRemove(); return; }

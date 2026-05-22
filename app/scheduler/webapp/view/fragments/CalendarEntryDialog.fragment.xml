@@ -9,11 +9,6 @@
                 <Label text="{i18n>calendar.col.time}" required="true" class="sapUiSmallMarginTop"/>
                 <TimePicker value="{edit>/entryTime}" valueFormat="HH:mm" displayFormat="HH:mm" support2400="true"/>
                 <CheckBox text="{i18n>calendar.col.active}" selected="{edit>/entryActive}" class="sapUiSmallMarginTop"/>
-                <Label text="{i18n>steps.title}" class="sapUiSmallMarginTop"/>
-                <TextArea value="{edit>/entryParameters}"
-                          rows="4"
-                          placeholder="{i18n>steps.placeholder}"
-                          growing="false"/>
             </VBox>
         </content>
         <beginButton>

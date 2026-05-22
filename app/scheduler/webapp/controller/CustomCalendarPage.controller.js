@@ -217,7 +217,7 @@ sap.ui.define([
             if (!oModel) { this._editModel.setProperty("/calendarEntries", []); return Promise.resolve(); }
             var sSpace = this._editModel.getProperty("/spaceId") || "";
             var sChain = this._editModel.getProperty("/taskchain") || "";
-            var oList = oModel.bindList("/CalendarEntry", undefined, [
+            var oList = oModel.bindList("/ScheduleEntry", undefined, [
                 new Sorter("runDate"),
                 new Sorter("runTime")
             ], [
@@ -255,7 +255,7 @@ sap.ui.define([
             if (!oModel || !aEntries || !aEntries.length) return Promise.resolve();
             var sSpace = this._editModel.getProperty("/spaceId") || "";
             var sChain = this._editModel.getProperty("/taskchain") || "";
-            var oList = oModel.bindList("/CalendarEntry");
+            var oList = oModel.bindList("/ScheduleEntry");
             var aPromises = aEntries.map(function (e) {
                 var oCtx = oList.create({
                     spaceId: sSpace,
@@ -340,7 +340,7 @@ sap.ui.define([
             var oModel = this.getModel();
             var that = this;
             if (this._editingEntryId) {
-                var oList = oModel.bindList("/CalendarEntry", undefined, undefined, [
+                var oList = oModel.bindList("/ScheduleEntry", undefined, undefined, [
                     new Filter("ID", FilterOperator.EQ, this._editingEntryId)
                 ]);
                 oList.requestContexts(0, 1).then(function (aCtx) {
@@ -358,7 +358,7 @@ sap.ui.define([
                     that.error(err.message || String(err));
                 });
             } else {
-                var oList2 = oModel.bindList("/CalendarEntry");
+                var oList2 = oModel.bindList("/ScheduleEntry");
                 var oCtx2 = oList2.create({
                     spaceId: d.spaceId || "",
                     taskchain: d.taskchain || "",
@@ -387,7 +387,7 @@ sap.ui.define([
                 onClose: function (sAction) {
                     if (sAction !== MessageBox.Action.OK) return;
                     var oModel = that.getModel();
-                    var oList = oModel.bindList("/CalendarEntry", undefined, undefined, [
+                    var oList = oModel.bindList("/ScheduleEntry", undefined, undefined, [
                         new Filter("ID", FilterOperator.EQ, o.ID)
                     ]);
                     oList.requestContexts(0, 1).then(function (aCtx) {
@@ -436,7 +436,7 @@ sap.ui.define([
                 try { this._editModel.setProperty(this._calendarRowCtx.getPath() + "/parameters", s.parametersJson); } catch (e) { /* ignore */ }
                 if (oRow && oRow.ID) {
                     var oModel = this.getModel();
-                    var oList = oModel.bindList("/CalendarEntry", undefined, undefined, [
+                    var oList = oModel.bindList("/ScheduleEntry", undefined, undefined, [
                         new Filter("ID", FilterOperator.EQ, oRow.ID)
                     ]);
                     oList.requestContexts(0, 1).then(function (aCtx) {
@@ -472,7 +472,7 @@ sap.ui.define([
                 this._editModel.setProperty(this._calendarRowCtx.getPath() + "/parameters", s || "");
                 if (oRow && oRow.ID) {
                     var oModel = this.getModel();
-                    var oList = oModel.bindList("/CalendarEntry", undefined, undefined, [
+                    var oList = oModel.bindList("/ScheduleEntry", undefined, undefined, [
                         new Filter("ID", FilterOperator.EQ, oRow.ID)
                     ]);
                     oList.requestContexts(0, 1).then(function (aCtx) {

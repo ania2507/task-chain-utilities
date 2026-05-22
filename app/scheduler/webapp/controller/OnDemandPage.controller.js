@@ -29,6 +29,17 @@ sap.ui.define([
         _onMatched: function (oEvent) {
             var oArgs = oEvent.getParameter("arguments") || {};
             var oQuery = oArgs["?query"] || {};
+
+            // If returning from step parameters, restore saved state instead of resetting
+            var oComp = this.getOwnerComponent();
+            var savedState = oComp && oComp._onDemandState;
+            if (savedState && savedState.taskchain === (oQuery.taskchain || "")) {
+                oComp._onDemandState = null;
+                this._editModel.setData(savedState);
+                this._consumeStepParametersResult();
+                return;
+            }
+
             var now = new Date();
             this._editModel.setData({
                 name: oQuery.name || oQuery.taskchain || "",
@@ -50,7 +61,7 @@ sap.ui.define([
         _loadEntry: function (sId) {
             var oModel = this.getModel();
             if (!oModel) return;
-            var oBind = oModel.bindContext("/CalendarEntry('" + sId + "')");
+            var oBind = oModel.bindContext("/ScheduleEntry('" + sId + "')");
             oBind.requestObject().then(function (obj) {
                 if (!obj) return;
                 this._editModel.setProperty("/entryId", obj.ID);
@@ -87,7 +98,7 @@ sap.ui.define([
                     if (sAction !== MessageBox.Action.OK) return;
                     var oModel = that.getModel();
                     if (!oModel) return;
-                    var oBind = oModel.bindContext("/CalendarEntry('" + d.entryId + "')");
+                    var oBind = oModel.bindContext("/ScheduleEntry('" + d.entryId + "')");
                     oBind.requestObject().then(function () {
                         return oBind.getBoundContext().delete();
                     }).then(function () {
@@ -101,6 +112,11 @@ sap.ui.define([
 
         onConfigureStepParameters: function () {
             var d = this._editModel.getData();
+            // Save current state so _onMatched can restore it on return
+            var oComp = this.getOwnerComponent();
+            if (oComp) {
+                oComp._onDemandState = Object.assign({}, d, { busy: false });
+            }
             this.getRouter().navTo("stepParameters", {
                 "?query": {
                     spaceId: d.spaceId || "",
@@ -184,7 +200,7 @@ sap.ui.define([
                 var pPersist = Promise.resolve();
                 if (oModel) {
                     if (d.entryId) {
-                        var oCtxBind = oModel.bindContext("/CalendarEntry('" + d.entryId + "')");
+                        var oCtxBind = oModel.bindContext("/ScheduleEntry('" + d.entryId + "')");
                         pPersist = oCtxBind.requestObject().then(function () {
                             var oCtx = oCtxBind.getBoundContext();
                             oCtx.setProperty("runDate", d.onDemandDate);
@@ -194,7 +210,7 @@ sap.ui.define([
                             return oModel.submitBatch(oModel.getUpdateGroupId());
                         });
                     } else {
-                        var oList = oModel.bindList("/CalendarEntry");
+                        var oList = oModel.bindList("/ScheduleEntry");
                         var oCtxNew = oList.create({
                             spaceId: d.spaceId,
                             taskchain: d.taskchain,
