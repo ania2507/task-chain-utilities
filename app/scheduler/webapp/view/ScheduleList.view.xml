@@ -4,7 +4,7 @@
     xmlns="sap.m"
     xmlns:f="sap.f"
     xmlns:core="sap.ui.core">
-    <f:DynamicPage id="scheduleListPage" fitContent="true">
+    <f:DynamicPage id="scheduleListPage" fitContent="true" busy="{page>/busy}">
 
         <f:title>
             <f:DynamicPageTitle>

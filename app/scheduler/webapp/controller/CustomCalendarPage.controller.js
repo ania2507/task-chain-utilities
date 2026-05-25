@@ -225,6 +225,7 @@ sap.ui.define([
                 new Filter("taskchain", FilterOperator.EQ, sChain)
             ], { $select: "ID,spaceId,taskchain,runDate,runTime,timezone,active,parameters" });
             var that = this;
+            this._editModel.setProperty("/busy", true);
             return oList.requestContexts(0, 1000).then(function (aCtx) {
                 var aEntries = aCtx.map(function (c) {
                     var o = c.getObject();
@@ -245,7 +246,9 @@ sap.ui.define([
                     that._editModel.setProperty("/calendarFileStatus",
                         aEntries.length + " entries loaded from server");
                 }
+                that._editModel.setProperty("/busy", false);
             }).catch(function (err) {
+                that._editModel.setProperty("/busy", false);
                 console.warn("Could not load calendar entries:", err && err.message);
             });
         },
@@ -375,6 +378,37 @@ sap.ui.define([
                     that.error(err.message || String(err));
                 });
             }
+        },
+
+        onDeleteAllEntries: function () {
+            var aEntries = this._editModel.getProperty("/calendarEntries") || [];
+            if (!aEntries.length) return;
+            var that = this;
+            var oRb = this.getResourceBundle();
+            MessageBox.confirm(oRb.getText("calendar.confirmDeleteAll", [aEntries.length]), {
+                onClose: function (sAction) {
+                    if (sAction !== MessageBox.Action.OK) return;
+                    var oModel = that.getModel();
+                    var aIds = aEntries.map(function (e) { return e.ID; }).filter(Boolean);
+                    var aPromises = aIds.map(function (sId) {
+                        var oList = oModel.bindList("/ScheduleEntry", undefined, undefined, [
+                            new Filter("ID", FilterOperator.EQ, sId)
+                        ]);
+                        return oList.requestContexts(0, 1).then(function (aCtx) {
+                            if (aCtx.length) return aCtx[0].delete();
+                        });
+                    });
+                    that._editModel.setProperty("/busy", true);
+                    Promise.all(aPromises).then(function () {
+                        that._editModel.setProperty("/busy", false);
+                        that._editModel.setProperty("/calendarEntries", []);
+                        that._editModel.setProperty("/calendarFileStatus", "");
+                    }).catch(function (err) {
+                        that._editModel.setProperty("/busy", false);
+                        that.error(err.message || String(err));
+                    });
+                }
+            });
         },
 
         onRemoveCalendarEntry: function (oEvt) {

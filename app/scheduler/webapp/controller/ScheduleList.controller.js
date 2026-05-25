@@ -35,15 +35,18 @@ sap.ui.define([
             this._previewModel = new JSONModel({ next: [], busy: false });
 
             // Page model: rows = task chains the user has added to the list
-            this._pageModel = new JSONModel({ rows: [] });
+            this._pageModel = new JSONModel({ rows: [], busy: false });
             this.getView().setModel(this._pageModel, "page");
 
             this.getRouter().getRoute("scheduleList").attachPatternMatched(this._onListMatched, this);
         },
 
         _onListMatched: function () {
+            this._pageModel.setProperty("/busy", true);
             this._loadAdded().then(function () {
-                this._refreshSchedulesForRows();
+                return this._refreshSchedulesForRows();
+            }.bind(this)).finally(function () {
+                this._pageModel.setProperty("/busy", false);
             }.bind(this));
         },
 

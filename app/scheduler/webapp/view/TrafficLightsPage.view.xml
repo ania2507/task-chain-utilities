@@ -60,7 +60,7 @@
                                        press=".onSelectStateGreen"
                                        tooltip="Ready — chain runs when green"
                                        class="sapUiPointer"/>
-                            <Text text="Ready" class="sapUiTinyMarginTop"/>
+                            <Text text="Enable" class="sapUiTinyMarginTop"/>
                         </VBox>
 
                         <ObjectStatus
@@ -79,7 +79,7 @@
 
                         <HBox alignItems="Center" class="sapUiSmallMarginBottom">
                             <Label text="Check every" width="9rem"/>
-                            <SegmentedButton selectedKey="{edit>/checkInterval}">
+                            <SegmentedButton selectedKey="{edit>/checkInterval}" width="300px">
                                 <items>
                                     <SegmentedButtonItem key="5"  text="5 min"/>
                                     <SegmentedButtonItem key="15" text="15 min" />
@@ -106,7 +106,7 @@
 
                         <Button text="Configure Step Parameters"
                                 icon="sap-icon://settings"
-                                type="Transparent"
+                                type="Emphasized"
                                 press=".onConfigureStepParameters"
                                 class="sapUiLargeMarginTop"/>
                     </VBox>
