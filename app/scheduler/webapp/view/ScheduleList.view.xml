@@ -89,12 +89,12 @@
                             <HBox justifyContent="Center" alignItems="Center">
                                 <HBox width="2.5rem" justifyContent="Center">
                                     <Button icon="sap-icon://activity-items"
-                                            type="Transparent"
+                                            type="Emphasized"
                                             press=".onScheduleTaskchain"
                                             tooltip="{i18n>tip.createSchedule}"
                                             visible="{= !!${page>schedulesLoaded} &amp;&amp; !${page>hasEntries} }"/>
                                     <Button icon="sap-icon://edit"
-                                            type="Transparent"
+                                            type="Emphasized"
                                             press=".onDirectEditSchedule"
                                             tooltip="{i18n>common.edit}"
                                             visible="{= !!${page>hasEntries} &amp;&amp; !${page>hasDspSchedule} }"/>

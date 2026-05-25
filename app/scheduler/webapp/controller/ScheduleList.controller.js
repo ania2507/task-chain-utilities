@@ -531,7 +531,6 @@ sap.ui.define([
         },
 
         onPickKindOnDemand: function () {
-            console.log("[Scheduler] onPickKindOnDemand fired, pendingRow=", this._pendingRow);
             this._closeKindDialog();
             var row = this._pendingRow;
             this._pendingRow = null;

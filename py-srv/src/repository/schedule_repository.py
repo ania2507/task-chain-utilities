@@ -1,8 +1,8 @@
-"""Schedule repository - reads/writes CalendarEntry / Schedule / ScheduleRun /
+"""Schedule repository - reads/writes ScheduleEntry / Schedule / ScheduleRun /
 TrafficLightStatus on the HDI container.
 
 Tables (generated from CDS namespace `conditional.app.schedules`):
-  - CONDITIONAL_APP_SCHEDULES_CALENDARENTRY
+  - CONDITIONAL_APP_SCHEDULES_SCHEDULEENTRY
   - CONDITIONAL_APP_SCHEDULES_SCHEDULE
   - CONDITIONAL_APP_SCHEDULES_SCHEDULERUN
   - CONDITIONAL_APP_SCHEDULES_TRAFFICLIGHTSTATUS

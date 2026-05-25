@@ -85,6 +85,14 @@ sap.ui.define([
             }
         },
 
+        onSelectStateRed: function () {
+            this._editModel.setProperty("/currentState", "RED");
+        },
+
+        onSelectStateGreen: function () {
+            this._editModel.setProperty("/currentState", "GREEN");
+        },
+
         onConfigureStepParameters: function () {
             var d = this._editModel.getData();
             this.getRouter().navTo("stepParameters", {

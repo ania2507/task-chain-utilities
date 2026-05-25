@@ -41,7 +41,7 @@
                                 type="Active"
                                 press=".onStepPress">
                                 <attributes>
-                                    <ObjectAttribute title="Business Name" text="{edit>businessName}" visible="{= !!${edit>businessName} }"/>
+                                    <ObjectAttribute text="{= ${edit>businessName} || ${edit>name} }"/>
                                     <ObjectAttribute text="{edit>description}" visible="{= !!${edit>description} }"/>
                                     <ObjectAttribute text="{= ${edit>params}.length + ' params'}"/>
                                 </attributes>

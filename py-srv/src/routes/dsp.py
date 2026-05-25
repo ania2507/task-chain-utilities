@@ -201,6 +201,105 @@ def diagnose_dsp():
     return jsonify({"success": ok, "checks": checks}), 200
 
 
+@bp.route("/debug-businessnames", methods=["GET"])
+@flask_access_validation(required_scope="read")
+def debug_businessnames():
+    """Debug: inspect where business names are stored for a task chain's steps.
+
+    Query params:
+    - spaceId   (required)
+    - taskchain (required)
+    """
+    import json as _json
+    from flask import current_app
+
+    space_id  = request.args.get("spaceId")
+    taskchain = request.args.get("taskchain")
+    if not space_id or not taskchain:
+        return jsonify({"error": "spaceId and taskchain are required"}), 400
+
+    db = current_app.extensions["taskchain"]["db_query_executor"]
+    out = {}
+
+    # 1. Raw metadata JSON for the task chain itself
+    try:
+        rows = db.query(
+            'SELECT "JSON", "REPOSITORY_OBJECT_TYPE", "DEPLOYED_AT" '
+            'FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" '
+            'WHERE "NAME" = ? ORDER BY "DEPLOYED_AT" DESC LIMIT 1',
+            (taskchain,)
+        )
+        if rows:
+            raw = rows[0].get("JSON") or rows[0].get("json") or ""
+            try:
+                parsed = _json.loads(raw)
+                out["taskchain_metadata_keys"] = list(parsed.keys()) if isinstance(parsed, dict) else str(type(parsed))
+                # Extract nodes and show first node raw
+                tc_section = (parsed.get("taskchains") or {}).get(taskchain)
+                if isinstance(tc_section, dict):
+                    nodes = tc_section.get("nodes") or []
+                    out["node_count"] = len(nodes)
+                    out["first_node_raw"] = nodes[0] if nodes else None
+                    out["all_nodes_keys"] = [list(n.keys()) for n in nodes[:5] if isinstance(n, dict)]
+                else:
+                    out["taskchain_metadata_keys_top"] = list(parsed.keys())[:20]
+            except Exception as e:
+                out["taskchain_metadata_parse_error"] = str(e)
+        else:
+            out["taskchain_metadata"] = "NOT FOUND"
+    except Exception as e:
+        out["taskchain_metadata_error"] = str(e)
+
+    # 2. Check if step artifacts have their own metadata rows
+    # First derive object IDs from nodes we found above
+    try:
+        rows2 = db.query(
+            'SELECT "JSON" FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" '
+            'WHERE "NAME" = ? ORDER BY "DEPLOYED_AT" DESC LIMIT 1',
+            (taskchain,)
+        )
+        if rows2:
+            raw2 = rows2[0].get("JSON") or ""
+            parsed2 = _json.loads(raw2) if raw2 else {}
+            tc_sec = (parsed2.get("taskchains") or {}).get(taskchain)
+            raw_nodes = (tc_sec.get("nodes") if isinstance(tc_sec, dict) else None) or []
+            obj_ids = []
+            for n in raw_nodes:
+                tid = n.get("taskIdentifier") or {}
+                oid = tid.get("objectId") or n.get("objectId") or ""
+                if oid and oid not in obj_ids:
+                    obj_ids.append(oid)
+            out["step_objectIds"] = obj_ids
+            if obj_ids:
+                ph = ",".join(["?"] * len(obj_ids))
+                step_rows = db.query(
+                    f'SELECT "NAME", "REPOSITORY_OBJECT_TYPE", LEFT("JSON", 300) as "JSON_PREVIEW" '
+                    f'FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" WHERE "NAME" IN ({ph})',
+                    tuple(obj_ids)
+                )
+                out["step_metadata_rows_found"] = len(step_rows or [])
+                out["step_metadata_preview"] = [
+                    {"name": r.get("NAME"), "type": r.get("REPOSITORY_OBJECT_TYPE"), "json_preview": r.get("JSON_PREVIEW")}
+                    for r in (step_rows or [])
+                ]
+    except Exception as e:
+        out["step_metadata_error"] = str(e)
+
+    # 3. Check DWC_TENANT_OWNER for entity/catalog tables
+    try:
+        cat_tables = db.query(
+            "SELECT TABLE_NAME FROM SYS.TABLES "
+            "WHERE SCHEMA_NAME = 'DWC_TENANT_OWNER' "
+            "AND (TABLE_NAME LIKE '%ENTITY%' OR TABLE_NAME LIKE '%CATALOG%' "
+            "     OR TABLE_NAME LIKE '%LABEL%' OR TABLE_NAME LIKE '%OBJECT%')"
+        )
+        out["dwc_tenant_owner_tables"] = [r.get("TABLE_NAME") for r in (cat_tables or [])]
+    except Exception as e:
+        out["dwc_tenant_owner_tables_error"] = str(e)
+
+    return jsonify(out), 200
+
+
 @bp.route("/tf/remove-deleted-records", methods=["POST"])
 @flask_access_validation(required_scope="admin")
 def remove_deleted_records():
@@ -547,14 +646,21 @@ def get_taskchain_dag():
             for node in raw_nodes:
                 task_id = node.get("taskIdentifier") or {}
                 obj_id = task_id.get("objectId") or node.get("objectId")
-                business_name = business_name_map.get(obj_id) if obj_id else None
+                node_label = (
+                    node.get("businessName") or node.get("label") or node.get("displayName")
+                    or task_id.get("businessName") or task_id.get("label") or task_id.get("displayName")
+                )
+                # Discard node_label if it is just the technical name repeated
+                if node_label and node_label == obj_id:
+                    node_label = None
+                business_name = (business_name_map.get(obj_id) if obj_id else None) or node_label or None
                 nodes.append({
                     "id": node.get("id"),
                     "type": node.get("type", "TASK"),
                     "objectId": obj_id,
                     "applicationId": task_id.get("applicationId"),
                     "spaceId": task_id.get("spaceId"),
-                    "label": business_name or node.get("label") or node.get("name") or node.get("displayName") or task_id.get("label") or task_id.get("name"),
+                    "label": business_name or node.get("name") or task_id.get("name"),
                     "businessName": business_name,
                     "description": node.get("description") or node.get("comment") or task_id.get("description"),
                     "status": "pending",
@@ -1084,12 +1190,19 @@ def get_taskchain_steps():
         steps = []
         for i, (obj_id, node) in enumerate(object_ids_ordered):
             task_id = node.get("taskIdentifier") or {}
+            node_label = (
+                node.get("businessName") or node.get("label") or node.get("displayName")
+                or task_id.get("businessName") or task_id.get("label") or task_id.get("displayName")
+            )
+            # Discard node_label if it is just the technical name repeated
+            if node_label and node_label == obj_id:
+                node_label = None
             steps.append({
                 "id":            node.get("id") or obj_id,
                 "order":         i + 1,
                 "objectId":      obj_id,
                 "applicationId": task_id.get("applicationId") or node.get("applicationId") or "",
-                "businessName":  bmap.get(obj_id) or "",
+                "businessName":  bmap.get(obj_id) or node_label or "",
             })
 
         return jsonify({"success": True, "steps": steps, "debug": debug_info}), 200

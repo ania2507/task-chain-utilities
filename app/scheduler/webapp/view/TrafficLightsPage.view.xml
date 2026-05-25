@@ -4,8 +4,8 @@
     xmlns="sap.m"
     xmlns:core="sap.ui.core"
     xmlns:f="sap.f"
-    xmlns:form="sap.ui.layout.form">
-    <f:DynamicPage id="trafficLightsPage" busy="{edit>/busy}" toggleHeaderOnTitleClick="true" showFooter="true">
+    xmlns:l="sap.ui.layout">
+    <f:DynamicPage id="trafficLightsPage" busy="{edit>/busy}" toggleHeaderOnTitleClick="false" showFooter="true">
         <f:title>
             <f:DynamicPageTitle>
                 <f:heading>
@@ -14,105 +14,111 @@
                                 tooltip="{i18n>common.back}" press=".onNavBack"
                                 class="sapUiSmallMarginEnd"/>
                         <VBox>
-                            <Title text="Task Chain - {edit>/taskchain}" wrapping="true"/>
+                            <Title text="{edit>/taskchain}" wrapping="true"/>
                             <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }"/>
                         </VBox>
                     </HBox>
                 </f:heading>
-                <f:snappedHeading>
-                    <HBox alignItems="Center">
-                        <Button icon="sap-icon://nav-back" type="Transparent"
-                                tooltip="{i18n>common.back}" press=".onNavBack"
-                                class="sapUiSmallMarginEnd"/>
-                        <VBox>
-                            <Title text="Task Chain - {edit>/taskchain}" wrapping="true"/>
-                            <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }"/>
-                        </VBox>
-                    </HBox>
-                </f:snappedHeading>
             </f:DynamicPageTitle>
         </f:title>
 
-        <f:header>
-            <f:DynamicPageHeader pinnable="true">
-                <VBox>
-                    <Text text="{i18n>kind.trafficLights.desc}"/>
-                </VBox>
-            </f:DynamicPageHeader>
-        </f:header>
-
         <f:content>
-            <VBox class="sapUiResponsiveMargin" width="auto">
-                <Panel headerText="{i18n>kind.trafficLights.title}" expandable="false">
-                    <content>
-                        <VBox>
-                            <HBox alignItems="Center" class="sapUiTinyMarginBottom">
-                                <Label text="Current State" width="10rem"/>
-                                <Select selectedKey="{edit>/currentState}">
-                                    <core:Item key="GREEN" text="🟢 GREEN — ready to run"/>
-                                    <core:Item key="RED"   text="🔴 RED — disabled"/>
-                                </Select>
-                            </HBox>
+            <l:Splitter height="100%">
 
-                            <HBox alignItems="Center" class="sapUiTinyMarginBottom">
-                                <Label text="Check Interval" width="10rem"/>
-                                <Select selectedKey="{edit>/checkInterval}">
-                                    <core:Item key="5"  text="Every 5 min"/>
-                                    <core:Item key="15" text="Every 15 min"/>
-                                    <core:Item key="30" text="Every 30 min"/>
-                                    <core:Item key="60" text="Every hour"/>
-                                </Select>
-                            </HBox>
+                <!-- LEFT: traffic light -->
+                <Panel width="auto" class="sapUiSmallMargin">
+                    <layoutData>
+                        <l:SplitterLayoutData size="240px" resizable="false"/>
+                    </layoutData>
+                    <VBox alignItems="Center" class="sapUiLargeMarginTopBottom sapUiMediumMarginBeginEnd">
+                        <Title text="Initial State" level="H5" class="sapUiMediumMarginBottom"/>
 
-                            <HBox alignItems="Center" class="sapUiTinyMarginBottom">
-                                <Label text="Auto-reset" width="10rem"/>
-                                <CheckBox selected="{edit>/autoReset}" text="After run → resets to"/>
-                                <Select selectedKey="{edit>/autoResetState}" class="sapUiTinyMarginBegin">
-                                    <core:Item key="GREY" text="⚪ GREY — on hold"/>
-                                    <core:Item key="RED"  text="🔴 RED — disabled"/>
-                                </Select>
-                            </HBox>
-
-                            <HBox alignItems="Center" class="sapUiTinyMarginBottom">
-                                <Label text="Timeout" width="10rem"/>
-                                <Select selectedKey="{edit>/timeout}">
-                                    <core:Item key="24" text="24h — alert if not triggered"/>
-                                    <core:Item key="48" text="48h — alert if not triggered"/>
-                                    <core:Item key="72" text="72h — alert if not triggered"/>
-                                </Select>
-                            </HBox>
-
-                            <HBox alignItems="Center" wrap="Wrap" class="sapUiSmallMarginTop">
-                                <core:Icon src="sap-icon://circle-task-2" color="#e74c3c" class="sapUiTinyMarginEnd"/>
-                                <Text text="DISABLE" class="sapUiSmallMarginEnd"/>
-                                <core:Icon src="sap-icon://circle-task-2" color="#f1c40f" class="sapUiTinyMarginEnd sapUiSmallMarginBegin"/>
-                                <Text text="RUNNING" class="sapUiSmallMarginEnd"/>
-                                <core:Icon src="sap-icon://circle-task-2" color="#2ecc71" class="sapUiTinyMarginEnd sapUiSmallMarginBegin"/>
-                                <Text text="ENABLE (← current state)" class="sapUiSmallMarginEnd"/>
-                                <core:Icon src="sap-icon://circle-task-2" color="#bdc3c7" class="sapUiTinyMarginEnd sapUiSmallMarginBegin"/>
-                                <Text text="ON HOLD"/>
-                            </HBox>
-
-                            <Text text="An external user sets the traffic lights to 🟢."
-                                  class="sapUiSmallMarginTop"/>
-                            <Text text="The chain runs automatically when green. Resets to 🔴 after run (if enabled)."/>
-
-                            <HBox justifyContent="End" class="sapUiSmallMarginTop">
-                                <Button text="Configure Step Parameters" icon="sap-icon://settings"
-                                        type="Emphasized" press=".onConfigureStepParameters"
-                                        width="14rem"/>
-                            </HBox>
+                        <!-- RED -->
+                        <VBox alignItems="Center" class="sapUiSmallMarginBottom">
+                            <core:Icon src="sap-icon://circle-task-2"
+                                       size="3.5rem"
+                                       color="{= ${edit>/currentState} === 'RED' ? '#BB0000' : '#DEDEDE' }"
+                                       press=".onSelectStateRed"
+                                       tooltip="Disabled — chain will not run"
+                                       class="sapUiPointer"/>
+                            <Text text="Disabled" class="sapUiTinyMarginTop"/>
                         </VBox>
-                    </content>
+
+                        <!-- GREY (visual only) -->
+                        <VBox alignItems="Center" class="sapUiSmallMarginBottom">
+                            <core:Icon src="sap-icon://circle-task-2"
+                                       size="3.5rem"
+                                       color="#DEDEDE"/>
+                            <Text text="On hold" class="sapUiTinyMarginTop"/>
+                        </VBox>
+
+                        <!-- GREEN -->
+                        <VBox alignItems="Center" class="sapUiSmallMarginBottom">
+                            <core:Icon src="sap-icon://circle-task-2"
+                                       size="3.5rem"
+                                       color="{= ${edit>/currentState} === 'GREEN' ? '#107E3E' : '#DEDEDE' }"
+                                       press=".onSelectStateGreen"
+                                       tooltip="Ready — chain runs when green"
+                                       class="sapUiPointer"/>
+                            <Text text="Ready" class="sapUiTinyMarginTop"/>
+                        </VBox>
+
+                        <ObjectStatus
+                            class="sapUiMediumMarginTop"
+                            text="{= ${edit>/currentState} === 'GREEN' ? 'Ready to run' : 'Disabled' }"
+                            state="{= ${edit>/currentState} === 'GREEN' ? 'Success' : 'Error' }"
+                            icon="{= ${edit>/currentState} === 'GREEN' ? 'sap-icon://accept' : 'sap-icon://decline' }"/>
+                    </VBox>
                 </Panel>
-            </VBox>
+
+                <!-- RIGHT: settings -->
+                <Panel width="auto" class="sapUiSmallMargin">
+                    <VBox class="sapUiMediumMarginTopBottom sapUiMediumMarginBeginEnd">
+                        <Title text="Traffic Lights" level="H4" class="sapUiSmallMarginBottom"/>
+                        <Title text="Settings" level="H5" class="sapUiMediumMarginBottom"/>
+
+                        <HBox alignItems="Center" class="sapUiSmallMarginBottom">
+                            <Label text="Check every" width="9rem"/>
+                            <SegmentedButton selectedKey="{edit>/checkInterval}">
+                                <items>
+                                    <SegmentedButtonItem key="5"  text="5 min"/>
+                                    <SegmentedButtonItem key="15" text="15 min" />
+                                    <SegmentedButtonItem key="30" text="30 min" />
+                                    <SegmentedButtonItem key="60" text="1 h"/>
+                                </items>
+                            </SegmentedButton>
+                        </HBox>
+
+                        <HBox alignItems="Center" class="sapUiSmallMarginBottom">
+                            <Label text="After run" width="9rem"/>
+                            <Switch state="{edit>/autoReset}" class="sapUiTinyMarginEnd"/>
+                            <Select selectedKey="{edit>/autoResetState}"
+                                    visible="{edit>/autoReset}">
+                                <core:Item key="GREY" text="⚪  On hold"/>
+                                <core:Item key="RED"  text="🔴  Disabled"/>
+                            </Select>
+                        </HBox>
+
+                        <HBox alignItems="Center" class="sapUiSmallMarginBottom">
+                            <Label text="Active" width="9rem"/>
+                            <Switch state="{edit>/isActive}"/>
+                        </HBox>
+
+                        <Button text="Configure Step Parameters"
+                                icon="sap-icon://settings"
+                                type="Transparent"
+                                press=".onConfigureStepParameters"
+                                class="sapUiLargeMarginTop"/>
+                    </VBox>
+                </Panel>
+
+            </l:Splitter>
         </f:content>
 
         <f:footer>
             <OverflowToolbar>
                 <Button text="{i18n>common.delete}" icon="sap-icon://delete"
-                        type="Reject"
-                        press=".onDelete"
+                        type="Reject" press=".onDelete"
                         visible="{= !!${edit>/ID} }"/>
                 <ToolbarSpacer/>
                 <Button text="{i18n>common.cancel}" press=".onNavBack"/>
