@@ -717,6 +717,13 @@ sap.ui.define([
         },
 
         /**
+         * Refresh dashboard data
+         */
+        onRefresh: function () {
+            this._loadProjectData(this._sCurrentProjectId);
+        },
+
+        /**
          * Navigate back to project list
          */
         onNavBack: function () {

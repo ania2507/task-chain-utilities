@@ -25,6 +25,7 @@
                     <Title id="dashboardTitle" text="{i18n>dashboard.title}" level="H4"/>
                 </contentMiddle>
                 <contentRight>
+                    <Button id="btnRefresh" icon="sap-icon://refresh" tooltip="Refresh" press=".onRefresh"/>
                     <Button id="btnExport" icon="sap-icon://download" tooltip="{i18n>common.export}"/>
                     <Button id="btnSettings" icon="sap-icon://action-settings" tooltip="Settings"/>
                     <Button id="btnNotifications" icon="sap-icon://bell" tooltip="Notifications"/>

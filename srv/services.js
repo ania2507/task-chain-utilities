@@ -45,12 +45,21 @@ module.exports = cds.service.impl(async function () {
         try {
             const taskchains = await fetchTaskchainsFromDSP(authHeader);
             const seen = new Set();
-            const spaces = [];
+            let spaces = [];
             for (const tc of taskchains) {
                 if (tc.spaceId && !seen.has(tc.spaceId)) {
                     seen.add(tc.spaceId);
                     spaces.push({ spaceId: tc.spaceId });
                 }
+            }
+            const filters = extractWhereValues(req.query?.SELECT?.where);
+            const searchTerm = extractSearchTerm(req.query?.SELECT?.search);
+            if (filters.spaceId) {
+                const q = filters.spaceId.toLowerCase();
+                spaces = spaces.filter(s => s.spaceId && s.spaceId.toLowerCase().includes(q));
+            }
+            if (searchTerm) {
+                spaces = spaces.filter(s => s.spaceId && s.spaceId.toLowerCase().includes(searchTerm));
             }
             return spaces;
         } catch (error) {
@@ -75,7 +84,23 @@ module.exports = cds.service.impl(async function () {
         if (!spaceId || !taskchain) return [];
 
         try {
-            return await fetchTaskchainSteps(spaceId, taskchain, authHeader);
+            let steps = await fetchTaskchainSteps(spaceId, taskchain, authHeader);
+            if (filters.objectId) {
+                const q = filters.objectId.toLowerCase();
+                steps = steps.filter(s => s.objectId && s.objectId.toLowerCase().includes(q));
+            }
+            if (filters.businessName) {
+                const q = filters.businessName.toLowerCase();
+                steps = steps.filter(s => s.businessName && s.businessName.toLowerCase().includes(q));
+            }
+            const searchTerm = extractSearchTerm(req.query?.SELECT?.search);
+            if (searchTerm) {
+                steps = steps.filter(s =>
+                    (s.objectId && s.objectId.toLowerCase().includes(searchTerm)) ||
+                    (s.businessName && s.businessName.toLowerCase().includes(searchTerm))
+                );
+            }
+            return steps;
         } catch (error) {
             console.warn('⚠️ Could not fetch taskchain steps:', error.message);
             return [];
@@ -95,10 +120,26 @@ module.exports = cds.service.impl(async function () {
                 authHeader = null;
             }
 
-            const taskchains = await fetchTaskchainsFromDSP(authHeader);
+            let taskchains = await fetchTaskchainsFromDSP(authHeader);
             const filters = extractWhereValues(req.query?.SELECT?.where);
             if (filters.spaceId) {
-                return taskchains.filter(tc => tc.spaceId === filters.spaceId);
+                taskchains = taskchains.filter(tc => tc.spaceId === filters.spaceId);
+            }
+            if (filters.name) {
+                const q = filters.name.toLowerCase();
+                taskchains = taskchains.filter(tc => tc.name && tc.name.toLowerCase().includes(q));
+            }
+            if (filters.businessName) {
+                const q = filters.businessName.toLowerCase();
+                taskchains = taskchains.filter(tc => tc.businessName && tc.businessName.toLowerCase().includes(q));
+            }
+            const searchTerm = extractSearchTerm(req.query?.SELECT?.search);
+            if (searchTerm) {
+                taskchains = taskchains.filter(tc =>
+                    (tc.name && tc.name.toLowerCase().includes(searchTerm)) ||
+                    (tc.businessName && tc.businessName.toLowerCase().includes(searchTerm)) ||
+                    (tc.spaceId && tc.spaceId.toLowerCase().includes(searchTerm))
+                );
             }
             return taskchains;
         } catch (error) {
@@ -372,20 +413,49 @@ module.exports = cds.service.impl(async function () {
     }
 
     /**
+     * Estrae il termine di ricerca libera da $search (CDS lo espone come array di token).
+     */
+    function extractSearchTerm(search) {
+        if (!search) return null;
+        const items = Array.isArray(search) ? search : [search];
+        for (const item of items) {
+            if (item && typeof item === 'object' && item.val) return String(item.val).toLowerCase();
+            if (typeof item === 'string' && item !== 'and' && item !== 'or') return item.toLowerCase();
+        }
+        return null;
+    }
+
+    /**
      * Estrae i valori di filtro dal where CQL come mappa { propertyName: value }.
      */
     function extractWhereValues(where) {
         const result = {};
-        if (!Array.isArray(where)) return result;
-        const flat = where.flat ? where.flat(Infinity) : where;
-        for (let i = 0; i < flat.length - 2; i++) {
-            const a = flat[i], op = flat[i + 1], b = flat[i + 2];
-            if (a && a.ref && op === '=' && b && b.val !== undefined) {
-                result[a.ref[a.ref.length - 1]] = b.val;
-            } else if (b && b.ref && op === '=' && a && a.val !== undefined) {
-                result[b.ref[b.ref.length - 1]] = a.val;
+        if (!where) return result;
+
+        function scan(expr) {
+            if (!expr) return;
+            if (Array.isArray(expr)) {
+                for (let i = 0; i < expr.length - 2; i++) {
+                    const a = expr[i], op = expr[i + 1], b = expr[i + 2];
+                    if (a && a.ref && (op === '=' || op === '==') && b && b.val !== undefined) {
+                        result[a.ref[a.ref.length - 1]] = b.val;
+                    } else if (b && b.ref && (op === '=' || op === '==') && a && a.val !== undefined) {
+                        result[b.ref[b.ref.length - 1]] = a.val;
+                    }
+                }
+                for (const item of expr) {
+                    if (Array.isArray(item)) {
+                        scan(item);
+                    } else if (item && typeof item === 'object' && item.xpr) {
+                        scan(item.xpr);
+                    }
+                }
+            } else if (expr && typeof expr === 'object' && expr.xpr) {
+                scan(expr.xpr);
             }
         }
+
+        scan(Array.isArray(where) ? where : [where]);
         return result;
     }
 

@@ -133,7 +133,7 @@ annotate service.Taskchain with @(
         Title : { Value : name },
         Description : { Value : businessName },
     },
-    UI.SelectionFields : [ spaceId, name, businessName ],
+    UI.SelectionFields : [ name, spaceId, businessName ],
     UI.LineItem : [
         { Value : name, Label : 'Technical Name' },
         { Value : businessName, Label : 'Business Name' },

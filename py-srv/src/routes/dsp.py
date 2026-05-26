@@ -1187,6 +1187,8 @@ def get_taskchain_steps():
             return jsonify({"success": True, "steps": [], "debug": debug_info}), 200
 
         bmap  = _build_business_name_map([o for o, _ in object_ids_ordered])
+        import logging as _logging
+        _logging.getLogger(__name__).warning("[DIAG] raw nodes: %s", _json.dumps(object_ids_ordered, default=str))
         steps = []
         for i, (obj_id, node) in enumerate(object_ids_ordered):
             task_id = node.get("taskIdentifier") or {}
