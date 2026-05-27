@@ -109,7 +109,8 @@ def db_query_endpoint():
             out = {}
             for key, value in row.items():
                 if isinstance(value, (datetime, date)):
-                    out[key] = value.isoformat()
+                    s = value.isoformat()
+                    out[key] = s if (s.endswith("Z") or "+" in s[10:]) else s + "Z"
                 else:
                     out[key] = value
             return out

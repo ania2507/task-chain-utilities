@@ -18,6 +18,16 @@ from flask import Blueprint, jsonify, request
 from ..auth import flask_access_validation
 from ..integrations.dsp import DSPDestinationClient
 
+
+def _utc_str(value) -> str | None:
+    """Convert a HANA timestamp to an ISO string with explicit UTC suffix."""
+    if value is None:
+        return None
+    s = str(value)
+    if s.endswith("Z") or "+" in s[10:]:
+        return s
+    return s.replace(" ", "T") + "Z"
+
 bp = Blueprint("dsp", __name__)
 
 
@@ -407,7 +417,7 @@ def get_tasklog_messages():
                 "severity": row.get("severity"),
                 "text": row.get("text"),
                 "details": parsed_details,
-                "timestamp": str(row.get("timestamp")) if row.get("timestamp") else None,
+                "timestamp": _utc_str(row.get("timestamp")),
                 "messageKey": row.get("messageKey")
             })
         
@@ -501,8 +511,8 @@ def get_taskchain_run_nodes():
                 "taskLogId": row.get("taskLogId"),
                 "remainingRuns": row.get("remainingRuns"),
                 "status": status,
-                "startTime": str(row.get("startTime")) if row.get("startTime") else None,
-                "endTime": str(row.get("endTime")) if row.get("endTime") else None,
+                "startTime": _utc_str(row.get("startTime")),
+                "endTime": _utc_str(row.get("endTime")),
                 "objectId": row.get("objectId"),
                 "duration": duration
             })
@@ -726,8 +736,8 @@ def get_taskchain_dag():
                 "status": status,
                 "taskLogId": nr.get("taskLogId"),
                 "objectId": nr.get("objectId"),
-                "startTime": str(nr.get("startTime")) if nr.get("startTime") else None,
-                "endTime": str(nr.get("endTime")) if nr.get("endTime") else None
+                "startTime": _utc_str(nr.get("startTime")),
+                "endTime": _utc_str(nr.get("endTime"))
             }
         
         # Extract nodes and links from DAG
@@ -946,8 +956,10 @@ def get_taskchain_schedules():
         if v is None:
             return None
         if isinstance(v, (date, _dt)):
-            return v.isoformat()
-        return str(v)
+            s = v.isoformat()
+            return s if (s.endswith("Z") or "+" in s[10:]) else s + "Z"
+        s = str(v)
+        return s if (s.endswith("Z") or "+" in s[10:]) else s + "Z"
 
     def _compute_next_run(cron_expr, tz_name, is_active):
         """Compute the next run datetime from a cron expression in the given timezone."""
@@ -1297,8 +1309,8 @@ def get_taskchain_runs():
                 "taskChain": row.get("taskChain"),
                 "spaceId": row.get("spaceId"),
                 "status": status,
-                "startTime": str(start_time) if start_time else None,
-                "endTime": str(end_time) if end_time else None,
+                "startTime": _utc_str(start_time),
+                "endTime": _utc_str(end_time),
                 "duration": duration,  # numeric value in minutes, or None
                 "durationDisplay": f"{duration} min" if duration else "Running..."
             })
