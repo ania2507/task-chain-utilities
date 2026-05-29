@@ -2,9 +2,8 @@ sap.ui.define([
     "scheduler/controller/BaseController",
     "sap/ui/model/json/JSONModel",
     "sap/m/MessageBox",
-    "sap/m/MessageToast",
-    "sap/ui/core/routing/History"
-], function (BaseController, JSONModel, MessageBox, MessageToast, History) {
+    "sap/m/MessageToast"
+], function (BaseController, JSONModel, MessageBox, MessageToast) {
     "use strict";
 
     return BaseController.extend("scheduler.controller.OnDemandPage", {
@@ -18,6 +17,7 @@ sap.ui.define([
                 onDemandDate: "",
                 onDemandTime: "",
                 parameters: "",
+                stepParamsSummary: "",
                 busy: false
             });
             this.getView().setModel(oModel, "edit");
@@ -50,6 +50,7 @@ sap.ui.define([
                 onDemandDate: now.toISOString().slice(0, 10),
                 onDemandTime: ("0" + now.getHours()).slice(-2) + ":" + ("0" + now.getMinutes()).slice(-2),
                 parameters: "",
+                stepParamsSummary: "",
                 busy: false
             });
             this._consumeStepParametersResult();
@@ -69,9 +70,36 @@ sap.ui.define([
                 this._editModel.setProperty("/onDemandDate", obj.runDate || "");
                 this._editModel.setProperty("/onDemandTime", obj.runTime || "");
                 this._editModel.setProperty("/parameters", obj.parameters || "");
+                // Rebuild _stepParamsState from saved parameters so that
+                // re-opening StepParametersPage shows the previously saved params.
+                this._restoreStepParamsFromEntry(
+                    this._editModel.getProperty("/taskchain"),
+                    obj.parameters
+                );
+                this._consumeStepParametersResult();
             }.bind(this)).catch(function (err) {
                 this.error("Could not load schedule: " + (err && err.message || err));
             }.bind(this));
+        },
+
+        _restoreStepParamsFromEntry: function (sTaskchain, sParametersJson) {
+            if (!sTaskchain || !sParametersJson || !String(sParametersJson).trim()) return;
+            var oComp = this.getOwnerComponent();
+            if (!oComp) return;
+            // Don't overwrite a fresher in-memory state that already has real steps
+            if (oComp._stepParamsState && oComp._stepParamsState.taskchain === sTaskchain
+                    && oComp._stepParamsState.steps && oComp._stepParamsState.steps.length) return;
+            try {
+                JSON.parse(sParametersJson); // validate JSON before storing
+                // Store only parametersJson (no synthetic steps).
+                // StepParametersPage will load real DSP steps and apply these params after loading.
+                oComp._stepParamsState = {
+                    cacheKey: sTaskchain,
+                    taskchain: sTaskchain,
+                    steps: [],
+                    parametersJson: sParametersJson
+                };
+            } catch (_) {}
         },
 
         formatBusinessName: function (v) {
@@ -80,13 +108,7 @@ sap.ui.define([
         },
 
         onNavBack: function () {
-            var oHistory = History.getInstance();
-            var sPrev = oHistory.getPreviousHash();
-            if (sPrev !== undefined) {
-                window.history.go(-1);
-            } else {
-                this.getRouter().navTo("scheduleList", {}, true);
-            }
+            this.getRouter().navTo("scheduleList", {}, true);
         },
 
         onDeleteOnDemand: function () {
@@ -102,6 +124,10 @@ sap.ui.define([
                     oBind.requestObject().then(function () {
                         return oBind.getBoundContext().delete();
                     }).then(function () {
+                        var oComp = that.getOwnerComponent();
+                        if (oComp && oComp._stepParamsState && oComp._stepParamsState.taskchain === d.taskchain) {
+                            oComp._stepParamsState = null;
+                        }
                         that.onNavBack();
                     }).catch(function (err) {
                         that.error(err && err.message || String(err));
@@ -132,6 +158,11 @@ sap.ui.define([
             var s = oComp && oComp._stepParamsState;
             if (s && s.taskchain === this._editModel.getProperty("/taskchain") && s.parametersJson) {
                 this._editModel.setProperty("/parameters", s.parametersJson);
+                try {
+                    var oParams = JSON.parse(s.parametersJson);
+                    var iCount = Object.keys(oParams).filter(function (k) { return oParams[k] && oParams[k].length; }).length;
+                    this._editModel.setProperty("/stepParamsSummary", iCount > 0 ? iCount + " step(s) with params configured" : "");
+                } catch (_) {}
             }
         },
 
@@ -226,15 +257,17 @@ sap.ui.define([
                 }
 
                 pPersist.then(function () {
-                    return that.callScheduler("/schedule-once", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify(payload)
-                    });
-                }).then(function () {
                     that._editModel.setProperty("/busy", false);
                     that.toast(that.i18n("msg.created", [d.name || d.taskchain]));
                     that.onNavBack();
+                    // Fire scheduler registration in background — does not block navigation
+                    that.callScheduler("/schedule-once", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(payload)
+                    }).catch(function (err) {
+                        console.warn("[OnDemand] scheduler /schedule-once failed:", err.message || err);
+                    });
                 }).catch(function (err) {
                     that._editModel.setProperty("/busy", false);
                     that.error(err.message || String(err));

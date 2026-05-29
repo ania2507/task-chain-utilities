@@ -160,6 +160,7 @@ sap.ui.define([
                     r.timezone = null;
                     r.nextRunAt = null;
                     r.isActive = false;
+                    r.isPaused = false;
                     r.scheduleText = null;
                     r.typeLabel = null;
                     r.typeState = "None";
@@ -209,14 +210,16 @@ sap.ui.define([
                             || (d.frequency ? d.frequency.charAt(0).toUpperCase() + d.frequency.slice(1).toLowerCase().replace(/_/g, " ") : "")
                             || d.description
                             || "";
+                        var bDspPaused = d.isPaused === true || d.isActive === false;
                         entries.push({
                             kind: "dsp",
                             label: "Standard DSP",
                             description: dspDesc,
                             icon: "sap-icon://product",
-                            state: "Information",
+                            state: bDspPaused ? "Warning" : "Information",
                             nextRunAt: d.nextRunAt,
-                            isActive: d.isActive !== false,
+                            isPaused: bDspPaused,
+                            isActive: !bDspPaused,
                             timezone: d.timezone,
                             spaceId: r.spaceId,
                             taskchain: r.name,
@@ -243,6 +246,7 @@ sap.ui.define([
                         r.hasSchedule = top.kind === "app";
                         r.scheduleID = (top.kind === "app") ? top.scheduleID : null;
                         r.nextRunAt = top.nextRunAt;
+                        r.isPaused = !!top.isPaused;
                         r.timezone = top.timezone;
                         r.isActive = top.isActive;
                         r.typeLabel = top.label;
@@ -728,17 +732,27 @@ sap.ui.define([
         _deleteEntry: function (e) {
             var oModel = this.getModel();
             if (!oModel) return Promise.reject(new Error("No OData model"));
+            var that = this;
+            var sTaskchain = e.taskchain || e.name || "";
+
+            function _clearStepParams() {
+                var oComp = that.getOwnerComponent();
+                if (oComp && oComp._stepParamsState && oComp._stepParamsState.taskchain === sTaskchain) {
+                    oComp._stepParamsState = null;
+                }
+            }
+
             if (e.kind === "app" && e.scheduleID) {
                 var oCtxBind = oModel.bindContext("/Schedule(" + this._key(e.scheduleID) + ")");
                 return oCtxBind.requestObject().then(function () {
                     return oCtxBind.getBoundContext().delete();
-                });
+                }).then(_clearStepParams);
             }
             if ((e.kind === "calendar" || e.kind === "onDemand") && e.calendarEntryID) {
                 var oCalBind = oModel.bindContext("/ScheduleEntry(" + this._key(e.calendarEntryID) + ")");
                 return oCalBind.requestObject().then(function () {
                     return oCalBind.getBoundContext().delete();
-                });
+                }).then(_clearStepParams);
             }
             return Promise.reject(new Error("This schedule cannot be deleted from the app."));
         },

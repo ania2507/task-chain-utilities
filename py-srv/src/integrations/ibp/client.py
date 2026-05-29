@@ -109,7 +109,10 @@ def _build_param_values_json(parameters: list[Dict[str, Any]]) -> str:
     """
     entries = []
     for p in parameters:
-        name = p["name"]
+        # Accept both IBP format {"name":...} and our UI format {"key":...}
+        name = p.get("name") or p.get("key")
+        if not name:
+            continue
         t_values = []
         for v in p.get("values", []):
             t_values.append({
@@ -119,7 +122,8 @@ def _build_param_values_json(parameters: list[Dict[str, Any]]) -> str:
                 "HIGH": str(v.get("high", "")),
             })
         if not t_values:
-            t_values.append({"SIGN": "I", "OPTION": "EQ", "LOW": str(p.get("value", "")), "HIGH": ""})
+            raw_val = p.get("value") if p.get("value") is not None else p.get("low", "")
+            t_values.append({"SIGN": "I", "OPTION": "EQ", "LOW": str(raw_val), "HIGH": ""})
         entries.append({"NAME": name, "T_VALUE": t_values})
     return json.dumps({"VALUES": entries}, separators=(",", ":"))
 
@@ -157,8 +161,16 @@ class IBPJobClient(BaseJobClient):
         path = f"JobTemplateRead?JobTemplateName='{quote(template_name, safe='')}'"
         resp = self._odata.get(path)
         data = resp.json()
-        raw = data.get("d", {}).get("TemplateData", "{}")
-        return json.loads(raw)
+        d = data.get("d", {})
+        raw = d.get("TemplateData", "{}")
+        parsed = json.loads(raw)
+        # Inject the full OData entity keys (excluding TemplateData) so callers
+        # can inspect additional fields (e.g. selection condition texts, global var descriptions)
+        parsed["_odata_extra"] = {
+            k: v for k, v in d.items()
+            if k not in ("TemplateData", "__metadata") and not isinstance(v, dict)
+        }
+        return parsed
 
     # ------------------------------------------------------------------
     # BaseJobClient interface

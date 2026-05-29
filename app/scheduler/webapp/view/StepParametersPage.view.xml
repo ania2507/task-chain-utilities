@@ -31,19 +31,17 @@
                         <l:SplitterLayoutData size="360px"/>
                     </layoutData>
                     <content>
-                        <List items="{edit>/steps}" mode="SingleSelectMaster"
-                              selectionChange=".onStepSelect"
+                        <List items="{edit>/steps}" mode="None"
                               noDataText="{= ${edit>/targetType} === 'IBP' ? 'No steps found in the IBP job template' : 'No steps available — the task chain may not have run yet' }">
                             <ObjectListItem
                                 title="{edit>name}"
                                 intro="{edit>order}"
-                                selected="{edit>selected}"
                                 type="Active"
                                 press=".onStepPress">
                                 <attributes>
                                     <ObjectAttribute text="{= ${edit>businessName} || ${edit>name} }"/>
                                     <ObjectAttribute text="{edit>description}" visible="{= !!${edit>description} }"/>
-                                    <ObjectAttribute text="{= ${edit>params}.length + ' params'}"/>
+                                    <ObjectAttribute text="{ parts: [{path: 'edit>params'}, {path: 'edit>ibpSteps'}], formatter: '.formatStepParamCount' }"/>
                                 </attributes>
                             </ObjectListItem>
                         </List>
@@ -123,14 +121,14 @@
                                     <layoutData>
                                         <l:SplitterLayoutData size="340px"/>
                                     </layoutData>
-                                    <List items="{edit>/ibpSteps}" mode="SingleSelectMaster"
-                                          selectionChange=".onIbpStepSelect"
+                                    <List items="{edit>/ibpSteps}" mode="None"
                                           noDataText="{= ${edit>/ibpLoading} ? 'Loading...' : 'No steps found in IBP template' }">
                                         <StandardListItem
                                             title="{edit>name}"
                                             description="{edit>description}"
                                             info="{= (${edit>params}.length || 0) + ' params'}"
                                             infoState="{= ${edit>params}.length > 0 ? 'Success' : 'None'}"
+                                            highlight="{= ${edit>name} === ${edit>/selectedIbpStepName} ? 'Information' : 'None' }"
                                             type="Active"
                                             press=".onIbpStepPress"/>
                                     </List>
@@ -142,6 +140,7 @@
                                         <Table items="{edit>/selectedIbpStepParams}" noDataText="No parameters yet">
                                             <columns>
                                                 <Column><Text text="Key"/></Column>
+                                                <Column><Text text="Description"/></Column>
                                                 <Column><Text text="Value"/></Column>
                                                 <Column hAlign="Center" width="5rem"><Text text="Active"/></Column>
                                                 <Column hAlign="End" width="6rem"><Text text=""/></Column>
@@ -149,6 +148,7 @@
                                             <ColumnListItem>
                                                 <cells>
                                                     <Text text="{edit>key}"/>
+                                                    <Text text="{edit>description}" class="sapUiSmallFontSize"/>
                                                     <Text text="{edit>value}"/>
                                                     <core:Icon src="{= ${edit>active} ? 'sap-icon://accept' : 'sap-icon://decline' }"
                                                                color="{= ${edit>active} ? '#2ecc71' : '#bdc3c7' }"/>
@@ -162,6 +162,8 @@
                                         <HBox alignItems="Center" class="sapUiSmallMarginTop" wrap="Wrap">
                                             <Label text="Key:" width="4rem"/>
                                             <Input value="{edit>/newIbpParam/key}" width="12rem" placeholder="param key"/>
+                                            <Button icon="sap-icon://value-help" type="Transparent"
+                                                    press=".onIbpKeyValueHelp" tooltip="Match code — select from available IBP parameters"/>
                                             <Label text="Value:" width="4rem" class="sapUiTinyMarginBegin"/>
                                             <Input value="{edit>/newIbpParam/value}" width="12rem" placeholder="param value"/>
                                             <CheckBox selected="{edit>/newIbpParam/active}" text="Active" class="sapUiTinyMarginBegin"/>

@@ -109,6 +109,12 @@
                                 type="Emphasized"
                                 press=".onConfigureStepParameters"
                                 class="sapUiLargeMarginTop"/>
+                        <ObjectStatus
+                            text="{edit>/stepParamsSummary}"
+                            state="Success"
+                            icon="sap-icon://accept"
+                            visible="{= !!${edit>/stepParamsSummary} }"
+                            class="sapUiTinyMarginTop"/>
                     </VBox>
                 </Panel>
 

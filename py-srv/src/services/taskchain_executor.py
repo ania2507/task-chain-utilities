@@ -17,6 +17,12 @@ from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+# Pending step-parameters registered by the scheduler when it fires a task
+# chain run.  Keyed by taskchain name so the /v1/jobs/launch endpoint can
+# look them up when DSP's API task calls in (expects {"taskchain": "..."} in
+# the request body).  Entries are consumed once, preventing stale look-ups.
+_PENDING_STEP_PARAMS: Dict[str, Any] = {}
+_PENDING_STEP_PARAMS_LOCK = threading.Lock()
 
 
 class TaskchainStatus(Enum):
@@ -54,6 +60,18 @@ class TaskchainExecutor:
             logger.warning("TaskchainExecutor using simulated DSP execution (DSP_SIMULATE=true)")
         else:
             logger.info("TaskchainExecutor initialized (DSP via BTP Destination)")
+
+    @staticmethod
+    def store_pending_step_params(taskchain: str, params: Dict[str, Any]) -> None:
+        """Store step-level params for *taskchain* so the job-launch endpoint can pick them up."""
+        with _PENDING_STEP_PARAMS_LOCK:
+            _PENDING_STEP_PARAMS[taskchain] = params
+
+    @staticmethod
+    def consume_pending_step_params(taskchain: str) -> Optional[Dict[str, Any]]:
+        """Return and remove the stored step params for *taskchain*, or None if absent."""
+        with _PENDING_STEP_PARAMS_LOCK:
+            return _PENDING_STEP_PARAMS.pop(taskchain, None)
 
     @staticmethod
     def make_execution_id(space: str, logid: str) -> str:
@@ -97,6 +115,10 @@ class TaskchainExecutor:
 
             threading.Thread(target=_runner, daemon=True).start()
             return execution_id
+
+        # Store step params so the API-task's /v1/jobs/launch call can pick them up.
+        if payload:
+            TaskchainExecutor.store_pending_step_params(taskchain_name, payload)
 
         logid = self._dsp_run_task_chain(spaceid, taskchain_name)
         if not logid or str(logid).strip().lower() == "none":

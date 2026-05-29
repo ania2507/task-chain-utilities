@@ -986,6 +986,58 @@ def get_taskchain_dag():
                 except Exception as _e:  # metadata view may be missing — fall back silently
                     business_name_map = {}
 
+            # Historical fallback: for objectIds still missing from ibp_template_map,
+            # search previous COMPLETED runs' viewResponse logs.
+            # This handles cases where the latest run failed and the error response
+            # didn't carry the template_name (so the current-run log scan missed it).
+            missing_obj_ids = [oid for oid in object_ids if oid and not ibp_template_map.get(oid)]
+            if missing_obj_ids:
+                try:
+                    ph_miss = ",".join(["?"] * len(missing_obj_ids))
+                    prev_run_rows = db_query_executor.query(
+                        f'SELECT "OBJECT_ID", "TASK_LOG_ID" '
+                        f'FROM "ORCHESTRATION"."3VR_DWC_TASK_LOGS_01" '
+                        f'WHERE "OBJECT_ID" IN ({ph_miss}) AND "STATUS" = \'COMPLETED\' '
+                        f'ORDER BY "END_TIME" DESC LIMIT {len(missing_obj_ids) * 5}',
+                        tuple(missing_obj_ids)
+                    )
+                    tid_to_oid: dict = {}
+                    for pr in prev_run_rows or []:
+                        tid = pr.get("TASK_LOG_ID") or pr.get("task_log_id")
+                        oid = pr.get("OBJECT_ID") or pr.get("object_id")
+                        if tid and oid and oid not in ibp_template_map:
+                            tid_to_oid.setdefault(tid, oid)
+                    if tid_to_oid:
+                        ph_tid = ",".join(["?"] * len(tid_to_oid))
+                        hist_msg_rows = db_query_executor.query(
+                            f'SELECT "TASK_LOG_ID", "DETAILS" '
+                            f'FROM "ORCHESTRATION"."3VR_DWC_TASK_LOG_MESSAGES_01" '
+                            f'WHERE "TASK_LOG_ID" IN ({ph_tid}) '
+                            f'AND "MESSAGE_BUNDLE_KEY" = \'viewResponse\'',
+                            tuple(tid_to_oid.keys())
+                        )
+                        for hmr in hist_msg_rows or []:
+                            tid = hmr.get("TASK_LOG_ID") or hmr.get("task_log_id")
+                            oid = tid_to_oid.get(tid)
+                            if not oid or ibp_template_map.get(oid):
+                                continue
+                            details_raw = hmr.get("DETAILS") or hmr.get("details")
+                            if not details_raw:
+                                continue
+                            try:
+                                det = json.loads(details_raw) if isinstance(details_raw, str) else details_raw
+                                pld_raw = det.get("payload")
+                                if pld_raw:
+                                    pld = json.loads(pld_raw) if isinstance(pld_raw, str) else pld_raw
+                                    inner = pld.get("details") or {}
+                                    tpl2 = inner.get("template_name") or inner.get("job_text")
+                                    if tpl2 and isinstance(tpl2, str) and tpl2.strip():
+                                        ibp_template_map[oid] = tpl2.strip()
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
             for node in raw_nodes:
                 node_id = node.get("id")
                 node_type = node.get("type", "TASK")
@@ -1180,13 +1232,103 @@ def get_taskchain_schedules():
         except Exception:
             return None
 
+    def _compute_next_run_from_frequency_json(frequency_str, is_active):
+        """Compute next run from DSP Simple Schedule stored as a JSON string in FREQUENCY.
+
+        DSP format: {"interval": 1, "type": "DAILY", "startDate": "2026-02-22T12:30:00.000Z"}
+        startDate holds the exact UTC datetime of each recurring run.
+        """
+        if is_active is False:
+            return None
+        if not frequency_str or not isinstance(frequency_str, str):
+            return None
+        if not frequency_str.strip().startswith("{"):
+            return None
+        try:
+            import json as _js
+            freq = _js.loads(frequency_str)
+        except Exception:
+            return None
+        freq_type = str(freq.get("type") or "").strip().upper()
+        interval_val = int(freq.get("interval") or 1)
+        start_str = freq.get("startDate") or ""
+        if not start_str:
+            return None
+        try:
+            from datetime import timedelta as _td, timezone as _utc
+            # Normalise the ISO string (remove trailing .000 before Z)
+            start_str_clean = start_str.replace(".000Z", "+00:00").replace("Z", "+00:00")
+            start_dt = _dt.fromisoformat(start_str_clean)
+            now = _dt.now(_utc.utc)
+            if freq_type in ("DAILY", "DAY", "DAYS"):
+                delta = _td(days=interval_val)
+            elif freq_type in ("WEEKLY", "WEEK", "WEEKS"):
+                delta = _td(weeks=interval_val)
+            elif freq_type in ("MONTHLY", "MONTH", "MONTHS"):
+                delta = _td(days=30 * interval_val)
+            else:
+                return None
+            nxt = start_dt
+            while nxt <= now:
+                nxt += delta
+            return nxt.isoformat()
+        except Exception:
+            return None
+
+    def _compute_next_run_simple(frequency, at_time, interval, tz_name, is_active):
+        """Compute next run for DSP 'Simple Schedule' (no cron expression).
+
+        frequency: e.g. 'DAILY', 'WEEKLY', 'MONTHLY'
+        at_time:   e.g. '13:30' or '13:30:00'
+        interval:  recurrence interval (1 = every day/week/month)
+        """
+        if is_active is False:
+            return None
+        if not frequency or not at_time:
+            return None
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(tz_name) if tz_name else ZoneInfo("UTC")
+        except Exception:
+            tz = None
+        try:
+            freq_upper = str(frequency).strip().upper()
+            time_parts = str(at_time).strip().split(":")
+            run_hour = int(time_parts[0])
+            run_min = int(time_parts[1]) if len(time_parts) > 1 else 0
+            now = _dt.now(tz) if tz else _dt.utcnow()
+            # Start candidate at today at the run time
+            candidate = now.replace(hour=run_hour, minute=run_min, second=0, microsecond=0)
+            delta_days = int(interval or 1)
+            if freq_upper in ("DAILY", "DAY", "DAYS", "D"):
+                if candidate <= now:
+                    candidate = candidate + __import__("datetime").timedelta(days=delta_days)
+            elif freq_upper in ("WEEKLY", "WEEK", "WEEKS", "W"):
+                if candidate <= now:
+                    candidate = candidate + __import__("datetime").timedelta(weeks=delta_days)
+            elif freq_upper in ("MONTHLY", "MONTH", "MONTHS", "M"):
+                # Approximate: add 30 days per interval
+                if candidate <= now:
+                    candidate = candidate + __import__("datetime").timedelta(days=30 * delta_days)
+            else:
+                return None
+            return candidate.isoformat()
+        except Exception:
+            return None
+
     schedules = []
     for r in rows or []:
         cron_expr = _ci_get(r, "cronExpression", "CRON", "CRON_EXPRESSION", "SCHEDULE_PATTERN", "PATTERN", "SCHEDULE")
         tz_name = _ci_get(r, "timezone", "TZ_NAME", "TIMEZONE", "TIME_ZONE", "CRON_TIMEZONE")
         is_active = _to_bool_active(_ci_get(r, "isActive", "ACTIVATION_STATUS", "IS_ACTIVE", "ACTIVE", "STATUS"))
+        frequency = _ci_get(r, "frequency", "FREQUENCY")
+        at_time = _ci_get(r, "atTime", "AT_TIME", "TIME_OF_DAY", "RUN_TIME", "SCHEDULE_TIME", "AT", "TIME")
+        interval = _ci_get(r, "interval", "INTERVAL", "EVERY", "RECURRENCE_INTERVAL", "SCHEDULE_INTERVAL")
         view_next = _isoformat(_ci_get(r, "nextRunAt", "NEXT_RUN_AT", "NEXT_EXECUTION", "NEXT_EXECUTION_AT", "NEXT_RUN_TIME", "NEXT_TRIGGER_AT", "NEXT_OCCURRENCE"))
-        next_run = view_next or _compute_next_run(cron_expr, tz_name, is_active)
+        next_run = (view_next
+                    or _compute_next_run(cron_expr, tz_name, is_active)
+                    or _compute_next_run_from_frequency_json(frequency, is_active)
+                    or _compute_next_run_simple(frequency, at_time, interval, tz_name, is_active))
         schedules.append({
             "taskchain": _ci_get(r, "taskchain", "OBJECT_ID", "OBJECT_NAME", "TASK_NAME"),
             "spaceId": _ci_get(r, "spaceId", "SPACE_ID"),
@@ -1199,11 +1341,20 @@ def get_taskchain_schedules():
             "validTo": _isoformat(_ci_get(r, "validTo", "VALID_TO")),
             "nextRunAt": next_run,
             "isActive": is_active,
+            "isPaused": is_active is False,
             "activationStatus": _ci_get(r, "activationStatus", "ACTIVATION_STATUS"),
             "scheduleId": _ci_get(r, "scheduleId", "SCHEDULE_ID"),
             "externalScheduleId": _ci_get(r, "externalScheduleId", "EXTERNAL_SCHEDULE_ID"),
-            "frequency": _ci_get(r, "frequency", "FREQUENCY"),
+            "frequency": frequency,
         })
+
+    # Debug: expose raw column names from the first row so we can identify
+    # the correct aliases for activation_status / at_time / next_run_at.
+    raw_cols = sorted(rows[0].keys()) if rows else []
+    raw_sample = [
+        {k: v for k, v in r.items() if str(v).strip() not in ("", "None", "null")}
+        for r in (rows or [])[:5]
+    ]
 
     return jsonify({
         "success": True,
@@ -1211,6 +1362,8 @@ def get_taskchain_schedules():
         "available": True,
         "data": schedules,
         "rowCount": len(schedules),
+        "_debug_columns": raw_cols,
+        "_debug_sample": raw_sample,
     }), 200
 
 
@@ -1549,5 +1702,105 @@ def delete_data_physical():
     try:
         result = _post_dsp_directexecute(dsp_payload)
         return jsonify(result), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/task-global-vars", methods=["GET"])
+@flask_access_validation(required_scope="read")
+def get_task_global_vars():
+    """Return global variable definitions ($G_*) for a DSP task.
+
+    Reads the deployment metadata JSON from HANA and scans for global variable
+    definitions so the scheduler UI can show them in the match code.
+
+    Query params:
+    - taskName (required)
+    """
+    from flask import current_app
+    import json as _json
+
+    task_name = (request.args.get("taskName") or "").strip()
+    if not task_name:
+        return jsonify({"error": "taskName is required"}), 400
+
+    def _scan_for_global_vars(obj, found=None, depth=0):
+        if found is None:
+            found = {}
+        if depth > 14:
+            return found
+        if isinstance(obj, list):
+            for item in obj:
+                _scan_for_global_vars(item, found, depth + 1)
+        elif isinstance(obj, dict):
+            raw_name = str(obj.get("name") or obj.get("NAME") or
+                          obj.get("technicalName") or obj.get("TECHNICAL_NAME") or "").strip()
+            name_upper = raw_name.upper()
+            # Match both "$G_SORG" and "G_SORG" (DSP stores without $)
+            if name_upper.startswith("$G_") or name_upper.startswith("G_"):
+                canonical = raw_name if name_upper.startswith("$G_") else ("$" + raw_name)
+                if canonical not in found:
+                    raw_val = (obj.get("value") or obj.get("VALUE") or
+                               obj.get("defaultValue") or obj.get("default") or "")
+                    if isinstance(raw_val, (int, float)):
+                        raw_val = str(raw_val)
+                    elif not isinstance(raw_val, str):
+                        raw_val = ""
+                    desc = str(
+                        obj.get("description") or obj.get("DESCRIPTION") or
+                        obj.get("label") or obj.get("LABEL") or
+                        obj.get("comment") or obj.get("COMMENT") or ""
+                    )
+                    dtype = str(
+                        obj.get("dataType") or obj.get("data_type") or
+                        obj.get("type") or obj.get("TYPE") or ""
+                    )
+                    found[canonical] = {
+                        "name": canonical,
+                        "label": desc,
+                        "currentValue": raw_val,
+                        "dataType": dtype,
+                    }
+            for v in obj.values():
+                if isinstance(v, str) and (v.strip().startswith("{") or v.strip().startswith("[")):
+                    try:
+                        _scan_for_global_vars(_json.loads(v), found, depth + 1)
+                    except Exception:
+                        pass
+                elif isinstance(v, (dict, list)):
+                    _scan_for_global_vars(v, found, depth + 1)
+        return found
+
+    try:
+        db = current_app.extensions["taskchain"]["db_query_executor"]
+        rows = db.query(
+            'SELECT "JSON" FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" '
+            'WHERE "NAME" = ? ORDER BY "DEPLOYED_AT" DESC LIMIT 1',
+            (task_name,)
+        )
+        if not rows:
+            return jsonify({"taskName": task_name, "globalVars": [], "_debug": "no metadata row found"}), 200
+
+        raw = rows[0].get("JSON") or rows[0].get("json") or ""
+        try:
+            metadata = _json.loads(raw) if raw else {}
+        except Exception:
+            metadata = {}
+
+        found = _scan_for_global_vars(metadata)
+        global_vars = sorted(found.values(), key=lambda x: x["name"])
+
+        # Debug: show top-level metadata keys and first 500 chars to diagnose structure
+        debug_info = {
+            "topKeys": list(metadata.keys()) if isinstance(metadata, dict) else [],
+            "rawPreview": raw[:500] if raw else "",
+        }
+
+        return jsonify({
+            "taskName": task_name,
+            "globalVars": global_vars,
+            "_debug": debug_info,
+        }), 200
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500

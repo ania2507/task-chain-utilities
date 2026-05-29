@@ -77,8 +77,12 @@
                                               visible="{= !${page>hasInfo} }"/>
                             </VBox>
 
-                            <Text text="{ path: 'page>nextRunAt', formatter: '.formatDate' }"
-                                  visible="{= ${page>hasInfo} }"/>
+                            <VBox>
+                                <ObjectStatus text="Paused" state="Warning" icon="sap-icon://pause"
+                                              visible="{= !!${page>isPaused} }"/>
+                                <Text text="{ path: 'page>nextRunAt', formatter: '.formatDate' }"
+                                      visible="{= ${page>hasInfo} &amp;&amp; !${page>isPaused} }"/>
+                            </VBox>
 
                             <ObjectStatus
                                 text="{page>typeLabel}"

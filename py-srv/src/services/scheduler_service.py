@@ -339,8 +339,17 @@ class SchedulerService:
         finished_at = datetime.now(timezone.utc).isoformat()
 
         try:
+            import re as _re
+            # SCHEDULEENTRY_ID is a FK to ScheduleEntry.ID (UUID, 36 chars).
+            # Adhoc/once/cron-fallback runs use synthetic IDs that are not UUIDs
+            # and have no corresponding ScheduleEntry row — store NULL instead.
+            _UUID_PAT = _re.compile(
+                r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+                _re.IGNORECASE
+            )
+            sch_entry_id = entry_id if _UUID_PAT.match(entry_id or "") else None
             self._repo.insert_run(
-                schedule_entry_id=entry_id,
+                schedule_entry_id=sch_entry_id,
                 triggered_at=triggered_at,
                 finished_at=finished_at,
                 status=status,

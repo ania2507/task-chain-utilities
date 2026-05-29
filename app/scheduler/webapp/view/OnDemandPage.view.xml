@@ -71,6 +71,12 @@
                                 press=".onConfigureStepParameters"
                                 class="sapUiSmallMarginTop"
                                 width="14rem"/>
+                        <ObjectStatus
+                            text="{edit>/stepParamsSummary}"
+                            state="Success"
+                            icon="sap-icon://accept"
+                            visible="{= !!${edit>/stepParamsSummary} }"
+                            class="sapUiTinyMarginTop"/>
                     </VBox>
                 </content>
             </Panel>

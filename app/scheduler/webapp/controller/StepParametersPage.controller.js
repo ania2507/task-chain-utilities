@@ -7,7 +7,7 @@ sap.ui.define([
 
 
     function _newParam() {
-        return { key: "", value: "", active: true };
+        return { key: "", value: "", active: true, description: "" };
     }
 
     return BaseController.extend("scheduler.controller.StepParametersPage", {
@@ -27,6 +27,7 @@ sap.ui.define([
                 ibpTemplateName: "",
                 ibpSteps: [],
                 ibpLoading: false,
+                ibpGlobalVars: [],
                 selectedIbpStepIdx: null,
                 selectedIbpStepName: "",
                 selectedIbpStepParams: [],
@@ -50,7 +51,9 @@ sap.ui.define([
                 : null;
 
             var bHasCached = !!(oExisting && oExisting.steps && oExisting.steps.length);
-            var aSteps = bHasCached ? oExisting.steps : [];
+            var aSteps = bHasCached ? oExisting.steps.map(function (s) {
+                var c = Object.assign({}, s); delete c.selected; return c;
+            }) : [];
 
             this._editModel.setData({
                 taskchain: oQuery.taskchain || "",
@@ -64,7 +67,15 @@ sap.ui.define([
                 selectedStepName: "",
                 selectedStepParams: [],
                 newParam: _newParam(),
-                busy: !bHasCached
+                busy: !bHasCached,
+                ibpTemplateName: "",
+                ibpSteps: [],
+                ibpLoading: false,
+                ibpGlobalVars: [],
+                selectedIbpStepIdx: null,
+                selectedIbpStepName: "",
+                selectedIbpStepParams: [],
+                newIbpParam: _newParam()
             });
 
             if (!bHasCached) {
@@ -188,11 +199,66 @@ sap.ui.define([
                 })
                 .then(function (aSteps) {
                     that._editModel.setProperty("/steps", aSteps || []);
+                    that._applyParamsJsonToSteps();
+                    // Pre-load IBP sub-steps in background so param count is visible immediately
+                    (aSteps || []).forEach(function (step, idx) {
+                        if (step.ibpTemplateName) {
+                            that._preloadIbpStepsForDspStep(idx, step.ibpTemplateName, step.name);
+                        }
+                    });
                 })
                 .catch(function () {
                     that._editModel.setProperty("/steps", []);
                 })
                 .then(function () { that._editModel.setProperty("/busy", false); });
+        },
+
+        _preloadIbpStepsForDspStep: function (iDspIdx, sTemplate, sStepName) {
+            var that = this;
+            // Consume any restored IBP params for this DSP step before the fetch
+            var oExistingByName = {};
+            var oRestored = this._restoredIbpParams && this._restoredIbpParams[sStepName];
+            if (oRestored) {
+                Object.keys(oRestored).forEach(function (n) { oExistingByName[n] = oRestored[n]; });
+                delete this._restoredIbpParams[sStepName];
+            }
+            fetch("v1/jobs/ibp/template-steps", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                body: JSON.stringify({ template_name: sTemplate })
+            })
+                .then(function (res) { return res.json(); })
+                .then(function (data) {
+                    if (data.error) return;
+                    var aIbpSteps = (Array.isArray(data.steps) ? data.steps : []).map(function (s) {
+                        var aExisting = oExistingByName[s.name] || [];
+                        var aParams = aExisting;
+                        if (!aParams.length && Array.isArray(s.globalVars) && s.globalVars.length) {
+                            aParams = s.globalVars
+                                .filter(function (g) { return g.name; })
+                                .map(function (g) {
+                                    return {
+                                        key: g.name,
+                                        value: g.currentValue || "",
+                                        active: true,
+                                        description: g.label || "",
+                                        ibpParamName: g.ibpParamName || "",
+                                        ibpVarNameParam: g.ibpVarNameParam || ""
+                                    };
+                                });
+                        }
+                        return Object.assign({}, s, { params: aParams });
+                    });
+                    // Update the DSP step's ibpSteps only if not already loaded by user interaction
+                    var aAllSteps = that._editModel.getProperty("/steps") || [];
+                    if (iDspIdx < aAllSteps.length && !(aAllSteps[iDspIdx].ibpSteps || []).length) {
+                        var aUpdated = aAllSteps.map(function (s, i) {
+                            return i === iDspIdx ? Object.assign({}, s, { ibpSteps: aIbpSteps }) : s;
+                        });
+                        that._editModel.setProperty("/steps", aUpdated);
+                    }
+                })
+                .catch(function () {});
         },
 
         _parseReturnQuery: function (oQuery) {
@@ -208,6 +274,60 @@ sap.ui.define([
             var sReturnTo = this._editModel.getProperty("/returnTo") || "scheduleList";
             var oReturnQuery = this._editModel.getProperty("/returnQuery") || {};
             this.getRouter().navTo(sReturnTo, { "?query": oReturnQuery }, true);
+        },
+
+        // Apply parametersJson from _stepParamsState (loaded from OData) onto freshly
+        // loaded DSP steps.  IBP sub-step params are NOT injected into ibpSteps here
+        // (that would hide the other IBP steps that had no params).  Instead they are
+        // stored in _restoredIbpParams so _doLoadIbpSteps can merge them when the
+        // full IBP template step list is fetched.
+        _applyParamsJsonToSteps: function () {
+            var oComp = this.getOwnerComponent();
+            var s = oComp && oComp._stepParamsState;
+            if (!s || !s.parametersJson || (s.steps && s.steps.length)) return;
+            try {
+                var oParams = JSON.parse(s.parametersJson);
+                var aSteps = (this._editModel.getProperty("/steps") || []).slice();
+                var bChanged = false;
+                this._restoredIbpParams = {};
+                var that = this;
+
+                aSteps.forEach(function (step, idx) {
+                    // Current format: { "DSPStep": [{key,value,active,step?}] }
+                    var allParams = oParams[step.name];
+
+                    // Legacy format: { "DSPStep::IBPStep": [{key,value,active}] }
+                    if (!allParams) {
+                        allParams = [];
+                        Object.keys(oParams).forEach(function (k) {
+                            var prefix = step.name + "::";
+                            if (k.indexOf(prefix) === 0) {
+                                var ibpStepName = k.substring(prefix.length);
+                                (oParams[k] || []).forEach(function (p) {
+                                    allParams.push(Object.assign({}, p, { step: ibpStepName }));
+                                });
+                            }
+                        });
+                    }
+
+                    if (!allParams || !allParams.length) return;
+                    bChanged = true;
+
+                    var dspParams = allParams.filter(function (p) { return !p.step; });
+                    // IBP sub-step params → stored in _restoredIbpParams, not in ibpSteps,
+                    // so _doLoadIbpSteps still fetches all template steps from IBP.
+                    allParams.filter(function (p) { return p.step; }).forEach(function (p) {
+                        if (!that._restoredIbpParams[step.name]) that._restoredIbpParams[step.name] = {};
+                        var map = that._restoredIbpParams[step.name];
+                        if (!map[p.step]) map[p.step] = [];
+                        map[p.step].push({ key: p.key, value: p.value, active: p.active !== false, description: p.description || "", ibpParamName: p.ibpParamName || "", ibpVarNameParam: p.ibpVarNameParam || "" });
+                    });
+                    aSteps[idx] = Object.assign({}, step, { params: dspParams });
+                });
+                if (bChanged) {
+                    this._editModel.setProperty("/steps", aSteps);
+                }
+            } catch (_) {}
         },
 
         onStepSelect: function (oEvt) {
@@ -312,8 +432,29 @@ sap.ui.define([
 
         _doLoadIbpSteps: function (sTemplate) {
             var that = this;
+            // Capture existing params BEFORE clearing /ibpSteps.
+            // Priority: cached ibpSteps on the current DSP step (survive step-switching),
+            // falling back to the current /ibpSteps working list.
+            var oCurPre = this._currentStep();
+            var aPre = (oCurPre && this._editModel.getProperty("/steps/" + oCurPre.idx + "/ibpSteps"))
+                || this._editModel.getProperty("/ibpSteps") || [];
+            var oExistingByName = {};
+            aPre.forEach(function (s) { oExistingByName[s.name] = s.params || []; });
+
             this._editModel.setProperty("/ibpLoading", true);
             this._editModel.setProperty("/ibpSteps", []);
+            var oCurForRestore = this._currentStep();
+            var oRestoredForStep = oCurForRestore && this._restoredIbpParams
+                && this._restoredIbpParams[oCurForRestore.step.name];
+            if (oRestoredForStep) {
+                // Merge restored params into oExistingByName and consume the entry
+                Object.keys(oRestoredForStep).forEach(function (n) {
+                    if (!oExistingByName[n] || !oExistingByName[n].length) {
+                        oExistingByName[n] = oRestoredForStep[n];
+                    }
+                });
+                delete this._restoredIbpParams[oCurForRestore.step.name];
+            }
             fetch("v1/jobs/ibp/template-steps", {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "Accept": "application/json" },
@@ -325,13 +466,30 @@ sap.ui.define([
                         MessageToast.show("IBP error: " + data.error);
                         return;
                     }
-                    // Preserve existing params for steps that were already configured
-                    var aExisting = that._editModel.getProperty("/ibpSteps") || [];
-                    var oExistingByName = {};
-                    aExisting.forEach(function(s) { oExistingByName[s.name] = s.params || []; });
-
-                    var aSteps = (Array.isArray(data.steps) ? data.steps : []).map(function(s) {
-                        return Object.assign({}, s, { params: oExistingByName[s.name] || [] });
+                    // Store global vars ($G_*) at template level for the match code
+                    var aTemplateGlobalVars = data.globalVars || [];
+                    that._editModel.setProperty("/ibpGlobalVars", aTemplateGlobalVars);
+                    var aSteps = (Array.isArray(data.steps) ? data.steps : []).map(function (s) {
+                        var aExisting = oExistingByName[s.name] || [];
+                        var aParams = aExisting;
+                        // Pre-populate only from step-level globalVars (extracted per-step
+                        // from IBP seq_param_val) — NOT from template-level to avoid adding
+                        // vars to steps that don't define them (e.g. Snapshot Operator).
+                        if (!aParams.length && Array.isArray(s.globalVars) && s.globalVars.length) {
+                            aParams = s.globalVars
+                                .filter(function (g) { return g.name; })
+                                .map(function (g) {
+                                    return {
+                                        key: g.name,
+                                        value: g.currentValue || "",
+                                        active: true,
+                                        description: g.label || "",
+                                        ibpParamName: g.ibpParamName || "",
+                                        ibpVarNameParam: g.ibpVarNameParam || ""
+                                    };
+                                });
+                        }
+                        return Object.assign({}, s, { params: aParams });
                     });
                     that._editModel.setProperty("/ibpSteps", aSteps);
                     // Persist in the current DSP step so switching steps doesn't lose params
@@ -367,6 +525,55 @@ sap.ui.define([
             this._editModel.setProperty("/selectedIbpStepName", oStep.name || "");
             this._editModel.setProperty("/selectedIbpStepParams", oStep.params || []);
             this._editModel.setProperty("/newIbpParam", _newParam());
+
+            // Always fetch DSP descriptions — they're more accurate than IBP's
+            // generic labels ("Variable Name 1" → "All Sales Organizations")
+            this._loadDspGlobalVars(iIdx, oStep.name);
+        },
+
+        _loadDspGlobalVars: function (iIbpIdx, sTaskName) {
+            if (!sTaskName) return;
+            var that = this;
+            fetch("v1/dsp/task-global-vars?taskName=" + encodeURIComponent(sTaskName), {
+                headers: { "Accept": "application/json" }
+            })
+                .then(function (res) { return res.json(); })
+                .then(function (data) {
+                    var aVars = data.globalVars || [];
+                    // Build name→description map from DSP metadata (better descriptions than IBP labels)
+                    var oDescMap = {};
+                    aVars.forEach(function (v) { if (v.name && v.label) oDescMap[v.name] = v.label; });
+
+                    function _patchDesc(aParams) {
+                        return aParams.map(function (p) {
+                            var sDesc = oDescMap[p.key];
+                            return sDesc ? Object.assign({}, p, { description: sDesc }) : p;
+                        });
+                    }
+
+                    // Cache on the ibpStep object
+                    var aIbp = (that._editModel.getProperty("/ibpSteps") || []).map(function (s, i) {
+                        if (i !== iIbpIdx) return s;
+                        return Object.assign({}, s, { globalVars: aVars, params: _patchDesc(s.params || []) });
+                    });
+                    that._editModel.setProperty("/ibpSteps", aIbp);
+
+                    var oCur = that._currentStep();
+                    if (oCur) {
+                        var aDsp = (that._editModel.getProperty("/steps/" + oCur.idx + "/ibpSteps") || []).map(function (s, i) {
+                            if (i !== iIbpIdx) return s;
+                            return Object.assign({}, s, { globalVars: aVars, params: _patchDesc(s.params || []) });
+                        });
+                        that._editModel.setProperty("/steps/" + oCur.idx + "/ibpSteps", aDsp);
+                    }
+
+                    // Also patch selectedIbpStepParams if this step is currently selected
+                    if (that._editModel.getProperty("/selectedIbpStepIdx") === iIbpIdx) {
+                        var aPatched = _patchDesc(that._editModel.getProperty("/selectedIbpStepParams") || []);
+                        that._editModel.setProperty("/selectedIbpStepParams", aPatched);
+                    }
+                })
+                .catch(function () {});
         },
 
         _currentIbpStep: function () {
@@ -388,10 +595,8 @@ sap.ui.define([
             var oCurIbp = this._currentIbpStep();
             if (!oCurIbp) { MessageToast.show("Select an IBP step first"); return; }
             var aParams = (oCurIbp.step.params || []).slice();
-            aParams.push({ key: String(oNew.key).trim(), value: oNew.value == null ? "" : String(oNew.value), active: !!oNew.active });
-            this._editModel.setProperty("/ibpSteps/" + oCurIbp.idx + "/params", aParams);
-            var oCurDsp = this._currentStep();
-            if (oCurDsp) { this._editModel.setProperty("/steps/" + oCurDsp.idx + "/ibpSteps/" + oCurIbp.idx + "/params", aParams); }
+            aParams.push({ key: String(oNew.key).trim(), value: oNew.value == null ? "" : String(oNew.value), active: !!oNew.active, description: oNew.description || "", ibpParamName: oNew.ibpParamName || "", ibpVarNameParam: oNew.ibpVarNameParam || "" });
+            this._replaceIbpStepParams(oCurIbp.idx, aParams);
             this._editModel.setProperty("/selectedIbpStepParams", aParams);
             this._editModel.setProperty("/newIbpParam", _newParam());
         },
@@ -400,7 +605,9 @@ sap.ui.define([
             var oCtx = oEvt.getSource().getBindingContext("edit");
             if (!oCtx) return;
             var oRow = oCtx.getObject();
-            this._editModel.setProperty("/newIbpParam", { key: oRow.key, value: oRow.value, active: !!oRow.active });
+            this._editModel.setProperty("/newIbpParam", {
+                key: oRow.key, value: oRow.value, active: !!oRow.active, description: oRow.description || "", ibpParamName: oRow.ibpParamName || "", ibpVarNameParam: oRow.ibpVarNameParam || ""
+            });
             this.onDeleteIbpStepParam(oEvt);
         },
 
@@ -410,16 +617,134 @@ sap.ui.define([
             var iIdx = parseInt(oCtx.getPath().split("/").pop(), 10);
             var oCurIbp = this._currentIbpStep();
             if (!oCurIbp || isNaN(iIdx)) return;
-            var aParams = (oCurIbp.step.params || []).slice();
+            // Use /selectedIbpStepParams as source of truth — it's exactly what
+            // the table shows and avoids any sync gap with ibpSteps[idx].params.
+            var aParams = (this._editModel.getProperty("/selectedIbpStepParams") || []).slice();
             aParams.splice(iIdx, 1);
-            this._editModel.setProperty("/ibpSteps/" + oCurIbp.idx + "/params", aParams);
+            this._replaceIbpStepParams(oCurIbp.idx, aParams);
+            this._editModel.setProperty("/selectedIbpStepParams", aParams);
+        },
+
+        // Replace the params of IBP sub-step at iIbpIdx with a NEW array so the
+        // composite binding on edit>ibpSteps in the DSP steps list re-evaluates.
+        _replaceIbpStepParams: function (iIbpIdx, aParams) {
+            // Update the working /ibpSteps list (new array → triggers binding refresh)
+            var aIbp = (this._editModel.getProperty("/ibpSteps") || []).map(function (s, i) {
+                return i === iIbpIdx ? Object.assign({}, s, { params: aParams }) : s;
+            });
+            this._editModel.setProperty("/ibpSteps", aIbp);
+            // Mirror into the owning DSP step so the count survives step switching
             var oCurDsp = this._currentStep();
-            if (oCurDsp) { this._editModel.setProperty("/steps/" + oCurDsp.idx + "/ibpSteps/" + oCurIbp.idx + "/params", aParams); }
+            if (oCurDsp) {
+                var aDspIbp = (this._editModel.getProperty("/steps/" + oCurDsp.idx + "/ibpSteps") || []).map(function (s, i) {
+                    return i === iIbpIdx ? Object.assign({}, s, { params: aParams }) : s;
+                });
+                this._editModel.setProperty("/steps/" + oCurDsp.idx + "/ibpSteps", aDspIbp);
+            }
+        },
+
+        onToggleIbpParam: function (oEvt) {
+            var oCtx = oEvt.getSource().getBindingContext("edit");
+            if (!oCtx) return;
+            var sPath = oCtx.getPath();
+            var iIdx = parseInt(sPath.split("/").pop(), 10);
+            var oCurIbp = this._currentIbpStep();
+            if (!oCurIbp || isNaN(iIdx)) return;
+            var aParams = (oCurIbp.step.params || []).slice();
+            aParams[iIdx] = Object.assign({}, aParams[iIdx], { active: !aParams[iIdx].active });
+            this._replaceIbpStepParams(oCurIbp.idx, aParams);
             this._editModel.setProperty("/selectedIbpStepParams", aParams);
         },
 
         onResetIbpNewParam: function () {
             this._editModel.setProperty("/newIbpParam", _newParam());
+        },
+
+        onIbpKeyValueHelp: function () {
+            var oCurIbp = this._currentIbpStep();
+            if (!oCurIbp) {
+                MessageToast.show("Select an IBP step first");
+                return;
+            }
+
+            // Global vars are per-step (extracted from that step's seq_param_val in IBP)
+            var aGlobalVars = oCurIbp.step.globalVars || [];
+
+            if (!aGlobalVars.length) {
+                MessageToast.show("No global variables ($G_*) found for this IBP step");
+                return;
+            }
+
+            var aDisplay = aGlobalVars;
+
+            var that = this;
+            var oVhModel = new JSONModel({ params: aDisplay });
+
+            if (this._oIbpKeyVHD) {
+                this._oIbpKeyVHD.setModel(oVhModel, "vh");
+                this._oIbpKeyVHD.open();
+                return;
+            }
+
+            sap.ui.require([
+                "sap/m/SelectDialog",
+                "sap/m/StandardListItem",
+                "sap/ui/model/Filter",
+                "sap/ui/model/FilterOperator"
+            ], function (SelectDialog, StandardListItem, Filter, FilterOperator) {
+                that._oIbpKeyVHD = new SelectDialog({
+                    title: "Global Variables — IBP",
+                    rememberSelections: false,
+                    confirm: function (oEvt) {
+                        var oItem = oEvt.getParameter("selectedItem");
+                        if (oItem) {
+                            var oCtx = oItem.getBindingContext("vh");
+                            if (oCtx) {
+                                that._editModel.setProperty("/newIbpParam/key", oCtx.getProperty("name"));
+                                that._editModel.setProperty("/newIbpParam/ibpParamName", oCtx.getProperty("ibpParamName") || "");
+                                that._editModel.setProperty("/newIbpParam/ibpVarNameParam", oCtx.getProperty("ibpVarNameParam") || "");
+                                var sVal = oCtx.getProperty("currentValue");
+                                if (sVal) {
+                                    that._editModel.setProperty("/newIbpParam/value", sVal);
+                                }
+                            }
+                        }
+                    },
+                    liveChange: function (oEvt) {
+                        var sVal = oEvt.getParameter("value");
+                        var oBinding = that._oIbpKeyVHD.getBinding("items");
+                        if (oBinding) {
+                            oBinding.filter(sVal ? [new Filter({
+                                filters: [
+                                    new Filter("name", FilterOperator.Contains, sVal),
+                                    new Filter("label", FilterOperator.Contains, sVal),
+                                    new Filter("currentValue", FilterOperator.Contains, sVal)
+                                ],
+                                and: false
+                            })] : []);
+                        }
+                    }
+                });
+                that.getView().addDependent(that._oIbpKeyVHD);
+                that._oIbpKeyVHD.setModel(oVhModel, "vh");
+                that._oIbpKeyVHD.bindAggregation("items", {
+                    path: "vh>/params",
+                    template: new StandardListItem({
+                        title: "{vh>name}",
+                        description: "{vh>label}",
+                        info: "{= ${vh>currentValue} ? ('IBP: ' + ${vh>currentValue}) : '—' }"
+                    })
+                });
+                that._oIbpKeyVHD.open();
+            });
+        },
+
+        formatStepParamCount: function (aParams, aIbpSteps) {
+            var n = (aParams || []).length;
+            (aIbpSteps || []).forEach(function (is) {
+                n += (is.params || []).length;
+            });
+            return n + " params";
         },
 
         onSave: function () {
@@ -430,17 +755,19 @@ sap.ui.define([
             var sJobTemplate = this._editModel.getProperty("/jobTemplate") || "";
             var sCacheKey = sTargetType === "IBP" ? ("IBP:" + sJobTemplate) : sTc;
 
-            // Build flat parameters JSON: { stepName: [{key,value,active}], "apiStep::ibpStep": [...] }
+            // Build parameters JSON: { stepName: [{key,value,active[,step]}] }
+            // IBP sub-step params are aggregated under the DSP step name, tagged with step field.
             var oOut = {};
             aSteps.forEach(function (s) {
-                if (s.params && s.params.length) {
-                    oOut[s.name] = s.params;
-                }
+                var allParams = (s.params || []).filter(function (p) { return p.active !== false; });
                 (s.ibpSteps || []).forEach(function (is) {
-                    if (is.params && is.params.length) {
-                        oOut[s.name + "::" + is.name] = is.params;
-                    }
+                    (is.params || []).filter(function (p) { return p.active !== false; }).forEach(function (p) {
+                        allParams.push(Object.assign({}, p, { step: is.name }));
+                    });
                 });
+                if (allParams.length) {
+                    oOut[s.name] = allParams;
+                }
             });
 
             oComp._stepParamsState = {

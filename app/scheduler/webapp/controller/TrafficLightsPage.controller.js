@@ -42,10 +42,22 @@ sap.ui.define([
         _onMatched: function (oEvent) {
             var oArgs = oEvent.getParameter("arguments") || {};
             var oQuery = oArgs["?query"] || {};
+
+            var oComp = this.getOwnerComponent();
+            var savedState = oComp && oComp._trafficLightsState;
+            if (savedState && savedState.taskchain === (oQuery.taskchain || "")) {
+                oComp._trafficLightsState = null;
+                this._editModel.setData(savedState);
+                this._previewModel.setProperty("/next", []);
+                this._consumeStepParametersResult();
+                return;
+            }
+
             this._editModel.setData(Object.assign({}, DEFAULTS, {
                 name: oQuery.name || oQuery.taskchain || "",
                 spaceId: oQuery.spaceId || "",
-                taskchain: oQuery.taskchain || ""
+                taskchain: oQuery.taskchain || "",
+                stepParamsSummary: ""
             }));
             this._previewModel.setProperty("/next", []);
             this._consumeStepParametersResult();
@@ -95,6 +107,10 @@ sap.ui.define([
 
         onConfigureStepParameters: function () {
             var d = this._editModel.getData();
+            var oComp = this.getOwnerComponent();
+            if (oComp) {
+                oComp._trafficLightsState = Object.assign({}, d, { busy: false });
+            }
             this.getRouter().navTo("stepParameters", {
                 "?query": {
                     spaceId: d.spaceId || "",
@@ -110,6 +126,11 @@ sap.ui.define([
             var s = oComp && oComp._stepParamsState;
             if (s && s.taskchain === this._editModel.getProperty("/taskchain") && s.parametersJson) {
                 this._editModel.setProperty("/parameters", s.parametersJson);
+                try {
+                    var oParams = JSON.parse(s.parametersJson);
+                    var iCount = Object.keys(oParams).filter(function (k) { return oParams[k] && oParams[k].length; }).length;
+                    this._editModel.setProperty("/stepParamsSummary", iCount > 0 ? iCount + " step(s) with params configured" : "");
+                } catch (_) {}
             }
         },
 
