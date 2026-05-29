@@ -47,6 +47,86 @@ _REDACT_KEYS = {
 }
 
 
+def _extract_ibp_template_from_metadata(md: dict) -> str | None:
+    """Try to extract an IBP job template name from a DWC deployment-metadata dict.
+
+    DWC stores the task configuration as JSON in ``3VR_DEPL_METADATA_01``.
+    For API-trigger steps the exact key names vary by DWC version; we probe
+    all nested structures recursively, including URL patterns like
+    JobTemplates('NAME') used in OData API task configurations.
+    """
+    if not isinstance(md, dict):
+        return None
+
+    _TEMPLATE_KEYS = {
+        "templateName", "template_name", "jobTemplateName", "job_template_name",
+        "ibpTemplateName", "ibpTemplate", "IBP_TEMPLATE", "JOB_TEMPLATE_NAME",
+        "jobTemplate", "templateId", "job_template", "IBP_JOB_TEMPLATE",
+        "ibpJobTemplateName", "procTemplateName", "applicationJobTemplate",
+        "JobTemplateName", "TEMPLATE_NAME", "TEMPLATE_ID", "JOB_TEMPLATE",
+    }
+
+    # OData key predicate: JobTemplates('NAME') or JobTemplate(TemplateName='NAME')
+    _URL_PATTERNS = [
+        re.compile(r"JobTemplates\('([^']+)'\)", re.IGNORECASE),
+        re.compile(r"JobTemplate\([^)]*TemplateName='([^']+)'", re.IGNORECASE),
+        re.compile(r"[?&]jobTemplateId=([^&\s'\"]+)", re.IGNORECASE),
+        re.compile(r"[?&]templateName=([^&\s'\"]+)", re.IGNORECASE),
+        re.compile(r"[?&]job_template(?:_name)?=([^&\s'\"]+)", re.IGNORECASE),
+    ]
+
+    def _scan_string_for_template(s: str) -> str | None:
+        """Look for IBP template name patterns in a plain string (URL or similar)."""
+        for pat in _URL_PATTERNS:
+            m = pat.search(s)
+            if m:
+                val = m.group(1).strip()
+                if val:
+                    return val
+        return None
+
+    def _deep_search(obj, depth=0):
+        if depth > 8 or not isinstance(obj, dict):
+            return None
+        # First pass: check direct keys and scan string values for URL patterns
+        for k, v in obj.items():
+            if isinstance(k, str) and k in _TEMPLATE_KEYS and isinstance(v, str) and v.strip():
+                return v.strip()
+            if isinstance(v, str):
+                stripped = v.strip()
+                # Parse embedded JSON strings (e.g. Request Body field)
+                if stripped.startswith("{"):
+                    try:
+                        import json as _json
+                        parsed = _json.loads(stripped)
+                        if isinstance(parsed, dict):
+                            result = _deep_search(parsed, depth + 1)
+                            if result:
+                                return result
+                    except Exception:
+                        pass
+                # Scan all non-empty strings for URL/OData patterns
+                if stripped:
+                    result = _scan_string_for_template(stripped)
+                    if result:
+                        return result
+        # Second pass: recurse into nested dicts and lists
+        for k, v in obj.items():
+            if isinstance(v, dict):
+                result = _deep_search(v, depth + 1)
+                if result:
+                    return result
+            elif isinstance(v, list):
+                for item in v:
+                    if isinstance(item, dict):
+                        result = _deep_search(item, depth + 1)
+                        if result:
+                            return result
+        return None
+
+    return _deep_search(md)
+
+
 def _truncate(s: str, limit: int = 6000) -> str:
     s = s or ""
     if len(s) <= limit:
@@ -306,6 +386,71 @@ def debug_businessnames():
         out["dwc_tenant_owner_tables"] = [r.get("TABLE_NAME") for r in (cat_tables or [])]
     except Exception as e:
         out["dwc_tenant_owner_tables_error"] = str(e)
+
+    return jsonify(out), 200
+
+
+@bp.route("/debug-step-metadata", methods=["GET"])
+@flask_access_validation(required_scope="read")
+def debug_step_metadata():
+    """Return full deployment metadata + raw DAG node for a given objectId / taskchain.
+
+    Query params:
+    - objectId  (required) – e.g. APITask_2231
+    - taskchain (optional) – also show the raw node definition from the taskchain DAG
+    - spaceId   (optional)
+    """
+    import json as _json
+    from flask import current_app
+
+    object_id = request.args.get("objectId")
+    taskchain = request.args.get("taskchain")
+    if not object_id:
+        return jsonify({"error": "objectId is required"}), 400
+
+    db = current_app.extensions["taskchain"]["db_query_executor"]
+    out: dict = {"objectId": object_id}
+
+    # 1. Full metadata row for the objectId itself
+    try:
+        rows = db.query(
+            'SELECT "NAME", "REPOSITORY_OBJECT_TYPE", "JSON" '
+            'FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" '
+            'WHERE "NAME" = ? ORDER BY "DEPLOYED_AT" DESC LIMIT 1',
+            (object_id,)
+        )
+        if rows:
+            raw = rows[0].get("JSON") or rows[0].get("json") or ""
+            try:
+                out["metadata"] = _json.loads(raw)
+            except Exception:
+                out["metadata_raw"] = raw[:2000]
+        else:
+            out["metadata"] = None
+    except Exception as e:
+        out["metadata_error"] = str(e)
+
+    # 2. Raw node definition from the taskchain DAG (if taskchain given)
+    if taskchain:
+        try:
+            rows2 = db.query(
+                'SELECT "JSON" FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" '
+                'WHERE "NAME" = ? ORDER BY "DEPLOYED_AT" DESC LIMIT 1',
+                (taskchain,)
+            )
+            if rows2:
+                tc_raw = rows2[0].get("JSON") or ""
+                tc_meta = _json.loads(tc_raw) if tc_raw else {}
+                tc_sec = (tc_meta.get("taskchains") or {}).get(taskchain) or {}
+                nodes = tc_sec.get("nodes") or []
+                matching = [
+                    n for n in nodes
+                    if (n.get("taskIdentifier") or {}).get("objectId") == object_id
+                    or n.get("objectId") == object_id
+                ]
+                out["dag_nodes"] = matching
+        except Exception as e:
+            out["dag_nodes_error"] = str(e)
 
     return jsonify(out), 200
 
@@ -620,6 +765,7 @@ def get_taskchain_dag():
                 if (n.get("taskIdentifier") or {}).get("objectId")
             })
             business_name_map = {}
+            ibp_template_map = {}
             if object_ids:
                 try:
                     ph = ",".join(["?"] * len(object_ids))
@@ -649,6 +795,9 @@ def get_taskchain_dag():
                                                 break
                         if lbl:
                             business_name_map[nm] = lbl
+                        tpl = _extract_ibp_template_from_metadata(md)
+                        if tpl:
+                            ibp_template_map[nm] = tpl
                 except Exception:
                     pass
 
@@ -664,6 +813,7 @@ def get_taskchain_dag():
                 if node_label and node_label == obj_id:
                     node_label = None
                 business_name = (business_name_map.get(obj_id) if obj_id else None) or node_label or None
+                ibp_tpl = (ibp_template_map.get(obj_id) if obj_id else None) or _extract_ibp_template_from_metadata(task_id)
                 nodes.append({
                     "id": node.get("id"),
                     "type": node.get("type", "TASK"),
@@ -675,7 +825,8 @@ def get_taskchain_dag():
                     "description": node.get("description") or node.get("comment") or task_id.get("description"),
                     "status": "pending",
                     "ignoreError": node.get("ignoreError", False),
-                    "taskLogId": None
+                    "taskLogId": None,
+                    "ibpTemplateName": ibp_tpl,
                 })
             for link in raw_links:
                 links.append({
@@ -739,7 +890,41 @@ def get_taskchain_dag():
                 "startTime": _utc_str(nr.get("startTime")),
                 "endTime": _utc_str(nr.get("endTime"))
             }
-        
+
+        # For API-type steps, extract the IBP template name from the task log
+        # messages (MESSAGE_KEY='viewResponse', details.payload.details.template_name).
+        ibp_template_from_logs = {}
+        all_task_log_ids = [
+            info["taskLogId"] for info in node_statuses.values() if info.get("taskLogId")
+        ]
+        if all_task_log_ids:
+            try:
+                ph = ",".join(["?"] * len(all_task_log_ids))
+                log_msg_rows = db_query_executor.query(
+                    f'SELECT "TASK_LOG_ID", "DETAILS" '
+                    f'FROM "ORCHESTRATION"."3VR_DWC_TASK_LOG_MESSAGES_01" '
+                    f'WHERE "TASK_LOG_ID" IN ({ph}) AND "MESSAGE_BUNDLE_KEY" = \'viewResponse\'',
+                    tuple(all_task_log_ids)
+                )
+                for lr in log_msg_rows or []:
+                    tid = lr.get("TASK_LOG_ID") or lr.get("task_log_id")
+                    details_raw = lr.get("DETAILS") or lr.get("details")
+                    if not tid or not details_raw:
+                        continue
+                    try:
+                        details = json.loads(details_raw) if isinstance(details_raw, str) else details_raw
+                        payload_raw = details.get("payload")
+                        if payload_raw:
+                            payload = json.loads(payload_raw) if isinstance(payload_raw, str) else payload_raw
+                            inner = payload.get("details") or {}
+                            tpl = inner.get("template_name") or inner.get("job_text")
+                            if tpl and isinstance(tpl, str) and tpl.strip():
+                                ibp_template_from_logs[tid] = tpl.strip()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
         # Extract nodes and links from DAG
         nodes = []
         links = []
@@ -762,6 +947,7 @@ def get_taskchain_dag():
                 if (n.get("taskIdentifier") or {}).get("objectId")
             })
             business_name_map = {}
+            ibp_template_map = {}
             if object_ids:
                 try:
                     placeholders = ",".join(["?"] * len(object_ids))
@@ -794,6 +980,9 @@ def get_taskchain_dag():
                                                 break
                         if lbl:
                             business_name_map[nm] = lbl
+                        tpl = _extract_ibp_template_from_metadata(md)
+                        if tpl:
+                            ibp_template_map[nm] = tpl
                 except Exception as _e:  # metadata view may be missing — fall back silently
                     business_name_map = {}
 
@@ -807,6 +996,11 @@ def get_taskchain_dag():
 
                 obj_id = task_id.get("objectId") or exec_info.get("objectId")
                 business_name = business_name_map.get(obj_id) if obj_id else None
+                ibp_tpl = (
+                    (ibp_template_map.get(obj_id) if obj_id else None)
+                    or _extract_ibp_template_from_metadata(task_id)
+                    or ibp_template_from_logs.get(exec_info.get("taskLogId"))
+                )
 
                 # Best-effort extraction of a human-readable label/description
                 label = (
@@ -835,7 +1029,8 @@ def get_taskchain_dag():
                     "description": description,
                     "status": exec_info.get("status", "pending"),
                     "ignoreError": node.get("ignoreError", False),
-                    "taskLogId": exec_info.get("taskLogId")
+                    "taskLogId": exec_info.get("taskLogId"),
+                    "ibpTemplateName": ibp_tpl,
                 })
             
             for link in raw_links:
@@ -1045,12 +1240,13 @@ def get_taskchain_steps():
         db_query_executor = current_app.extensions["taskchain"]["db_query_executor"]
 
         # ------------------------------------------------------------------
-        # Helper: look up business names for a list of objectIds
+        # Helper: look up business names and IBP template names for objectIds
         # ------------------------------------------------------------------
-        def _build_business_name_map(object_ids):
+        def _build_metadata_maps(object_ids):
             bmap = {}
+            ibp_tpl_map = {}
             if not object_ids:
-                return bmap
+                return bmap, ibp_tpl_map
             try:
                 ph = ",".join(["?"] * len(object_ids))
                 rows = db_query_executor.query(
@@ -1082,9 +1278,12 @@ def get_taskchain_steps():
                         logger.warning("[DIAG] businessName not found for '%s'. Top-level keys: %s", nm, list(md.keys())[:15])
                     if lbl:
                         bmap[nm] = lbl
+                    tpl = _extract_ibp_template_from_metadata(md)
+                    if tpl:
+                        ibp_tpl_map[nm] = tpl
             except Exception:
                 pass
-            return bmap
+            return bmap, ibp_tpl_map
 
         # ------------------------------------------------------------------
         # Read step IDs and descriptions from the deployment manifest JSON.
@@ -1198,7 +1397,7 @@ def get_taskchain_steps():
         if not object_ids_ordered:
             return jsonify({"success": True, "steps": [], "debug": debug_info}), 200
 
-        bmap  = _build_business_name_map([o for o, _ in object_ids_ordered])
+        bmap, ibp_tpl_map = _build_metadata_maps([o for o, _ in object_ids_ordered])
         import logging as _logging
         _logging.getLogger(__name__).warning("[DIAG] raw nodes: %s", _json.dumps(object_ids_ordered, default=str))
         steps = []
@@ -1211,12 +1410,14 @@ def get_taskchain_steps():
             # Discard node_label if it is just the technical name repeated
             if node_label and node_label == obj_id:
                 node_label = None
+            ibp_tpl = ibp_tpl_map.get(obj_id) or _extract_ibp_template_from_metadata(task_id)
             steps.append({
-                "id":            node.get("id") or obj_id,
-                "order":         i + 1,
-                "objectId":      obj_id,
-                "applicationId": task_id.get("applicationId") or node.get("applicationId") or "",
-                "businessName":  bmap.get(obj_id) or node_label or "",
+                "id":              node.get("id") or obj_id,
+                "order":           i + 1,
+                "objectId":        obj_id,
+                "applicationId":   task_id.get("applicationId") or node.get("applicationId") or "",
+                "businessName":    bmap.get(obj_id) or node_label or "",
+                "ibpTemplateName": ibp_tpl or "",
             })
 
         return jsonify({"success": True, "steps": steps, "debug": debug_info}), 200

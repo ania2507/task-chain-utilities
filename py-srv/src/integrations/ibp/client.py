@@ -23,7 +23,7 @@ from ..base import BaseJobClient, IntegrationType, JobReference, JobStatus
 
 logger = logging.getLogger(__name__)
 
-_SERVICE_PATH = "/sap/opu/odata/SAP/BC_EXT_APPJOB_MANAGEMENT;v=0002"
+_SERVICE_PATH = "/sap/opu/odata/sap/BC_EXT_APPJOB_MANAGEMENT;v=0002"
 
 
 class _ODataSession:
@@ -85,7 +85,11 @@ class _ODataSession:
             self._fetch_csrf()
             headers["X-CSRF-Token"] = self._csrf_token
             resp = self._session.post(url, headers=headers, timeout=120, **kwargs)
-        resp.raise_for_status()
+        if not resp.ok:
+            raise requests.HTTPError(
+                f"{resp.status_code} {resp.reason} for url: {resp.url} | IBP response: {resp.text[:500]}",
+                response=resp,
+            )
         return resp
 
 

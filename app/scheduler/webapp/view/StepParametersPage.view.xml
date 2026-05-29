@@ -14,8 +14,8 @@
                                 tooltip="{i18n>common.back}" press=".onNavBack"
                                 class="sapUiSmallMarginEnd"/>
                         <VBox>
-                            <Title text="Step Parameters — {edit>/taskchain}" wrapping="true"/>
-                            <Text text="Each execution can carry its own step parameters"/>
+                            <Title text="{= ${edit>/targetType} === 'IBP' ? ('IBP Job Parameters — ' + ${edit>/jobTemplate}) : ('Step Parameters — ' + ${edit>/taskchain}) }" wrapping="true"/>
+                            <Text text="{= ${edit>/targetType} === 'IBP' ? 'Configure parameters per IBP job template step' : 'Each execution can carry its own step parameters' }"/>
                         </VBox>
                     </HBox>
                 </f:heading>
@@ -24,8 +24,8 @@
 
         <f:content>
             <l:Splitter height="100%">
-                <!-- LEFT: chain steps list -->
-                <Panel headerText="Chain Steps (click to add params)"
+                <!-- LEFT: chain steps / IBP template steps list -->
+                <Panel headerText="{= ${edit>/targetType} === 'IBP' ? 'IBP Job Template Steps' : 'Chain Steps (click to add params)' }"
                        width="auto" class="sapUiSmallMargin">
                     <layoutData>
                         <l:SplitterLayoutData size="360px"/>
@@ -33,7 +33,7 @@
                     <content>
                         <List items="{edit>/steps}" mode="SingleSelectMaster"
                               selectionChange=".onStepSelect"
-                              noDataText="No steps available — the task chain may not have run yet">
+                              noDataText="{= ${edit>/targetType} === 'IBP' ? 'No steps found in the IBP job template' : 'No steps available — the task chain may not have run yet' }">
                             <ObjectListItem
                                 title="{edit>name}"
                                 intro="{edit>order}"
@@ -57,7 +57,9 @@
                 <Panel headerText="{= 'Parameters for: ' + (${edit>/selectedStepName} || '(no step selected)') }"
                        width="auto" class="sapUiSmallMargin">
                     <content>
-                        <VBox visible="{= !!${edit>/selectedStepId} }">
+
+                        <!-- CASE 1: Regular DSP step — no IBP/SAC template detected -->
+                        <VBox visible="{= !!${edit>/selectedStepId} &amp;&amp; !${edit>/ibpTemplateName} }">
                             <Title text="Configured parameters:" level="H5" class="sapUiSmallMarginBottom"/>
                             <Table items="{edit>/selectedStepParams}" noDataText="No parameters yet">
                                 <columns>
@@ -73,17 +75,12 @@
                                         <core:Icon src="{= ${edit>active} ? 'sap-icon://accept' : 'sap-icon://decline' }"
                                                    color="{= ${edit>active} ? '#2ecc71' : '#bdc3c7' }"/>
                                         <HBox justifyContent="End">
-                                            <Button icon="sap-icon://edit" type="Transparent"
-                                                    press=".onEditParam"
-                                                    tooltip="Edit"/>
-                                            <Button icon="sap-icon://delete" type="Reject"
-                                                    press=".onDeleteParam"
-                                                    tooltip="Delete"/>
+                                            <Button icon="sap-icon://edit" type="Transparent" press=".onEditParam" tooltip="Edit"/>
+                                            <Button icon="sap-icon://delete" type="Reject" press=".onDeleteParam" tooltip="Delete"/>
                                         </HBox>
                                     </cells>
                                 </ColumnListItem>
                             </Table>
-
                             <Panel headerText="Add New Parameter" class="sapUiSmallMarginTop"
                                    expandable="true" expanded="true">
                                 <content>
@@ -109,6 +106,77 @@
                                 </content>
                             </Panel>
                         </VBox>
+
+                        <!-- CASE 2: API step → IBP/SAC template detected → edit sub-step params directly -->
+                        <VBox visible="{= !!${edit>/selectedStepId} &amp;&amp; !!${edit>/ibpTemplateName} }"
+                              busy="{edit>/ibpLoading}">
+                            <HBox alignItems="Center" class="sapUiSmallMargin">
+                                <Label text="Template:" width="7rem"/>
+                                <Text text="{edit>/ibpTemplateName}" class="sapUiTinyMarginEnd"/>
+                                <Button icon="sap-icon://refresh" type="Transparent"
+                                        press=".onLoadIbpSteps" tooltip="Reload steps"
+                                        class="sapUiTinyMarginBegin"/>
+                            </HBox>
+                            <l:Splitter height="480px">
+                                <!-- Left: job template steps list -->
+                                <Panel headerText="Job Template Steps" width="auto">
+                                    <layoutData>
+                                        <l:SplitterLayoutData size="340px"/>
+                                    </layoutData>
+                                    <List items="{edit>/ibpSteps}" mode="SingleSelectMaster"
+                                          selectionChange=".onIbpStepSelect"
+                                          noDataText="{= ${edit>/ibpLoading} ? 'Loading...' : 'No steps found in IBP template' }">
+                                        <StandardListItem
+                                            title="{edit>name}"
+                                            description="{edit>description}"
+                                            info="{= (${edit>params}.length || 0) + ' params'}"
+                                            infoState="{= ${edit>params}.length > 0 ? 'Success' : 'None'}"
+                                            type="Active"
+                                            press=".onIbpStepPress"/>
+                                    </List>
+                                </Panel>
+                                <!-- Right: selected sub-step params + add form -->
+                                <Panel headerText="{= ${edit>/selectedIbpStepName} ? ('Params: ' + ${edit>/selectedIbpStepName}) : '(select a step on the left)' }"
+                                       width="auto">
+                                    <VBox visible="{= !!${edit>/selectedIbpStepName} }" class="sapUiSmallMargin">
+                                        <Table items="{edit>/selectedIbpStepParams}" noDataText="No parameters yet">
+                                            <columns>
+                                                <Column><Text text="Key"/></Column>
+                                                <Column><Text text="Value"/></Column>
+                                                <Column hAlign="Center" width="5rem"><Text text="Active"/></Column>
+                                                <Column hAlign="End" width="6rem"><Text text=""/></Column>
+                                            </columns>
+                                            <ColumnListItem>
+                                                <cells>
+                                                    <Text text="{edit>key}"/>
+                                                    <Text text="{edit>value}"/>
+                                                    <core:Icon src="{= ${edit>active} ? 'sap-icon://accept' : 'sap-icon://decline' }"
+                                                               color="{= ${edit>active} ? '#2ecc71' : '#bdc3c7' }"/>
+                                                    <HBox justifyContent="End">
+                                                        <Button icon="sap-icon://edit" type="Transparent" press=".onEditIbpStepParam" tooltip="Edit"/>
+                                                        <Button icon="sap-icon://delete" type="Reject" press=".onDeleteIbpStepParam" tooltip="Delete"/>
+                                                    </HBox>
+                                                </cells>
+                                            </ColumnListItem>
+                                        </Table>
+                                        <HBox alignItems="Center" class="sapUiSmallMarginTop" wrap="Wrap">
+                                            <Label text="Key:" width="4rem"/>
+                                            <Input value="{edit>/newIbpParam/key}" width="12rem" placeholder="param key"/>
+                                            <Label text="Value:" width="4rem" class="sapUiTinyMarginBegin"/>
+                                            <Input value="{edit>/newIbpParam/value}" width="12rem" placeholder="param value"/>
+                                            <CheckBox selected="{edit>/newIbpParam/active}" text="Active" class="sapUiTinyMarginBegin"/>
+                                            <Button text="Add" type="Accept" icon="sap-icon://add"
+                                                    press=".onAddIbpStepParam" class="sapUiTinyMarginBegin"/>
+                                            <Button text="Cancel" press=".onResetIbpNewParam" class="sapUiTinyMarginBegin"/>
+                                        </HBox>
+                                    </VBox>
+                                </Panel>
+                            </l:Splitter>
+                        </VBox>
+
+                        <Text text="Select a step from the list on the left"
+                              class="sapUiSmallMargin"
+                              visible="{= !${edit>/selectedStepId} }"/>
                     </content>
                 </Panel>
             </l:Splitter>

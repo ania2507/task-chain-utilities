@@ -1,10 +1,8 @@
 sap.ui.define([
     "scheduler/controller/BaseController",
     "sap/ui/model/json/JSONModel",
-    "sap/m/MessageToast",
-    "sap/m/MessageBox",
-    "sap/ui/core/routing/History"
-], function (BaseController, JSONModel, MessageToast, MessageBox, History) {
+    "sap/m/MessageToast"
+], function (BaseController, JSONModel, MessageToast) {
     "use strict";
 
 
@@ -25,7 +23,14 @@ sap.ui.define([
                 selectedStepName: "",
                 selectedStepParams: [],
                 newParam: _newParam(),
-                busy: false
+                busy: false,
+                ibpTemplateName: "",
+                ibpSteps: [],
+                ibpLoading: false,
+                selectedIbpStepIdx: null,
+                selectedIbpStepName: "",
+                selectedIbpStepParams: [],
+                newIbpParam: _newParam()
             });
             this.getView().setModel(this._editModel, "edit");
 
@@ -37,7 +42,10 @@ sap.ui.define([
             var oArgs = oEvent.getParameter("arguments") || {};
             var oQuery = oArgs["?query"] || {};
             var oComp = this.getOwnerComponent();
-            var oExisting = (oComp._stepParamsState && oComp._stepParamsState.taskchain === oQuery.taskchain)
+            var sTargetType = (oQuery.targetType || "DSP").toUpperCase();
+            var sJobTemplate = oQuery.jobTemplate || "";
+            var sCacheKey = sTargetType === "IBP" ? ("IBP:" + sJobTemplate) : oQuery.taskchain;
+            var oExisting = (oComp._stepParamsState && oComp._stepParamsState.cacheKey === sCacheKey)
                 ? oComp._stepParamsState
                 : null;
 
@@ -47,6 +55,8 @@ sap.ui.define([
             this._editModel.setData({
                 taskchain: oQuery.taskchain || "",
                 spaceId: oQuery.spaceId || "",
+                targetType: sTargetType,
+                jobTemplate: sJobTemplate,
                 returnTo: oQuery.returnTo || "scheduleList",
                 returnQuery: this._parseReturnQuery(oQuery),
                 steps: aSteps,
@@ -58,8 +68,44 @@ sap.ui.define([
             });
 
             if (!bHasCached) {
-                this._loadStepsFromDsp(oQuery.spaceId, oQuery.taskchain);
+                if (sTargetType === "IBP" && sJobTemplate) {
+                    this._loadStepsFromIbpTemplate(sJobTemplate);
+                } else {
+                    this._loadStepsFromDsp(oQuery.spaceId, oQuery.taskchain);
+                }
             }
+        },
+
+        _loadStepsFromIbpTemplate: function (sTemplateName) {
+            var that = this;
+            fetch("v1/jobs/ibp/template-steps", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                body: JSON.stringify({ template_name: sTemplateName })
+            })
+                .then(function (res) { return res.json(); })
+                .then(function (data) {
+                    var aSteps = [];
+                    if (Array.isArray(data.steps)) {
+                        aSteps = data.steps.map(function (s) {
+                            return {
+                                id: s.id || ("s" + s.order),
+                                order: "Step " + s.order,
+                                name: s.name || ("Step " + s.order),
+                                businessName: s.description || "",
+                                objectId: s.name || "",
+                                description: s.sequenceNumber ? ("Seq " + s.sequenceNumber) : "",
+                                allowParams: true,
+                                params: []
+                            };
+                        });
+                    }
+                    that._editModel.setProperty("/steps", aSteps);
+                })
+                .catch(function () {
+                    that._editModel.setProperty("/steps", []);
+                })
+                .then(function () { that._editModel.setProperty("/busy", false); });
         },
 
         _loadStepsFromDsp: function (sSpaceId, sTaskchain) {
@@ -101,6 +147,8 @@ sap.ui.define([
                                     businessName: n.businessName || n.label || "",
                                     objectId: n.objectId || "",
                                     description: n.description || "",
+                                    applicationId: n.applicationId || "",
+                                    ibpTemplateName: n.ibpTemplateName || "",
                                     allowParams: true,
                                     params: []
                                 };
@@ -128,6 +176,8 @@ sap.ui.define([
                                         businessName: s.businessName || "",
                                         objectId: s.objectId || "",
                                         description: "",
+                                        applicationId: s.applicationId || "",
+                                        ibpTemplateName: s.ibpTemplateName || "",
                                         allowParams: true,
                                         params: []
                                     };
@@ -155,13 +205,9 @@ sap.ui.define([
         },
 
         onNavBack: function () {
-            var oHistory = History.getInstance();
-            var sPrev = oHistory.getPreviousHash();
-            if (sPrev !== undefined) {
-                window.history.go(-1);
-            } else {
-                this.getRouter().navTo("scheduleList", {}, true);
-            }
+            var sReturnTo = this._editModel.getProperty("/returnTo") || "scheduleList";
+            var oReturnQuery = this._editModel.getProperty("/returnQuery") || {};
+            this.getRouter().navTo(sReturnTo, { "?query": oReturnQuery }, true);
         },
 
         onStepSelect: function (oEvt) {
@@ -181,10 +227,22 @@ sap.ui.define([
             var sDisplayName = oStep.businessName
                 ? oStep.name + " — " + oStep.businessName
                 : oStep.name;
+            var aCachedIbpSteps = oStep.ibpSteps || [];
             this._editModel.setProperty("/selectedStepId", oStep.id);
             this._editModel.setProperty("/selectedStepName", oStep.order + ": " + sDisplayName);
             this._editModel.setProperty("/selectedStepParams", oStep.params || []);
             this._editModel.setProperty("/newParam", _newParam());
+            this._editModel.setProperty("/ibpTemplateName", oStep.ibpTemplateName || "");
+            this._editModel.setProperty("/ibpSteps", aCachedIbpSteps);
+            this._editModel.setProperty("/ibpLoading", false);
+            this._editModel.setProperty("/selectedIbpStepIdx", null);
+            this._editModel.setProperty("/selectedIbpStepName", "");
+            this._editModel.setProperty("/selectedIbpStepParams", []);
+            this._editModel.setProperty("/newIbpParam", _newParam());
+
+            if (oStep.ibpTemplateName && !aCachedIbpSteps.length) {
+                this._doLoadIbpSteps(oStep.ibpTemplateName);
+            }
         },
 
         _currentStep: function () {
@@ -246,27 +304,156 @@ sap.ui.define([
             this._editModel.setProperty("/selectedStepParams", aParams);
         },
 
+        onLoadIbpSteps: function () {
+            var sTemplate = (this._editModel.getProperty("/ibpTemplateName") || "").trim();
+            if (!sTemplate) return;
+            this._doLoadIbpSteps(sTemplate);
+        },
+
+        _doLoadIbpSteps: function (sTemplate) {
+            var that = this;
+            this._editModel.setProperty("/ibpLoading", true);
+            this._editModel.setProperty("/ibpSteps", []);
+            fetch("v1/jobs/ibp/template-steps", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                body: JSON.stringify({ template_name: sTemplate })
+            })
+                .then(function (res) { return res.json(); })
+                .then(function (data) {
+                    if (data.error) {
+                        MessageToast.show("IBP error: " + data.error);
+                        return;
+                    }
+                    // Preserve existing params for steps that were already configured
+                    var aExisting = that._editModel.getProperty("/ibpSteps") || [];
+                    var oExistingByName = {};
+                    aExisting.forEach(function(s) { oExistingByName[s.name] = s.params || []; });
+
+                    var aSteps = (Array.isArray(data.steps) ? data.steps : []).map(function(s) {
+                        return Object.assign({}, s, { params: oExistingByName[s.name] || [] });
+                    });
+                    that._editModel.setProperty("/ibpSteps", aSteps);
+                    // Persist in the current DSP step so switching steps doesn't lose params
+                    var oCur = that._currentStep();
+                    if (oCur) {
+                        that._editModel.setProperty("/steps/" + oCur.idx + "/ibpSteps", aSteps);
+                    }
+                })
+                .catch(function (e) {
+                    MessageToast.show("Failed to load IBP template: " + e.message);
+                })
+                .finally(function () {
+                    that._editModel.setProperty("/ibpLoading", false);
+                });
+        },
+
+        onIbpStepSelect: function (oEvt) {
+            this._selectIbpStepByListItem(oEvt.getParameter("listItem"));
+        },
+
+        onIbpStepPress: function (oEvt) {
+            this._selectIbpStepByListItem(oEvt.getSource());
+        },
+
+        _selectIbpStepByListItem: function (oItem) {
+            if (!oItem) return;
+            var oCtx = oItem.getBindingContext("edit");
+            if (!oCtx) return;
+            var sPath = oCtx.getPath(); // /ibpSteps/<i>
+            var iIdx = parseInt(sPath.split("/").pop(), 10);
+            var oStep = oCtx.getObject();
+            this._editModel.setProperty("/selectedIbpStepIdx", iIdx);
+            this._editModel.setProperty("/selectedIbpStepName", oStep.name || "");
+            this._editModel.setProperty("/selectedIbpStepParams", oStep.params || []);
+            this._editModel.setProperty("/newIbpParam", _newParam());
+        },
+
+        _currentIbpStep: function () {
+            var iIdx = this._editModel.getProperty("/selectedIbpStepIdx");
+            if (iIdx === null || iIdx === undefined) return null;
+            var aSteps = this._editModel.getProperty("/ibpSteps") || [];
+            if (iIdx >= 0 && iIdx < aSteps.length) {
+                return { idx: iIdx, step: aSteps[iIdx] };
+            }
+            return null;
+        },
+
+        onAddIbpStepParam: function () {
+            var oNew = this._editModel.getProperty("/newIbpParam") || {};
+            if (!oNew.key || !String(oNew.key).trim()) {
+                MessageToast.show("Param Key is required");
+                return;
+            }
+            var oCurIbp = this._currentIbpStep();
+            if (!oCurIbp) { MessageToast.show("Select an IBP step first"); return; }
+            var aParams = (oCurIbp.step.params || []).slice();
+            aParams.push({ key: String(oNew.key).trim(), value: oNew.value == null ? "" : String(oNew.value), active: !!oNew.active });
+            this._editModel.setProperty("/ibpSteps/" + oCurIbp.idx + "/params", aParams);
+            var oCurDsp = this._currentStep();
+            if (oCurDsp) { this._editModel.setProperty("/steps/" + oCurDsp.idx + "/ibpSteps/" + oCurIbp.idx + "/params", aParams); }
+            this._editModel.setProperty("/selectedIbpStepParams", aParams);
+            this._editModel.setProperty("/newIbpParam", _newParam());
+        },
+
+        onEditIbpStepParam: function (oEvt) {
+            var oCtx = oEvt.getSource().getBindingContext("edit");
+            if (!oCtx) return;
+            var oRow = oCtx.getObject();
+            this._editModel.setProperty("/newIbpParam", { key: oRow.key, value: oRow.value, active: !!oRow.active });
+            this.onDeleteIbpStepParam(oEvt);
+        },
+
+        onDeleteIbpStepParam: function (oEvt) {
+            var oCtx = oEvt.getSource().getBindingContext("edit");
+            if (!oCtx) return;
+            var iIdx = parseInt(oCtx.getPath().split("/").pop(), 10);
+            var oCurIbp = this._currentIbpStep();
+            if (!oCurIbp || isNaN(iIdx)) return;
+            var aParams = (oCurIbp.step.params || []).slice();
+            aParams.splice(iIdx, 1);
+            this._editModel.setProperty("/ibpSteps/" + oCurIbp.idx + "/params", aParams);
+            var oCurDsp = this._currentStep();
+            if (oCurDsp) { this._editModel.setProperty("/steps/" + oCurDsp.idx + "/ibpSteps/" + oCurIbp.idx + "/params", aParams); }
+            this._editModel.setProperty("/selectedIbpStepParams", aParams);
+        },
+
+        onResetIbpNewParam: function () {
+            this._editModel.setProperty("/newIbpParam", _newParam());
+        },
+
         onSave: function () {
             var oComp = this.getOwnerComponent();
             var aSteps = this._editModel.getProperty("/steps") || [];
             var sTc = this._editModel.getProperty("/taskchain");
+            var sTargetType = this._editModel.getProperty("/targetType") || "DSP";
+            var sJobTemplate = this._editModel.getProperty("/jobTemplate") || "";
+            var sCacheKey = sTargetType === "IBP" ? ("IBP:" + sJobTemplate) : sTc;
 
-            // Build flat parameters JSON: { stepName: [ {key,value,active}, ... ] }
+            // Build flat parameters JSON: { stepName: [{key,value,active}], "apiStep::ibpStep": [...] }
             var oOut = {};
             aSteps.forEach(function (s) {
                 if (s.params && s.params.length) {
                     oOut[s.name] = s.params;
                 }
+                (s.ibpSteps || []).forEach(function (is) {
+                    if (is.params && is.params.length) {
+                        oOut[s.name + "::" + is.name] = is.params;
+                    }
+                });
             });
 
             oComp._stepParamsState = {
+                cacheKey: sCacheKey,
                 taskchain: sTc,
                 steps: aSteps,
                 parametersJson: JSON.stringify(oOut)
             };
 
             MessageToast.show("Step parameters saved");
-            this.onNavBack();
+            var sReturnTo = this._editModel.getProperty("/returnTo") || "scheduleList";
+            var oReturnQuery = this._editModel.getProperty("/returnQuery") || {};
+            this.getRouter().navTo(sReturnTo, { "?query": oReturnQuery }, true);
         }
     });
 });

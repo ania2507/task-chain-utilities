@@ -800,6 +800,8 @@ sap.ui.define([
                     spaceId: d.spaceId || "",
                     taskchain: d.taskchain || "",
                     name: d.name || "",
+                    targetType: d.targetType || "DSP",
+                    jobTemplate: d.jobTemplate || "",
                     returnTo: "scheduleList"
                 }
             });
