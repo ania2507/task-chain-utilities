@@ -1,8 +1,9 @@
 sap.ui.define([
     "scheduler/controller/BaseController",
     "sap/ui/model/json/JSONModel",
-    "sap/m/MessageToast"
-], function (BaseController, JSONModel, MessageToast) {
+    "sap/m/MessageToast",
+    "sap/m/MessageBox"
+], function (BaseController, JSONModel, MessageToast, MessageBox) {
     "use strict";
 
 
@@ -243,7 +244,8 @@ sap.ui.define([
                                         active: true,
                                         description: g.label || "",
                                         ibpParamName: g.ibpParamName || "",
-                                        ibpVarNameParam: g.ibpVarNameParam || ""
+                                        ibpVarNameParam: g.ibpVarNameParam || "",
+                                        mandatory: !!g.mandatory
                                     };
                                 });
                         }
@@ -320,7 +322,7 @@ sap.ui.define([
                         if (!that._restoredIbpParams[step.name]) that._restoredIbpParams[step.name] = {};
                         var map = that._restoredIbpParams[step.name];
                         if (!map[p.step]) map[p.step] = [];
-                        map[p.step].push({ key: p.key, value: p.value, active: p.active !== false, description: p.description || "", ibpParamName: p.ibpParamName || "", ibpVarNameParam: p.ibpVarNameParam || "" });
+                        map[p.step].push({ key: p.key, value: p.value, active: p.active !== false, description: p.description || "", ibpParamName: p.ibpParamName || "", ibpVarNameParam: p.ibpVarNameParam || "", mandatory: !!p.mandatory });
                     });
                     aSteps[idx] = Object.assign({}, step, { params: dspParams });
                 });
@@ -485,7 +487,8 @@ sap.ui.define([
                                         active: true,
                                         description: g.label || "",
                                         ibpParamName: g.ibpParamName || "",
-                                        ibpVarNameParam: g.ibpVarNameParam || ""
+                                        ibpVarNameParam: g.ibpVarNameParam || "",
+                                        mandatory: !!g.mandatory
                                     };
                                 });
                         }
@@ -551,10 +554,13 @@ sap.ui.define([
                         });
                     }
 
-                    // Cache on the ibpStep object
+                    // Cache on the ibpStep object.
+                    // If DSP returned no data, keep the existing globalVars from the IBP template
+                    // (overwriting with empty would break the match code).
                     var aIbp = (that._editModel.getProperty("/ibpSteps") || []).map(function (s, i) {
                         if (i !== iIbpIdx) return s;
-                        return Object.assign({}, s, { globalVars: aVars, params: _patchDesc(s.params || []) });
+                        var aEffectiveVars = aVars.length ? aVars : (s.globalVars || []);
+                        return Object.assign({}, s, { globalVars: aEffectiveVars, params: _patchDesc(s.params || []) });
                     });
                     that._editModel.setProperty("/ibpSteps", aIbp);
 
@@ -562,7 +568,8 @@ sap.ui.define([
                     if (oCur) {
                         var aDsp = (that._editModel.getProperty("/steps/" + oCur.idx + "/ibpSteps") || []).map(function (s, i) {
                             if (i !== iIbpIdx) return s;
-                            return Object.assign({}, s, { globalVars: aVars, params: _patchDesc(s.params || []) });
+                            var aEffVars2 = aVars.length ? aVars : (s.globalVars || []);
+                            return Object.assign({}, s, { globalVars: aEffVars2, params: _patchDesc(s.params || []) });
                         });
                         that._editModel.setProperty("/steps/" + oCur.idx + "/ibpSteps", aDsp);
                     }
@@ -617,12 +624,38 @@ sap.ui.define([
             var iIdx = parseInt(oCtx.getPath().split("/").pop(), 10);
             var oCurIbp = this._currentIbpStep();
             if (!oCurIbp || isNaN(iIdx)) return;
-            // Use /selectedIbpStepParams as source of truth — it's exactly what
-            // the table shows and avoids any sync gap with ibpSteps[idx].params.
+
             var aParams = (this._editModel.getProperty("/selectedIbpStepParams") || []).slice();
-            aParams.splice(iIdx, 1);
-            this._replaceIbpStepParams(oCurIbp.idx, aParams);
-            this._editModel.setProperty("/selectedIbpStepParams", aParams);
+            var oParam = aParams[iIdx];
+            var that = this;
+
+            function doDelete() {
+                aParams.splice(iIdx, 1);
+                that._replaceIbpStepParams(oCurIbp.idx, aParams);
+                that._editModel.setProperty("/selectedIbpStepParams", aParams);
+            }
+
+            // Warn before clearing a global variable slot in IBP
+            if (oParam && oParam.ibpParamName) {
+                var sVarName = oParam.key || oParam.ibpParamName;
+                var sMsg;
+                if (oParam.mandatory) {
+                    sMsg = "\"" + sVarName + "\" is marked mandatory in IBP.\n" +
+                           "Removing it will send an empty value and the job will fail.\n\nProceed anyway?";
+                } else {
+                    sMsg = "Removing \"" + sVarName + "\" will send an empty value to IBP.\n" +
+                           "The job may fail if this variable is required by the integration step.\n\nProceed?";
+                }
+                var fnShow = oParam.mandatory ? MessageBox.error : MessageBox.warning;
+                fnShow(sMsg, {
+                    actions: [MessageBox.Action.OK, MessageBox.Action.CANCEL],
+                    onClose: function (sAction) {
+                        if (sAction === MessageBox.Action.OK) doDelete();
+                    }
+                });
+            } else {
+                doDelete();
+            }
         },
 
         // Replace the params of IBP sub-step at iIbpIdx with a NEW array so the

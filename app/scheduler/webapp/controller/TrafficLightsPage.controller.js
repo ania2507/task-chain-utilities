@@ -25,7 +25,13 @@ sap.ui.define([
         autoReset: true,
         autoResetState: "GREY",
         timeout: "48",
-        busy: false
+        busy: false,
+        lastRunAt: null,
+        lastRunStatus: "",
+        nextCheckIn: null,
+        createdBy: "",
+        createdAt: null,
+        modifiedAt: null
     };
 
     return BaseController.extend("scheduler.controller.TrafficLightsPage", {
@@ -85,6 +91,21 @@ sap.ui.define([
         formatBusinessName: function (v) {
             if (!v) return "";
             return String(v).replace(/^\s*task\s*chain\s*[-:–]\s*/i, "");
+        },
+
+        formatDateTime: function (v) {
+            if (!v) return "—";
+            try {
+                var d = new Date(v);
+                if (isNaN(d.getTime())) return String(v);
+                return d.toLocaleString("it-IT", {
+                    day: "2-digit", month: "2-digit", year: "numeric",
+                    hour: "2-digit", minute: "2-digit",
+                    timeZone: "Europe/Rome"
+                });
+            } catch (e) {
+                return String(v);
+            }
         },
 
         onNavBack: function () {
@@ -163,6 +184,43 @@ sap.ui.define([
                     this._previewModel.setProperty("/next", []);
                 }.bind(this))
                 .finally(function () { this._previewModel.setProperty("/busy", false); }.bind(this));
+        },
+
+        onRunNow: function () {
+            var d = this._editModel.getData();
+            this.getRouter().navTo("onDemand", {
+                "?query": {
+                    spaceId: d.spaceId || "",
+                    taskchain: d.taskchain || "",
+                    name: d.name || ""
+                }
+            });
+        },
+
+        onChangeInitialState: function () {
+            var that = this;
+            MessageBox.show("Select the initial state for this task chain:", {
+                title: "Change Initial State",
+                icon: MessageBox.Icon.QUESTION,
+                actions: ["Enabled", "Disabled", MessageBox.Action.CANCEL],
+                emphasizedAction: "Enabled",
+                contentWidth: "420px",
+                onClose: function (sAction) {
+                    if (sAction === "Enabled") {
+                        that._editModel.setProperty("/currentState", "GREEN");
+                    } else if (sAction === "Disabled") {
+                        that._editModel.setProperty("/currentState", "RED");
+                    }
+                }
+            });
+        },
+
+        onNavigateToSteps: function () {
+            this.onConfigureStepParameters();
+        },
+
+        onNavigateToLogs: function () {
+            MessageToast.show("Execution logs not yet available.");
         },
 
         onDelete: function () {

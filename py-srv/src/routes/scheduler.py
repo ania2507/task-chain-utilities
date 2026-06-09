@@ -20,13 +20,63 @@ def _svc():
 
 @bp.route("/sync", methods=["POST"])
 def sync():
-    """Reload all active schedules from DB (or from posted payload)."""
+    """Reload all active schedules from DB and rebuild APScheduler jobs."""
     try:
-        body = request.get_json(silent=True) or {}
-        result = _svc().sync(payload_schedules=body.get("schedules"))
+        result = _svc().sync()
         return jsonify(result)
     except Exception as e:
         logger.exception("Scheduler sync failed")
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/traffic-light", methods=["GET"])
+def get_traffic_light():
+    """Return the current TrafficLightStatus for a given (spaceId, taskchain).
+
+    Query params: spaceId, taskchain
+    """
+    try:
+        svc = _svc()
+        repo = getattr(svc, "_repo", None)
+        if not repo or not hasattr(repo, "get_traffic_light"):
+            return jsonify({"error": "Repository not available"}), 503
+        space_id = request.args.get("spaceId", "")
+        taskchain = request.args.get("taskchain", "")
+        if not space_id or not taskchain:
+            return jsonify({"error": "spaceId and taskchain are required"}), 400
+        row = repo.get_traffic_light(space_id, taskchain)
+        if row is None:
+            return jsonify({"found": False, "spaceId": space_id, "taskchain": taskchain,
+                            "hint": "No record in TrafficLightStatus. Insert one with status='ready' to enable firing."}), 200
+        return jsonify({"found": True, **row}), 200
+    except Exception as e:
+        logger.exception("get_traffic_light failed")
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/traffic-light", methods=["POST"])
+def set_traffic_light():
+    """Upsert the TrafficLightStatus for a given (spaceId, taskchain).
+
+    Body: { "spaceId": "...", "taskchain": "...", "status": "ready"|"running"|"done", "note": "..." }
+    Set status to "ready" to allow the next cron tick to fire the task chain.
+    """
+    try:
+        svc = _svc()
+        repo = getattr(svc, "_repo", None)
+        if not repo or not hasattr(repo, "set_traffic_light_status"):
+            return jsonify({"error": "Repository not available"}), 503
+        body = request.get_json(silent=True) or {}
+        space_id = body.get("spaceId", "")
+        taskchain = body.get("taskchain", "")
+        status = body.get("status", "")
+        note = body.get("note")
+        if not space_id or not taskchain or not status:
+            return jsonify({"error": "spaceId, taskchain and status are required"}), 400
+        repo.set_traffic_light_status(space_id, taskchain, status, note)
+        return jsonify({"ok": True, "spaceId": space_id, "taskchain": taskchain, "status": status}), 200
+    except Exception as e:
+        logger.exception("set_traffic_light failed")
         return jsonify({"error": str(e)}), 500
 
 

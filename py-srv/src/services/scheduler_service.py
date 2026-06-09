@@ -138,11 +138,13 @@ class SchedulerService:
         return count
 
     def _register_traffic_light_schedules(self) -> int:
-        """Register recurring cron jobs for active Schedule (Traffic Lights) rows.
+        """Register recurring interval jobs for active Schedule (Traffic Lights) rows.
 
-        At each cron tick the job checks TrafficLightStatus for the schedule's
-        (spaceId, taskchain).  If status == 'green' it fires the task chain in
-        DSP and sets the semaphore to 'yellow'.  Otherwise the tick is skipped.
+        Each job ticks every `checkInterval` minutes (configured by the user in the
+        "Monitoring interval" setting, stored inside the schedule's parameters JSON).
+        On each tick the job checks TrafficLightStatus for the schedule's
+        (spaceId, taskchain).  If status == 'ready' it fires the task chain in
+        DSP and sets the semaphore to 'running'.  Otherwise the tick is skipped.
         """
         if not self._scheduler or not hasattr(self._repo, "list_active_schedules"):
             return 0
@@ -150,26 +152,27 @@ class SchedulerService:
         count = 0
         for s in schedules:
             try:
-                cron_expr = s.get("cronExpression")
                 space_id = s.get("spaceId")
                 taskchain = s.get("taskchain")
-                if not (cron_expr and space_id and taskchain):
+                if not (space_id and taskchain):
                     continue
                 tz = s.get("timezone") or "Europe/Rome"
-                parts = cron_expr.strip().split()
-                if len(parts) < 5:
-                    logger.warning("Invalid cron expression for schedule %s: %s", s.get("ID"), cron_expr)
-                    continue
-                minute, hour, day, month, day_of_week = parts[0], parts[1], parts[2], parts[3], parts[4]
+
+                check_interval_min = 15
+                if s.get("parameters"):
+                    try:
+                        tl_settings = json.loads(s["parameters"])
+                        check_interval_min = int(tl_settings.get("checkInterval") or 15)
+                    except Exception:
+                        pass
+                if check_interval_min <= 0:
+                    check_interval_min = 15
+
                 job_id = f"tl::{s['ID']}"
                 self._scheduler.add_job(
                     self._fire_traffic_light,
-                    trigger="cron",
-                    minute=minute,
-                    hour=hour,
-                    day=day,
-                    month=month,
-                    day_of_week=day_of_week,
+                    trigger="interval",
+                    minutes=check_interval_min,
                     timezone=tz,
                     id=job_id,
                     kwargs={"schedule": s},
@@ -182,7 +185,7 @@ class SchedulerService:
         return count
 
     def _fire_traffic_light(self, schedule: Dict[str, Any]) -> Dict[str, Any]:
-        """Cron tick handler for a Traffic Lights schedule.
+        """Interval tick handler for a Traffic Lights schedule.
 
         Reads TrafficLightStatus for (spaceId, taskchain).
         Conditions to launch:
@@ -245,7 +248,120 @@ class SchedulerService:
         except Exception:
             pass
 
+        # Watch the remote execution so the semaphore never stays stuck on
+        # 'running': once it finishes, set it per the "After each run" policy
+        # if enabled, otherwise just mark it 'completed'.
+        remote_id = result.get("remote_id")
+        if remote_id and result.get("status") == "success":
+            try:
+                tl_settings = json.loads(schedule.get("parameters") or "{}")
+            except Exception:
+                tl_settings = {}
+            self._watch_traffic_light_completion(
+                schedule_id, remote_id, space_id, taskchain,
+                auto_reset=bool(tl_settings.get("autoReset")),
+                reset_state=tl_settings.get("autoResetState") or "GREY",
+            )
+
         return result
+
+    def _watch_traffic_light_completion(self, schedule_id: str, remote_id: str,
+                                         space_id: str, taskchain: str,
+                                         auto_reset: bool, reset_state: str) -> None:
+        """Register a polling job that watches a fired execution and, once it
+        finishes, updates the semaphore so it never stays stuck on 'running':
+          - if "After each run" is enabled: GREY -> 'on_hold', RED -> 'disabled'
+          - otherwise: 'completed'
+        """
+        if not self._scheduler or not self._tc_exec:
+            return
+        watch_job_id = f"tlwatch::{schedule_id}::{remote_id}"
+        self._scheduler.add_job(
+            self._check_traffic_light_completion,
+            trigger="interval",
+            seconds=60,
+            id=watch_job_id,
+            kwargs={
+                "remote_id": remote_id,
+                "space_id": space_id,
+                "taskchain": taskchain,
+                "auto_reset": auto_reset,
+                "reset_state": reset_state,
+                "watch_job_id": watch_job_id,
+            },
+            replace_existing=True,
+            misfire_grace_time=120,
+        )
+
+    def _check_traffic_light_completion(self, remote_id: str, space_id: str, taskchain: str,
+                                         auto_reset: bool, reset_state: str, watch_job_id: str) -> None:
+        """Poll a fired execution; once it reaches a terminal state, set the
+        semaphore (per the "After each run" policy, or 'completed' if that
+        policy is disabled) and stop watching."""
+        try:
+            info = self._tc_exec.get_status(remote_id)
+            status = (info.get("status") or "").upper()
+        except Exception:
+            logger.warning("Could not poll traffic light execution %s", remote_id)
+            return
+
+        if status not in ("COMPLETED", "SUCCESS", "FAILED", "ERROR", "CANCELLED"):
+            return  # still running - keep watching
+
+        if auto_reset:
+            new_status = "disabled" if reset_state == "RED" else "on_hold"
+        else:
+            new_status = "completed"
+        try:
+            self._repo.set_traffic_light_status(
+                space_id, taskchain, new_status,
+                note=f"Run finished ({status.lower()}) - set to '{new_status}' per After-each-run policy",
+            )
+        except Exception:
+            logger.warning("Could not update traffic light after run for %s/%s", space_id, taskchain)
+
+        try:
+            self._scheduler.remove_job(watch_job_id)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    def run_now(self, schedule_id: str, schedule_payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Immediately fire a Traffic Lights schedule, bypassing the semaphore check.
+
+        Looks up the Schedule row by ID (from the in-memory APScheduler job kwargs
+        if available, or from the provided payload), then calls _fire_traffic_light
+        with semaphore check disabled so the chain fires regardless of current status.
+        """
+        schedule: Optional[Dict[str, Any]] = schedule_payload
+
+        if not schedule and self._scheduler:
+            job_id = f"tl::{schedule_id}"
+            job = self._scheduler.get_job(job_id)
+            if job:
+                schedule = (job.kwargs or {}).get("schedule")
+
+        if not schedule:
+            if hasattr(self._repo, "list_active_schedules"):
+                for s in (self._repo.list_active_schedules() or []):
+                    if str(s.get("ID")) == str(schedule_id):
+                        schedule = s
+                        break
+
+        if not schedule:
+            raise ValueError(f"Schedule '{schedule_id}' not found")
+
+        space_id = schedule.get("spaceId")
+        taskchain = schedule.get("taskchain")
+        triggered_at = datetime.now(timezone.utc).isoformat()
+        entry = {
+            "ID": f"tl::{schedule_id}::{triggered_at}",
+            "targetType": schedule.get("targetType") or "DSP",
+            "spaceId": space_id,
+            "taskchain": taskchain,
+            "parameters": schedule.get("parameters"),
+        }
+        return self._fire(entry_id=entry["ID"], manual=True, entry=entry)
 
     # ------------------------------------------------------------------
     def run_adhoc(self, space_id: str, taskchain: str, parameters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -367,6 +483,30 @@ class SchedulerService:
             "triggered_at": triggered_at,
             "error": error_msg,
         }
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def preview_cron(cron_expr: str, tz: str = "Europe/Rome", count: int = 5) -> List[str]:
+        """Return the next N firing times for a cron expression as ISO strings."""
+        from apscheduler.triggers.cron import CronTrigger
+        parts = cron_expr.strip().split()
+        if len(parts) < 5:
+            raise ValueError(f"Invalid cron expression: '{cron_expr}'")
+        minute, hour, day, month, day_of_week = parts[0], parts[1], parts[2], parts[3], parts[4]
+        trigger = CronTrigger(
+            minute=minute, hour=hour, day=day, month=month,
+            day_of_week=day_of_week, timezone=tz,
+        )
+        now = datetime.now(timezone.utc)
+        results: List[str] = []
+        prev = now
+        for _ in range(count):
+            nxt = trigger.get_next_fire_time(prev, prev)
+            if nxt is None:
+                break
+            results.append(nxt.isoformat())
+            prev = nxt
+        return results
 
     # ------------------------------------------------------------------
     def shutdown(self) -> None:

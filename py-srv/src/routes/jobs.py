@@ -127,38 +127,97 @@ def launch_job():
             user_overrides: dict = {}
             for _step_name, sparams in step_params.items():
                 for p in sparams if isinstance(sparams, list) else []:
-                    if p.get("active", True) and p.get("key"):
-                        ibp_name = p.get("ibpParamName") or p["key"]
-                        ibp_value = str(p.get("value", ""))
-                        # P_VARVxx values need ABAP string constant format ('value')
-                        if ibp_name.upper().startswith("P_VARV") and ibp_value:
-                            if not (ibp_value.startswith("'") and ibp_value.endswith("'")):
-                                ibp_value = f"'{ibp_value}'"
-                        user_overrides[ibp_name] = {"name": ibp_name, "values": [{"low": ibp_value}]}
-                        # Include the corresponding P_VARNxx (variable name param)
-                        var_name_param = p.get("ibpVarNameParam")
-                        if var_name_param and var_name_param not in user_overrides:
-                            user_overrides[var_name_param] = {
-                                "name": var_name_param,
-                                "values": [{"low": p.get("key", "")}],
-                            }
+                    if not (p.get("active", True) and p.get("key")):
+                        continue
+                    ibp_name = p.get("ibpParamName")
+                    if not ibp_name:
+                        # No IBP param name → variable was entered manually without match code.
+                        # IBP does not accept $G_* variable names directly in JobParameterValues;
+                        # only P_VARVxx parameter names are valid. Skip with a warning.
+                        logger.warning(
+                            "Skipping param '%s' from step '%s': no ibpParamName — "
+                            "use the match code to select variables from the IBP template",
+                            p.get("key"), _step_name
+                        )
+                        continue
+                    ibp_value = str(p.get("value", ""))
+                    # P_VARVxx values need ABAP string constant format ('value')
+                    if ibp_name.upper().startswith("P_VARV") and ibp_value:
+                        if not (ibp_value.startswith("'") and ibp_value.endswith("'")):
+                            ibp_value = f"'{ibp_value}'"
+                    user_overrides[ibp_name] = {"name": ibp_name, "values": [{"low": ibp_value}]}
+                    # Include the corresponding P_VARNxx (variable name param)
+                    var_name_param = p.get("ibpVarNameParam")
+                    if var_name_param and var_name_param not in user_overrides:
+                        user_overrides[var_name_param] = {
+                            "name": var_name_param,
+                            "values": [{"low": p.get("key", "")}],
+                        }
 
-            # IBP requires ALL mandatory template params when JobParameterValues is non-empty.
-            # Fetch the template defaults and merge: defaults + user overrides.
+            # IBP requires all non-empty mandatory template params across ALL sequences
+            # when JobParameterValues is non-empty (empty params are skipped by
+            # _extract_all_seq_params_as_map to keep the URL compact).
             merged: dict = {}
-            try:
-                from ..integrations.ibp import IBPJobClient as _IBPCls
-                _ibp_cl = executor.get_client(IntegrationType.IBP)
-                _tmpl_name = payload.get("template_name")
-                if isinstance(_ibp_cl, _IBPCls) and _tmpl_name:
-                    _tpl = _ibp_cl.read_template(_tmpl_name)
-                    merged = _extract_all_seq_params_as_map(_tpl)
-                    logger.info("Loaded %d template default params for '%s'", len(merged), _tmpl_name)
-            except Exception as _te:
-                logger.warning("Could not load IBP template defaults: %s", _te)
+            if user_overrides:
+                try:
+                    from ..integrations.ibp import IBPJobClient as _IBPCls
+                    _ibp_cl = executor.get_client(IntegrationType.IBP)
+                    _tmpl_name = payload.get("template_name")
+                    if isinstance(_ibp_cl, _IBPCls) and _tmpl_name:
+                        _tpl = _ibp_cl.read_template(_tmpl_name)
+                        merged = _extract_all_seq_params_as_map(_tpl)
+                        logger.info(
+                            "Loaded %d non-empty defaults for '%s'",
+                            len(merged), _tmpl_name,
+                        )
+                except Exception as _te:
+                    logger.warning("Could not load IBP template defaults: %s", _te)
 
-            # Apply user overrides on top of defaults
+            # Collect user's active variable slots per sequence hash BEFORE merging
+            # (P_VARVxx entries in user_overrides → slot nums per sequence)
+            import re as _re_var
+            def _ibp_var_classify(pname):
+                """Returns ('N'|'V'|'O', slot_or_None, seq_hash) or None."""
+                s = pname.strip()
+                for _t, _pat in [
+                    ('N', r'^P_VARN(\d{2,})\s*([0-9A-Fa-f]{28,})$'),
+                    ('V', r'^P_VARV(\d{2,})\s*([0-9A-Fa-f]{28,})$'),
+                    ('O', r'^P_VARNO\s+([0-9A-Fa-f]{28,})$'),
+                ]:
+                    _m = _re_var.match(_pat, s, _re_var.IGNORECASE)
+                    if _m:
+                        if _t == 'O':
+                            return (_t, None, _m.group(1))
+                        return (_t, _m.group(1), _m.group(2))
+                return None
+
+            user_varv_slots: dict = {}  # seq_hash → set of active slot nums
+            for _pn in user_overrides:
+                _c = _ibp_var_classify(_pn)
+                if _c and _c[0] == 'V':
+                    user_varv_slots.setdefault(_c[2], set()).add(_c[1])
+
+            # Apply user overrides on top of all-sequence defaults
             merged.update(user_overrides)
+
+            # Post-process: for sequences where user has active variable overrides,
+            # clear any template variable slots the user REMOVED (not in their active set)
+            # and update P_VARNO to reflect the new variable count.
+            for _pn in list(merged.keys()):
+                _c = _ibp_var_classify(_pn)
+                if not _c:
+                    continue
+                _typ, _slot, _seq_hash = _c
+                if _seq_hash not in user_varv_slots:
+                    continue  # user made no variable changes for this sequence
+                _active = user_varv_slots[_seq_hash]
+                if _typ in ('N', 'V') and _slot not in _active:
+                    # Template had this slot but user removed it → clear
+                    merged[_pn] = {"name": _pn, "values": [{"low": ""}]}
+                elif _typ == 'O':
+                    # Update variable count to match user's active slots
+                    merged[_pn] = {"name": _pn, "values": [{"low": str(len(_active)).zfill(5)}]}
+
             ibp_params = list(merged.values())
 
             if ibp_params:
@@ -177,8 +236,8 @@ def launch_job():
         logger.exception("Error launching job on %s", integration)
         return jsonify({
             "error": "Internal error while launching job",
-            "detail": str(e),
-            # Include template info so DSP viewResponse logs always carry ibpTemplateName
+            # Truncate detail to prevent oversized payloads (IBP errors include full URLs)
+            "detail": str(e)[:1000],
             "details": {
                 "template_name": payload.get("template_name", ""),
                 "job_text": payload.get("job_text", ""),
@@ -214,7 +273,10 @@ def get_job_status(execution_id: str):
             http_code = 202
         return jsonify(result), http_code
     except ValueError as e:
-        return jsonify({"error": str(e)}), 404
+        # Execution not found — most likely the py-srv restarted and lost in-memory state.
+        # Return 500 so DSP marks the task as failed (cleaner than 404 "not found").
+        logger.warning("Status poll for unknown execution_id '%s': %s", execution_id, e)
+        return jsonify({"error": str(e), "status": "FAILED"}), 500
     except Exception:
         logger.exception("Error polling status for %s", execution_id)
         return jsonify({"error": "Internal error while polling job status"}), 500
@@ -440,6 +502,29 @@ def read_ibp_template_steps():
         data = client.read_template(template_name)
         steps = _extract_ibp_template_steps(data)
         global_vars = _find_global_selection_vars(data)
+
+        # Fetch mandatory flag (JobTempParamMandatoryInd) for all params in this template.
+        # Annotate step-level globalVars so the UI can warn before deleting mandatory vars.
+        try:
+            _tn_esc = template_name.replace("'", "''")
+            _mr = client._odata.get(
+                f"JobTemplateParameterSet?$filter=JobTemplateName eq '{_tn_esc}'"
+                f" and JobTemplateVersion eq '0'&$top=500&$format=json"
+            )
+            _mandatory_map: dict = {}
+            for _mp in (_mr.json().get("d") or {}).get("results", []):
+                _pn = (_mp.get("JobTemplateParameterName") or "").strip()
+                if _pn:
+                    _mandatory_map[_pn] = (_mp.get("JobTempParamMandatoryInd") or "") == "X"
+            logger.debug("IBP mandatory flags loaded: %d params for %s", len(_mandatory_map), template_name)
+            for _step in steps:
+                for _gv in (_step.get("globalVars") or []):
+                    _vp = (_gv.get("ibpVarNameParam") or "").strip()
+                    if _vp in _mandatory_map:
+                        _gv["mandatory"] = _mandatory_map[_vp]
+        except Exception as _mex:
+            logger.debug("IBP mandatory flag fetch skipped: %s", _mex)
+
         resp: dict = {
             "template_name": template_name,
             "steps": steps,
@@ -540,6 +625,18 @@ def read_ibp_template_steps():
                 seqs = tpl0.get("sequences") or []
                 if seqs and isinstance(seqs, list):
                     resp["_debug_first_seq_keys"] = list(seqs[0].keys()) if seqs[0] else []
+                    # Expose raw fields of first 3 seq_param_val entries across all seqs
+                    # so we can check for obligatory/mandatory indicators from IBP
+                    _raw_params = []
+                    for _sq in seqs:
+                        _sp = _sq.get("seq_param_val") or _sq.get("SEQ_PARAM_VAL") or []
+                        if isinstance(_sp, list):
+                            for _p in _sp[:5]:
+                                if isinstance(_p, dict):
+                                    _raw_params.append({k: v for k, v in _p.items() if k != "value"})
+                        if len(_raw_params) >= 10:
+                            break
+                    resp["_debug_raw_seq_param_fields"] = _raw_params
         if not steps:
             resp["_debug_keys"] = list(data.keys()) if isinstance(data, dict) else repr(type(data))
             resp["_debug_raw"] = data
@@ -676,8 +773,10 @@ def _extract_all_seq_params_as_map(template_data: dict) -> dict:
             if not pname or pname in result:
                 continue
             low = _get_low(p)
-            if low is None:
-                continue  # skip params with no value at all
+            # Skip params with no value or empty value — sending LOW="" for optional
+            # params bloats the URL and can exceed IBP's URL length limit.
+            if not low:
+                continue
             result[pname] = {"name": pname, "values": [{"low": low}]}
 
     def _scan(obj, depth=0):

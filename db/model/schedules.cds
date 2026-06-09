@@ -43,11 +43,12 @@ entity ScheduleEntry : cuid, managed {
 }
 
 /**
- * Cron-based schedule for Traffic Lights type scheduling.
- * Each record configures a recurring check for one task chain.
- * At each cron tick the scheduler reads TrafficLightStatus for the
- * matching (spaceId, taskchain): if status = 'green' the task chain
- * is launched in DSP.
+ * Recurring schedule for Traffic Lights type monitoring.
+ * Each record configures a recurring check for one task chain, ticking
+ * every `checkInterval` minutes (set by the user and stored inside the
+ * `parameters` JSON). At each tick the scheduler reads TrafficLightStatus
+ * for the matching (spaceId, taskchain): if status = 'ready' the task
+ * chain is launched in DSP.
  */
 entity Schedule : cuid, managed {
   name           : String(200)  @title: 'Name';
@@ -67,17 +68,22 @@ entity Schedule : cuid, managed {
 /**
  * Semaphore table populated by external systems.
  * One row per (spaceId, taskchain) pair.
- * status values: 'ready' = ok to launch | 'running' = launched by scheduler | other = blocked/wait
- * The Traffic Lights scheduler reads this table at each cron tick:
+ * status values: 'ready' = ok to launch | 'running' = launched by scheduler |
+ * 'on_hold' / 'disabled' = paused per the schedule's "After each run" policy |
+ * 'completed' = run finished and "After each run" is disabled | other = blocked/wait
+ * The Traffic Lights scheduler reads this table at each interval tick:
  * only rows with status = 'ready' trigger a DSP task chain launch.
- * After launch the scheduler sets status = 'running'; the external
- * system is responsible for resetting it to 'ready' when the chain
- * has finished and a new run can be triggered.
+ * After launch the scheduler sets status = 'running'. The scheduler watches
+ * the run and, once it finishes, NEVER leaves it stuck on 'running':
+ *   - if "After each run" is enabled, it sets 'on_hold' or 'disabled'
+ *     (per the configured autoResetState);
+ *   - otherwise it sets 'completed', and the external system is responsible
+ *     for resetting it to 'ready' when a new run can be triggered.
  */
 entity TrafficLightStatus {
   key spaceId   : String(100) @title: 'DSP Space ID';
   key taskchain : String(200) @title: 'Taskchain';
-  status        : String(20)  @title: 'Status'; // 'green' | 'yellow' | 'red'
+  status        : String(20)  @title: 'Status'; // 'ready' | 'running' | 'on_hold' | 'disabled' | 'completed'
   updatedAt     : Timestamp   @title: 'Last Updated';
   note          : String(500) @title: 'Note';
 }
