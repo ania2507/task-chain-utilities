@@ -544,7 +544,13 @@ sap.ui.define([
                 })
                 .then(function(data) {
                     // OData response has 'value' array
-                    var aChains = data.value || [];
+                    var oDashboardModel = this.getView().getModel("dashboard");
+                    var aCurrentChains = oDashboardModel ? (oDashboardModel.getProperty("/taskChains") || []) : [];
+                    var aCurrentKeys = aCurrentChains.map(function(c) { return c.spaceId + "|" + c.name; });
+
+                    var aChains = (data.value || []).filter(function(chain) {
+                        return aCurrentKeys.indexOf(chain.spaceId + "|" + chain.name) < 0;
+                    });
                     this._oAvailableChainsModel.setProperty("/chains", aChains);
                     this._oAvailableChainsModel.setProperty("/chainsFiltered", aChains);
                     this._oAvailableChainsModel.setProperty("/loading", false);

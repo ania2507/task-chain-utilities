@@ -169,11 +169,11 @@ class _SACSession:
         self._ensure_access_token()
         resp = self._session.get(
             f"{self._host}{_TOKEN_PATH}",
-            headers={"x-csrf-token": "Fetch", "x-sap-sac-custom-auth": "true"},
+            headers={"x-csrf-token": "Fetch"},
             timeout=30,
         )
         resp.raise_for_status()
-        token = resp.headers.get("x-csrf-token", "")
+        token = resp.headers.get("x-csrf-token", "").strip()
         if not token:
             raise RuntimeError("SAC: failed to obtain CSRF token")
         self._csrf_token = token
@@ -193,7 +193,6 @@ class _SACSession:
         url = f"{self._host}{path}"
         headers = kwargs.pop("headers", {})
         headers["x-csrf-token"] = self._csrf_token
-        headers["x-sap-sac-custom-auth"] = "true"
         # SAC returns 415 if Content-Type is not explicitly application/json
         headers.setdefault("Content-Type", "application/json")
         resp = self._session.post(url, headers=headers, timeout=120, **kwargs)
@@ -211,7 +210,6 @@ class _SACSession:
         url = f"{self._host}{path}"
         headers = kwargs.pop("headers", {})
         headers["x-csrf-token"] = self._csrf_token
-        headers["x-sap-sac-custom-auth"] = "true"
         resp = self._session.delete(url, headers=headers, timeout=60, **kwargs)
         if resp.status_code == 403:
             self._fetch_csrf()
@@ -271,7 +269,7 @@ class SACJobClient(BaseJobClient):
         if run_params:
             body["parameters"] = run_params
 
-        resp = self._sac.post(path, json=body if body else None)
+        resp = self._sac.post(path, json=body)
 
         data = resp.json() if resp.content else {}
         run_id = (
@@ -302,7 +300,7 @@ class SACJobClient(BaseJobClient):
 
     def get_job_status(self, ref: JobReference) -> Dict[str, Any]:
         """Poll SAC for multi action execution status."""
-        multiaction_id, exec_id = ref.remote_id.split(":", 1)
+        multiaction_id, exec_id = ref.remote_id.rsplit(":", 1)
 
         # GET /multiActions/{id}/executions/{execId}
         path = (
@@ -329,7 +327,7 @@ class SACJobClient(BaseJobClient):
 
     def cancel_job(self, ref: JobReference) -> Dict[str, Any]:
         """Cancel a running SAC multi action."""
-        multiaction_id, exec_id = ref.remote_id.split(":", 1)
+        multiaction_id, exec_id = ref.remote_id.rsplit(":", 1)
 
         # DELETE /multiActions/{id}/executions/{execId}
         path = (
@@ -381,7 +379,7 @@ class SACJobClient(BaseJobClient):
 
     @staticmethod
     def _map_status(raw: str) -> JobStatus:
-        if raw in {"COMPLETED", "SUCCESS", "FINISHED", "DONE"}:
+        if raw in {"COMPLETED", "SUCCESS", "SUCCESSFUL", "FINISHED", "DONE"}:
             return JobStatus.COMPLETED
         if raw in {"FAILED", "ERROR", "ABORTED"}:
             return JobStatus.FAILED
