@@ -71,6 +71,8 @@ sap.ui.define([
             var oDashboardModel = new JSONModel({
                 projectId: sProjectId,
                 projectName: oProject.name,
+                projectDescription: oProject.description || "",
+                totalTaskChains: aTaskChains.length,
                 successRate: 100,
                 successRateTrend: 0,
                 errorsLast24h: 0,
