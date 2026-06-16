@@ -2,6 +2,7 @@
     controllerName="scheduler.controller.OnDemandPage"
     xmlns:mvc="sap.ui.core.mvc"
     xmlns="sap.m"
+    xmlns:core="sap.ui.core"
     xmlns:f="sap.f"
     xmlns:l="sap.ui.layout">
     <f:DynamicPage id="onDemandPage" busy="{edit>/busy}" toggleHeaderOnTitleClick="true" showFooter="true">
@@ -33,53 +34,126 @@
         </f:title>
 
         <f:header>
-            <f:DynamicPageHeader pinnable="true">
-                <VBox>
-                    <Text text="{i18n>onDemand.intro}"/>
-                </VBox>
+            <f:DynamicPageHeader pinnable="false">
+                <HBox alignItems="Center" wrap="Wrap"
+                      class="sapUiSmallMarginBeginEnd sapUiTinyMarginTopBottom">
+
+                    <!-- Execution mode -->
+                    <HBox alignItems="Center" class="sapUiLargeMarginEnd">
+                        <core:Icon
+                            src="{= ${edit>/onDemandModeIndex} === 1 ? 'sap-icon://date-time' : 'sap-icon://play' }"
+                            size="2.5rem"
+                            color="{= ${edit>/onDemandModeIndex} === 1 ? '#0a6ed1' : '#107E3E' }"
+                            class="sapUiSmallMarginEnd"/>
+                        <VBox>
+                            <ObjectStatus
+                                text="{= ${edit>/onDemandModeIndex} === 1 ? ${i18n>onDemand.modeScheduled} : ${i18n>onDemand.modeRunNow} }"
+                                state="{= ${edit>/onDemandModeIndex} === 1 ? 'Information' : 'Success' }"
+                                inverted="true"
+                                class="sapUiTinyMarginBottom"/>
+                            <Text text="{= ${edit>/onDemandModeIndex} === 1 ? ${i18n>onDemand.modeScheduledDesc} : ${i18n>onDemand.modeRunNowDesc} }"/>
+                        </VBox>
+                    </HBox>
+
+                    <core:HTML content="&lt;div style='width:1px;height:3.5rem;background:#e0e0e0;margin-right:1.5rem'&gt;&lt;/div&gt;"/>
+
+                    <!-- Next run (only when scheduled) -->
+                    <VBox class="sapUiMediumMarginEnd" visible="{= ${edit>/onDemandModeIndex} === 1 }">
+                        <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                            <core:Icon src="sap-icon://date-time" size="0.875rem" class="sapUiTinyMarginEnd"/>
+                            <Label text="{i18n>onDemand.nextRun}"/>
+                        </HBox>
+                        <Text text="{= ${edit>/onDemandDate} + '  ' + ${edit>/onDemandTime} }"/>
+                    </VBox>
+
+                    <!-- Step parameters -->
+                    <VBox class="sapUiMediumMarginEnd">
+                        <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                            <core:Icon src="sap-icon://settings" size="0.875rem" class="sapUiTinyMarginEnd"/>
+                            <Label text="{i18n>onDemand.stepParameters}"/>
+                        </HBox>
+                        <Text text="{= !!${edit>/stepParamsSummary} ? ${edit>/stepParamsSummary} : ${i18n>onDemand.stepParametersDefault} }"/>
+                    </VBox>
+
+                </HBox>
             </f:DynamicPageHeader>
         </f:header>
 
         <f:content>
-            <Panel headerText="{i18n>onDemand.title}" class="sapUiResponsiveMargin" width="auto">
-                <content>
-                    <VBox>
-                        <RadioButtonGroup selectedIndex="{edit>/onDemandModeIndex}" columns="1"
-                                          class="sapUiSmallMarginTop sapUiSmallMarginBottom">
-                            <buttons>
-                                <RadioButton text="{i18n>onDemand.runNow}"/>
-                                <RadioButton text="{i18n>onDemand.runAt}"/>
-                            </buttons>
-                        </RadioButtonGroup>
+            <l:Splitter class="splitter-auto-height">
 
-                        <l:HorizontalLayout allowWrapping="true" class="sapUiLargeMarginBegin">
-                            <DatePicker value="{edit>/onDemandDate}"
-                                        valueFormat="yyyy-MM-dd"
-                                        displayFormat="long"
-                                        placeholder="{i18n>onDemand.date}"
-                                        enabled="{= ${edit>/onDemandModeIndex} === 1 }"
+                <!-- LEFT: On Demand configuration -->
+                <Panel headerText="{i18n>onDemand.title}" class="sapUiNoMargin">
+                    <content>
+                        <VBox class="sapUiMediumMarginTopBottom sapUiMediumMarginBeginEnd">
+                            <RadioButtonGroup selectedIndex="{edit>/onDemandModeIndex}" columns="1"
+                                              class="sapUiSmallMarginTop sapUiSmallMarginBottom">
+                                <buttons>
+                                    <RadioButton text="{i18n>onDemand.runNow}"/>
+                                    <RadioButton text="{i18n>onDemand.runAt}"/>
+                                </buttons>
+                            </RadioButtonGroup>
+
+                            <l:HorizontalLayout allowWrapping="true" class="sapUiLargeMarginBegin">
+                                <DatePicker value="{edit>/onDemandDate}"
+                                            valueFormat="yyyy-MM-dd"
+                                            displayFormat="long"
+                                            placeholder="{i18n>onDemand.date}"
+                                            enabled="{= ${edit>/onDemandModeIndex} === 1 }"
+                                            class="sapUiTinyMarginEnd"/>
+                                <TimePicker value="{edit>/onDemandTime}"
+                                            valueFormat="HH:mm"
+                                            displayFormat="HH:mm"
+                                            placeholder="{i18n>onDemand.time}"
+                                            enabled="{= ${edit>/onDemandModeIndex} === 1 }"/>
+                            </l:HorizontalLayout>
+                            <Button text="{i18n>onDemand.configureSteps}"
+                                    icon="sap-icon://settings"
+                                    type="Emphasized"
+                                    press=".onConfigureStepParameters"
+                                    class="sapUiSmallMarginTop"
+                                    width="14rem"/>
+                            <ObjectStatus
+                                text="{edit>/stepParamsSummary}"
+                                state="Success"
+                                icon="sap-icon://accept"
+                                visible="{= !!${edit>/stepParamsSummary} }"
+                                class="sapUiTinyMarginTop"/>
+                        </VBox>
+                    </content>
+                </Panel>
+
+                <!-- RIGHT: Last Run -->
+                <Panel class="sapUiNoMargin">
+                    <layoutData>
+                        <l:SplitterLayoutData size="280px" resizable="false"/>
+                    </layoutData>
+                    <VBox class="sapUiMediumMarginTopBottom sapUiMediumMarginBeginEnd">
+                        <Title text="Last Run" level="H5" class="sapUiMediumMarginBottom"/>
+
+                        <VBox visible="{= !!${edit>/lastRunAt} }">
+                            <VBox class="sapUiSmallMarginBottom">
+                                <Label text="Date and time" design="Bold"/>
+                                <Text text="{ path: 'edit>/lastRunAt', formatter: '.formatDateTime' }"/>
+                            </VBox>
+                            <VBox>
+                                <Label text="Status" design="Bold" class="sapUiTinyMarginBottom"/>
+                                <HBox alignItems="Center">
+                                    <core:Icon
+                                        src="{= ${edit>/lastRunStatus} === 'completed' || ${edit>/lastRunStatus} === 'success' ? 'sap-icon://sys-enter-2' : ${edit>/lastRunStatus} === 'error' ? 'sap-icon://sys-cancel-2' : 'sap-icon://pending' }"
+                                        size="1.25rem"
+                                        color="{= ${edit>/lastRunStatus} === 'completed' || ${edit>/lastRunStatus} === 'success' ? '#107E3E' : ${edit>/lastRunStatus} === 'error' ? '#BB0000' : '#9E9E9E' }"
                                         class="sapUiTinyMarginEnd"/>
-                            <TimePicker value="{edit>/onDemandTime}"
-                                        valueFormat="HH:mm"
-                                        displayFormat="HH:mm"
-                                        placeholder="{i18n>onDemand.time}"
-                                        enabled="{= ${edit>/onDemandModeIndex} === 1 }"/>
-                        </l:HorizontalLayout>
-                        <Button text="{i18n>onDemand.configureSteps}"
-                                icon="sap-icon://settings"
-                                type="Emphasized"
-                                press=".onConfigureStepParameters"
-                                class="sapUiSmallMarginTop"
-                                width="14rem"/>
-                        <ObjectStatus
-                            text="{edit>/stepParamsSummary}"
-                            state="Success"
-                            icon="sap-icon://accept"
-                            visible="{= !!${edit>/stepParamsSummary} }"
-                            class="sapUiTinyMarginTop"/>
+                                    <Text text="{edit>/lastRunStatus}"/>
+                                </HBox>
+                            </VBox>
+                        </VBox>
+
+                        <Text text="No runs yet." visible="{= !${edit>/lastRunAt} }"/>
                     </VBox>
-                </content>
-            </Panel>
+                </Panel>
+
+            </l:Splitter>
         </f:content>
 
         <f:footer>

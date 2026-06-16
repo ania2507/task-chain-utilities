@@ -26,7 +26,58 @@
 
         <f:header>
             <f:DynamicPageHeader pinnable="true">
-                <HBox wrap="Wrap" class="sapUiTinyMarginBegin sapUiTinyMarginTop sapUiTinyMarginEnd">
+                <HBox alignItems="Center" wrap="Wrap"
+                      class="sapUiTinyMarginBegin sapUiTinyMarginTop sapUiTinyMarginEnd">
+
+                    <!-- Total task chains -->
+                    <HBox alignItems="Center" class="sapUiLargeMarginEnd">
+                        <core:Icon
+                            src="sap-icon://chain-link"
+                            size="2.5rem"
+                            color="#0a6ed1"
+                            class="sapUiSmallMarginEnd"/>
+                        <VBox>
+                            <ObjectStatus
+                                text="{i18n>list.summary.total}"
+                                state="Information"
+                                inverted="true"
+                                class="sapUiTinyMarginBottom"/>
+                            <Text text="{page>/summary/total}"/>
+                        </VBox>
+                    </HBox>
+
+                    <core:HTML content="&lt;div style='width:1px;height:3.5rem;background:#e0e0e0;margin-right:1.5rem'&gt;&lt;/div&gt;"/>
+
+                    <!-- Scheduled -->
+                    <VBox class="sapUiMediumMarginEnd">
+                        <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                            <core:Icon src="sap-icon://appointment-2" size="0.875rem" class="sapUiTinyMarginEnd"/>
+                            <Label text="{i18n>list.summary.scheduled}"/>
+                        </HBox>
+                        <Text text="{page>/summary/scheduled}"/>
+                    </VBox>
+
+                    <!-- Not scheduled -->
+                    <VBox class="sapUiMediumMarginEnd">
+                        <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                            <core:Icon src="sap-icon://list" size="0.875rem" class="sapUiTinyMarginEnd"/>
+                            <Label text="{i18n>list.summary.notScheduled}"/>
+                        </HBox>
+                        <Text text="{page>/summary/notScheduled}"/>
+                    </VBox>
+
+                    <!-- Paused -->
+                    <VBox class="sapUiMediumMarginEnd" visible="{= ${page>/summary/paused} > 0 }">
+                        <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                            <core:Icon src="sap-icon://pause" size="0.875rem" class="sapUiTinyMarginEnd"/>
+                            <Label text="{i18n>list.summary.paused}"/>
+                        </HBox>
+                        <Text text="{page>/summary/paused}"/>
+                    </VBox>
+
+                    <core:HTML content="&lt;div style='width:1px;height:3.5rem;background:#e0e0e0;margin-right:1.5rem'&gt;&lt;/div&gt;"/>
+
+                    <!-- Search -->
                     <VBox class="sapUiTinyMarginEnd">
                         <Label text="{i18n>common.search}" labelFor="taskchainSearchField"/>
                         <SearchField id="taskchainSearchField"
@@ -36,6 +87,48 @@
                             search=".onSearchTaskchains"
                             liveChange=".onSearchTaskchains"/>
                     </VBox>
+
+                    <!-- Space filter -->
+                    <VBox class="sapUiTinyMarginEnd">
+                        <Label text="{i18n>list.filter.space}" labelFor="spaceFilterSelect"/>
+                        <Select id="spaceFilterSelect"
+                                width="160px"
+                                selectedKey="{page>/filterSpace}"
+                                change=".onFilterChange"
+                                items="{path: 'page>/spaceOptions', templateShareable: false}">
+                            <core:Item key="{page>key}" text="{page>text}"/>
+                        </Select>
+                    </VBox>
+
+                    <!-- Status filter -->
+                    <VBox class="sapUiTinyMarginEnd">
+                        <Label text="{i18n>list.filter.status}" labelFor="statusFilterSelect"/>
+                        <Select id="statusFilterSelect"
+                                width="160px"
+                                selectedKey="{page>/filterStatus}"
+                                change=".onFilterChange">
+                            <core:Item key="all" text="{i18n>list.filter.statusAll}"/>
+                            <core:Item key="scheduled" text="{i18n>list.summary.scheduled}"/>
+                            <core:Item key="notScheduled" text="{i18n>list.summary.notScheduled}"/>
+                            <core:Item key="paused" text="{i18n>list.summary.paused}"/>
+                        </Select>
+                    </VBox>
+
+                    <!-- Type filter -->
+                    <VBox>
+                        <Label text="{i18n>list.filter.type}" labelFor="typeFilterSelect"/>
+                        <Select id="typeFilterSelect"
+                                width="160px"
+                                selectedKey="{page>/filterType}"
+                                change=".onFilterChange">
+                            <core:Item key="all" text="{i18n>list.filter.typeAll}"/>
+                            <core:Item key="trafficLights" text="{i18n>list.filter.trafficLights}"/>
+                            <core:Item key="onDemand" text="{i18n>list.filter.onDemand}"/>
+                            <core:Item key="customCalendar" text="{i18n>list.filter.customCalendar}"/>
+                            <core:Item key="dsp" text="{i18n>list.filter.dsp}"/>
+                        </Select>
+                    </VBox>
+
                 </HBox>
             </f:DynamicPageHeader>
         </f:header>

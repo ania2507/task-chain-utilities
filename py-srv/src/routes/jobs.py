@@ -54,6 +54,20 @@ def debug_ibp_connection():
         return jsonify({"error": str(e)}), 500
 
 
+@bp.route("/sac/multiaction-definition/<multiaction_id>", methods=["GET"])
+@flask_access_validation(required_scope="admin")
+def sac_multiaction_definition(multiaction_id):
+    """Debug: return the raw SAC multi action definition (parameters,
+    dimensions, configured hierarchies) to diagnose hierarchyId mismatches
+    (SAC error 501000531)."""
+    try:
+        client = _get_executor().get_client(IntegrationType.SAC)
+        data = client.get_multiaction_definition(multiaction_id)
+        return jsonify({"success": True, "multiaction_id": multiaction_id, "definition": data}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 def _get_executor():
     return current_app.extensions["taskchain"]["job_executor"]
 
@@ -119,7 +133,26 @@ def launch_job():
     # were registered when the scheduler triggered that task chain run and inject
     # them into the IBP launch as the "parameters" list (key/value → name/values).
     taskchain_ctx = payload.get("taskchain")
-    if taskchain_ctx and not payload.get("parameters"):
+
+    # SAC: inject saved step params as a flat {parameterId: value} dict, which
+    # SACJobClient.launch_job converts into the multi action's "parameterValues".
+    if integration == "sac" and taskchain_ctx and not payload.get("parameters"):
+        from ..services.taskchain_executor import TaskchainExecutor
+        step_params = TaskchainExecutor.consume_pending_step_params(taskchain_ctx)
+        if step_params:
+            sac_params: dict = {}
+            for _step_name, sparams in step_params.items():
+                for p in sparams if isinstance(sparams, list) else []:
+                    if p.get("active", True) and p.get("key"):
+                        sac_params[p["key"]] = p.get("value", "")
+            if sac_params:
+                payload = {**payload, "parameters": sac_params}
+                logger.info(
+                    "Injected %d param(s) from taskchain '%s' into SAC launch",
+                    len(sac_params), taskchain_ctx,
+                )
+
+    if integration == "ibp" and taskchain_ctx and not payload.get("parameters"):
         from ..services.taskchain_executor import TaskchainExecutor
         step_params = TaskchainExecutor.consume_pending_step_params(taskchain_ctx)
         if step_params:

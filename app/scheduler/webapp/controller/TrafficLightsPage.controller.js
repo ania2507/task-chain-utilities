@@ -3,8 +3,10 @@ sap.ui.define([
     "sap/ui/model/json/JSONModel",
     "sap/m/MessageBox",
     "sap/m/MessageToast",
-    "sap/ui/core/routing/History"
-], function (BaseController, JSONModel, MessageBox, MessageToast, History) {
+    "sap/ui/core/routing/History",
+    "sap/ui/model/Filter",
+    "sap/ui/model/FilterOperator"
+], function (BaseController, JSONModel, MessageBox, MessageToast, History, Filter, FilterOperator) {
     "use strict";
 
     var DEFAULTS = {
@@ -21,9 +23,10 @@ sap.ui.define([
         isActive: true,
         scheduleKind: "TRAFFIC_LIGHTS",
         currentState: "GREEN",
+        tlStatus: "",
         checkInterval: "15",
         autoReset: true,
-        autoResetState: "GREY",
+        autoResetState: "GREEN",
         timeout: "48",
         busy: false,
         lastRunAt: null,
@@ -56,6 +59,8 @@ sap.ui.define([
                 this._editModel.setData(savedState);
                 this._previewModel.setProperty("/next", []);
                 this._consumeStepParametersResult();
+                this._loadTrafficLightStatus(savedState.spaceId, savedState.taskchain);
+                this._loadLastRun(savedState.spaceId, savedState.taskchain);
                 return;
             }
 
@@ -67,6 +72,8 @@ sap.ui.define([
             }));
             this._previewModel.setProperty("/next", []);
             this._consumeStepParametersResult();
+            this._loadTrafficLightStatus(oQuery.spaceId, oQuery.taskchain);
+            this._loadLastRun(oQuery.spaceId, oQuery.taskchain);
             if (oQuery.scheduleID) {
                 this._loadSchedule(oQuery.scheduleID);
             }
@@ -83,9 +90,111 @@ sap.ui.define([
                     try { tl = JSON.parse(obj.parameters); } catch (_) {}
                 }
                 this._editModel.setData(Object.assign({}, DEFAULTS, obj, tl));
+                this._loadTrafficLightStatus(obj.spaceId, obj.taskchain);
+                this._loadLastRun(obj.spaceId, obj.taskchain);
             }.bind(this)).catch(function (err) {
                 this.error("Could not load schedule: " + (err && err.message || err));
             }.bind(this));
+        },
+
+        // Lifecycle / Current state is unified: it comes from
+        // TrafficLightStatus.initialState (GREEN = Enabled | RED = Disabled,
+        // default GREEN), except while a run is in progress (status =
+        // 'running'), in which case it shows as "Running" (GREY) regardless
+        // of initialState.
+        _loadTrafficLightStatus: function (spaceId, taskchain) {
+            var oModel = this.getModel();
+            this._tlContext = null;
+            this._tlSpaceId = spaceId;
+            this._tlTaskchain = taskchain;
+            if (!oModel || !spaceId || !taskchain) {
+                this._editModel.setProperty("/currentState", "GREEN");
+                this._editModel.setProperty("/tlStatus", "");
+                return;
+            }
+            var oList = oModel.bindList("/TrafficLightStatus", undefined, undefined, [
+                new Filter("spaceId", FilterOperator.EQ, spaceId),
+                new Filter("taskchain", FilterOperator.EQ, taskchain)
+            ]);
+            oList.requestContexts(0, 1).then(function (aContexts) {
+                var status = "";
+                var initialState = "GREEN";
+                if (aContexts.length) {
+                    this._tlContext = aContexts[0];
+                    var obj = aContexts[0].getObject();
+                    status = (obj.status || "").toLowerCase();
+                    initialState = obj.initialState || "GREEN";
+                }
+                this._editModel.setProperty("/tlStatus", status);
+                this._editModel.setProperty("/currentState", status === "running" ? "GREY" : initialState);
+            }.bind(this)).catch(function () {
+                this._editModel.setProperty("/currentState", "GREEN");
+                this._editModel.setProperty("/tlStatus", "");
+            }.bind(this));
+        },
+
+        // "Last Run" panel data comes directly from DSP's task execution
+        // logs (v1/dsp/taskchain-runs), not from our own bookkeeping.
+        _loadLastRun: function (spaceId, taskchain) {
+            if (!spaceId || !taskchain) {
+                this._editModel.setProperty("/lastRunAt", null);
+                this._editModel.setProperty("/lastRunStatus", "");
+                return;
+            }
+            var sUrl = "v1/dsp/taskchain-runs?spaceId=" + encodeURIComponent(spaceId)
+                + "&taskchain=" + encodeURIComponent(taskchain) + "&limit=1";
+            fetch(sUrl, { headers: { "Accept": "application/json" } })
+                .then(function (res) { return res.json(); })
+                .then(function (data) {
+                    var run = (data && data.success && data.runs && data.runs[0]) || null;
+                    this._editModel.setProperty("/lastRunAt", run ? (run.endTime || run.startTime) : null);
+                    this._editModel.setProperty("/lastRunStatus", run ? run.status : "");
+                }.bind(this))
+                .catch(function () {
+                    this._editModel.setProperty("/lastRunAt", null);
+                    this._editModel.setProperty("/lastRunStatus", "");
+                }.bind(this));
+        },
+
+        onSelectStateRed: function () {
+            this._setLifecycleState("RED");
+        },
+
+        onSelectStateGreen: function () {
+            this._setLifecycleState("GREEN");
+        },
+
+        // Persist the Lifecycle / Current state (Enabled/Disabled) into
+        // TrafficLightStatus.initialState. Has no effect while the task
+        // chain is currently running (status = 'running'), since the
+        // displayed state stays "Running" regardless.
+        _setLifecycleState: function (sState) {
+            if (this._editModel.getProperty("/tlStatus") === "running") {
+                return;
+            }
+            this._editModel.setProperty("/currentState", sState);
+
+            var oModel = this.getModel();
+            if (!oModel || !this._tlSpaceId || !this._tlTaskchain) return;
+
+            if (this._tlContext) {
+                this._tlContext.setProperty("initialState", sState);
+                oModel.submitBatch(oModel.getUpdateGroupId()).catch(function (err) {
+                    this.error(err && err.message || String(err));
+                }.bind(this));
+            } else {
+                var oList = oModel.bindList("/TrafficLightStatus");
+                var oCtx = oList.create({
+                    spaceId: this._tlSpaceId,
+                    taskchain: this._tlTaskchain,
+                    initialState: sState
+                });
+                oCtx.created().then(function () {
+                    this._tlContext = oCtx;
+                }.bind(this)).catch(function (err) {
+                    this.error(err && err.message || String(err));
+                }.bind(this));
+            }
         },
 
         formatBusinessName: function (v) {
@@ -116,14 +225,6 @@ sap.ui.define([
             } else {
                 this.getRouter().navTo("scheduleList", {}, true);
             }
-        },
-
-        onSelectStateRed: function () {
-            this._editModel.setProperty("/currentState", "RED");
-        },
-
-        onSelectStateGreen: function () {
-            this._editModel.setProperty("/currentState", "GREEN");
         },
 
         onConfigureStepParameters: function () {
@@ -186,35 +287,6 @@ sap.ui.define([
                 .finally(function () { this._previewModel.setProperty("/busy", false); }.bind(this));
         },
 
-        onRunNow: function () {
-            var d = this._editModel.getData();
-            this.getRouter().navTo("onDemand", {
-                "?query": {
-                    spaceId: d.spaceId || "",
-                    taskchain: d.taskchain || "",
-                    name: d.name || ""
-                }
-            });
-        },
-
-        onChangeInitialState: function () {
-            var that = this;
-            MessageBox.show("Select the initial state for this task chain:", {
-                title: "Change Initial State",
-                icon: MessageBox.Icon.QUESTION,
-                actions: ["Enabled", "Disabled", MessageBox.Action.CANCEL],
-                emphasizedAction: "Enabled",
-                contentWidth: "420px",
-                onClose: function (sAction) {
-                    if (sAction === "Enabled") {
-                        that._editModel.setProperty("/currentState", "GREEN");
-                    } else if (sAction === "Disabled") {
-                        that._editModel.setProperty("/currentState", "RED");
-                    }
-                }
-            });
-        },
-
         onNavigateToSteps: function () {
             this.onConfigureStepParameters();
         },
@@ -254,10 +326,9 @@ sap.ui.define([
 
             var tlSettings = {
                 scheduleKind: "TRAFFIC_LIGHTS",
-                currentState: d.currentState || "GREEN",
                 checkInterval: d.checkInterval || "15",
                 autoReset: !!d.autoReset,
-                autoResetState: d.autoResetState || "GREY",
+                autoResetState: d.autoResetState || "GREEN",
                 timeout: d.timeout || "48"
             };
             var payload = {

@@ -1,3 +1,11 @@
+.splitter-auto-height {
+    height: auto !important;
+}
+.splitter-auto-height > .sapUiLoSplitterContent {
+    height: auto !important;
+    position: relative !important;
+}
+
 .scheduler-kpi-tile {
     margin: 0.25rem;
     min-width: 8rem;

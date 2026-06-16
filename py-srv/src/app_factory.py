@@ -181,6 +181,7 @@ def create_app() -> Flask:
             repo=schedule_repo,
             taskchain_executor=taskchain_executor,
             job_executor=job_executor,
+            db_query_executor=db_query_executor,
         )
         try:
             scheduler_service.sync()

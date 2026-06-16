@@ -22,11 +22,6 @@
                         </VBox>
                     </HBox>
                 </f:heading>
-                <f:actions>
-                    <Button text="Run Now" type="Emphasized" icon="sap-icon://media-play"
-                            press=".onRunNow" visible="{= !!${edit>/ID} }"/>
-                    <Button text="{i18n>common.save}" icon="sap-icon://save" press=".onSave"/>
-                </f:actions>
             </f:DynamicPageTitle>
         </f:title>
 
@@ -36,26 +31,26 @@
                 <HBox alignItems="Center" wrap="Wrap"
                       class="sapUiSmallMarginBeginEnd sapUiTinyMarginTopBottom">
 
-                    <!-- Overall status -->
+                    <!-- Overall status (from technical table) -->
                     <HBox alignItems="Center" class="sapUiLargeMarginEnd">
                         <core:Icon
-                            src="{= ${edit>/currentState} === 'GREEN' ? 'sap-icon://sys-enter-2' : ${edit>/currentState} === 'RED' ? 'sap-icon://sys-cancel-2' : 'sap-icon://sys-help-2' }"
+                            src="{= ${edit>/currentState} === 'GREEN' ? 'sap-icon://sys-enter-2' : ${edit>/currentState} === 'RED' ? 'sap-icon://sys-cancel-2' : 'sap-icon://synchronize' }"
                             size="2.5rem"
-                            color="{= ${edit>/currentState} === 'GREEN' ? '#107E3E' : ${edit>/currentState} === 'RED' ? '#BB0000' : '#9E9E9E' }"
+                            color="{= ${edit>/currentState} === 'GREEN' ? '#107E3E' : ${edit>/currentState} === 'RED' ? '#BB0000' : '#0a6ed1' }"
                             class="sapUiSmallMarginEnd"/>
                         <VBox>
                             <ObjectStatus
-                                text="{= ${edit>/currentState} === 'GREEN' ? 'Ready to run' : ${edit>/currentState} === 'RED' ? 'Disabled' : 'On hold' }"
-                                state="{= ${edit>/currentState} === 'GREEN' ? 'Success' : ${edit>/currentState} === 'RED' ? 'Error' : 'None' }"
-                                inverted="{= ${edit>/currentState} !== 'GREY' }"
+                                text="{= ${edit>/currentState} === 'GREEN' ? 'Ready to run' : ${edit>/currentState} === 'RED' ? 'Disabled' : 'Running' }"
+                                state="{= ${edit>/currentState} === 'GREEN' ? 'Success' : ${edit>/currentState} === 'RED' ? 'Error' : 'Information' }"
+                                inverted="true"
                                 class="sapUiTinyMarginBottom"/>
-                            <Text text="{= ${edit>/currentState} === 'GREEN' ? 'The task chain is enabled and active.' : ${edit>/currentState} === 'RED' ? 'The task chain is disabled.' : 'The task chain is on hold.' }"/>
+                            <Text text="{= ${edit>/currentState} === 'GREEN' ? 'The task chain is enabled and active.' : ${edit>/currentState} === 'RED' ? 'On hold, waiting for a new ready status.' : 'The task chain is currently running.' }"/>
                         </VBox>
                     </HBox>
 
                     <core:HTML content="&lt;div style='width:1px;height:3.5rem;background:#e0e0e0;margin-right:1.5rem'&gt;&lt;/div&gt;"/>
 
-                    <!-- Current state -->
+                    <!-- Current state (from technical table) -->
                     <VBox class="sapUiMediumMarginEnd">
                         <HBox alignItems="Center" class="sapUiTinyMarginBottom">
                             <core:Icon src="sap-icon://lateness" size="0.875rem" class="sapUiTinyMarginEnd"/>
@@ -63,9 +58,9 @@
                         </HBox>
                         <HBox alignItems="Center">
                             <core:Icon src="sap-icon://circle-task-2" size="0.875rem"
-                                color="{= ${edit>/currentState} === 'GREEN' ? '#107E3E' : ${edit>/currentState} === 'RED' ? '#BB0000' : '#9E9E9E' }"
+                                color="{= ${edit>/currentState} === 'GREEN' ? '#107E3E' : ${edit>/currentState} === 'RED' ? '#BB0000' : '#0a6ed1' }"
                                 class="sapUiTinyMarginEnd"/>
-                            <Text text="{= ${edit>/currentState} === 'GREEN' ? 'Enabled' : ${edit>/currentState} === 'RED' ? 'Disabled' : 'On hold' }"/>
+                            <Text text="{= ${edit>/currentState} === 'GREEN' ? 'Enabled' : ${edit>/currentState} === 'RED' ? 'Disabled' : 'Running' }"/>
                         </HBox>
                     </VBox>
 
@@ -86,20 +81,10 @@
                         </HBox>
                         <HBox alignItems="Center">
                             <core:Icon src="sap-icon://circle-task-2" size="0.875rem"
-                                color="{= ${edit>/autoReset} ? (${edit>/autoResetState} === 'RED' ? '#BB0000' : '#9E9E9E') : '#DEDEDE' }"
+                                color="{= ${edit>/autoReset} ? (${edit>/autoResetState} === 'GREEN' ? '#107E3E' : '#BB0000') : '#DEDEDE' }"
                                 class="sapUiTinyMarginEnd"/>
-                            <Text text="{= ${edit>/autoReset} ? (${edit>/autoResetState} === 'GREY' ? 'On hold' : 'Disabled') : '—' }"/>
+                            <Text text="{= ${edit>/autoReset} ? (${edit>/autoResetState} === 'GREEN' ? 'Enabled' : 'Disabled') : '—' }"/>
                         </HBox>
-                    </VBox>
-
-                    <!-- Last run -->
-                    <VBox class="sapUiMediumMarginEnd" visible="{= !!${edit>/lastRunAt} }">
-                        <HBox alignItems="Center" class="sapUiTinyMarginBottom">
-                            <core:Icon src="sap-icon://appointment-2" size="0.875rem" class="sapUiTinyMarginEnd"/>
-                            <Label text="Last run"/>
-                        </HBox>
-                        <Text text="{edit>/lastRunAt}"/>
-                        <Text text="{edit>/lastRunStatus}" class="sapSuccessColor"/>
                     </VBox>
 
                     <!-- Next check -->
@@ -115,9 +100,8 @@
             </f:DynamicPageHeader>
         </f:header>
 
-        <!-- THREE COLUMNS fill the full content area -->
         <f:content>
-            <l:Splitter height="100%">
+            <l:Splitter class="splitter-auto-height">
 
                 <!-- LEFT: Lifecycle -->
                 <Panel class="sapUiNoMargin">
@@ -144,18 +128,18 @@
                             </VBox>
                         </HBox>
 
-                        <!-- On hold -->
+                        <!-- Running -->
                         <HBox alignItems="Start" class="sapUiSmallMarginBottom">
                             <VBox alignItems="Center" width="2.5rem">
                                 <core:Icon
-                                    src="sap-icon://circle-task-2"
+                                    src="{= ${edit>/currentState} === 'GREY' ? 'sap-icon://synchronize' : 'sap-icon://circle-task-2' }"
                                     size="2rem"
-                                    color="#9E9E9E"/>
+                                    color="{= ${edit>/currentState} === 'GREY' ? '#0a6ed1' : '#DEDEDE' }"/>
                                 <core:HTML content="&lt;div style='width:2px;height:1.5rem;background:#DEDEDE;margin-top:0.125rem'&gt;&lt;/div&gt;"/>
                             </VBox>
                             <VBox class="sapUiTinyMarginBegin">
-                                <Title text="On hold" level="H6"/>
-                                <Text text="Task chain will be set to on hold after each run." wrapping="true"/>
+                                <Title text="Running" level="H6"/>
+                                <Text text="Task chain is currently running." wrapping="true"/>
                             </VBox>
                         </HBox>
 
@@ -175,10 +159,6 @@
                             </VBox>
                         </HBox>
 
-                        <Button text="Change Initial State"
-                                press=".onChangeInitialState"
-                                width="100%"
-                                class="sapUiLargeMarginTop"/>
                     </VBox>
                 </Panel>
 
@@ -210,17 +190,10 @@
                             <HBox alignItems="Center">
                                 <Switch state="{edit>/autoReset}" class="sapUiTinyMarginEnd"/>
                                 <Select selectedKey="{edit>/autoResetState}" visible="{edit>/autoReset}">
-                                    <core:Item key="GREY" text="⚪  On hold"/>
-                                    <core:Item key="RED"  text="🔴  Disabled"/>
+                                    <core:Item key="GREEN" text="🟢  Enabled"/>
+                                    <core:Item key="RED"   text="🔴  Disabled"/>
                                 </Select>
                             </HBox>
-                        </VBox>
-
-                        <!-- Task chain activation -->
-                        <VBox class="sapUiSmallMarginBottom">
-                            <Title text="Task chain activation" level="H6"/>
-                            <Text text="Allow the task chain to run" class="sapUiTinyMarginBottom"/>
-                            <Switch state="{edit>/isActive}"/>
                         </VBox>
 
                         <HBox class="sapUiSmallMarginTopBottom">
@@ -239,33 +212,33 @@
                     </VBox>
                 </Panel>
 
-                <!-- RIGHT: Details -->
+                <!-- RIGHT: Last Run -->
                 <Panel class="sapUiNoMargin">
                     <layoutData>
-                        <l:SplitterLayoutData size="260px" resizable="false"/>
+                        <l:SplitterLayoutData size="280px" resizable="false"/>
                     </layoutData>
-                    <VBox class="sapUiSmallMarginTopBottom sapUiSmallMarginBeginEnd">
-                        <Title text="Details" level="H5" class="sapUiSmallMarginBottom"/>
-                        <VBox class="sapUiTinyMarginBottom">
-                            <Label text="Technical Name" design="Bold"/>
-                            <Text text="{edit>/taskchain}"/>
+                    <VBox class="sapUiMediumMarginTopBottom sapUiMediumMarginBeginEnd">
+                        <Title text="Last Run" level="H5" class="sapUiMediumMarginBottom"/>
+
+                        <VBox visible="{= !!${edit>/lastRunAt} }">
+                            <VBox class="sapUiSmallMarginBottom">
+                                <Label text="Date and time" design="Bold"/>
+                                <Text text="{ path: 'edit>/lastRunAt', formatter: '.formatDateTime' }"/>
+                            </VBox>
+                            <VBox>
+                                <Label text="Status" design="Bold" class="sapUiTinyMarginBottom"/>
+                                <HBox alignItems="Center">
+                                    <core:Icon
+                                        src="{= ${edit>/lastRunStatus} === 'completed' || ${edit>/lastRunStatus} === 'success' ? 'sap-icon://sys-enter-2' : ${edit>/lastRunStatus} === 'error' ? 'sap-icon://sys-cancel-2' : 'sap-icon://pending' }"
+                                        size="1.25rem"
+                                        color="{= ${edit>/lastRunStatus} === 'completed' || ${edit>/lastRunStatus} === 'success' ? '#107E3E' : ${edit>/lastRunStatus} === 'error' ? '#BB0000' : '#9E9E9E' }"
+                                        class="sapUiTinyMarginEnd"/>
+                                    <Text text="{edit>/lastRunStatus}"/>
+                                </HBox>
+                            </VBox>
                         </VBox>
-                        <VBox class="sapUiTinyMarginBottom">
-                            <Label text="Description" design="Bold"/>
-                            <Text text="{ path: 'edit>/name', formatter: '.formatBusinessName' }"/>
-                        </VBox>
-                        <VBox class="sapUiTinyMarginBottom" visible="{= !!${edit>/createdBy} }">
-                            <Label text="Created By" design="Bold"/>
-                            <Text text="{edit>/createdBy}"/>
-                        </VBox>
-                        <VBox class="sapUiTinyMarginBottom" visible="{= !!${edit>/createdAt} }">
-                            <Label text="Created On" design="Bold"/>
-                            <Text text="{ path: 'edit>/createdAt', formatter: '.formatDateTime' }"/>
-                        </VBox>
-                        <VBox visible="{= !!${edit>/modifiedAt} }">
-                            <Label text="Changed On" design="Bold"/>
-                            <Text text="{ path: 'edit>/modifiedAt', formatter: '.formatDateTime' }"/>
-                        </VBox>
+
+                        <Text text="No runs yet." visible="{= !${edit>/lastRunAt} }"/>
                     </VBox>
                 </Panel>
 

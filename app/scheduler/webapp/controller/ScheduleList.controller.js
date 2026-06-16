@@ -35,7 +35,16 @@ sap.ui.define([
             this._previewModel = new JSONModel({ next: [], busy: false });
 
             // Page model: rows = task chains the user has added to the list
-            this._pageModel = new JSONModel({ rows: [], busy: false });
+            this._pageModel = new JSONModel({
+                rows: [],
+                busy: false,
+                searchQuery: "",
+                filterStatus: "all",
+                filterType: "all",
+                filterSpace: "all",
+                spaceOptions: [],
+                summary: { total: 0, scheduled: 0, notScheduled: 0, paused: 0 }
+            });
             this.getView().setModel(this._pageModel, "page");
 
             this.getRouter().getRoute("scheduleList").attachPatternMatched(this._onListMatched, this);
@@ -62,9 +71,10 @@ sap.ui.define([
             return oList.requestContexts(0, 1000).then(function (aCtx) {
                 var rows = aCtx.map(function (c) {
                     var o = c.getObject();
-                    return { spaceId: o.spaceId, name: o.name, businessName: o.businessName || o.name, hasSchedule: false, schedulesLoaded: false };
+                    return { spaceId: o.spaceId, name: o.name, businessName: o.businessName || o.name, hasSchedule: false, schedulesLoaded: false, filterStatus: "notScheduled", filterType: "none" };
                 });
                 this._pageModel.setProperty("/rows", rows);
+                this._updateSummary();
             }.bind(this)).catch(function (err) {
                 console.warn("Could not load saved task chains:", err && err.message);
             });
@@ -256,15 +266,23 @@ sap.ui.define([
                         r.scheduleText = top.description;
                     }
                     r.schedulesLoaded = true;
+                    r.filterStatus = r.isPaused ? "paused" : (r.hasInfo ? "scheduled" : "notScheduled");
+                    r.filterType = ({ app: "trafficLights", onDemand: "onDemand", calendar: "customCalendar", dsp: "dsp" })[r.source] || "none";
                 }.bind(this));
 
                 this._pageModel.setProperty("/rows", rows.slice());
+                this._updateSummary();
             }.bind(this)).catch(function (err) {
                 console.warn("Could not load schedules:", err && err.message);
                 // Mark rows as loaded even on error so the UI isn't stuck hidden
                 var rows2 = this._pageModel.getProperty("/rows") || [];
-                rows2.forEach(function (r) { r.schedulesLoaded = true; });
+                rows2.forEach(function (r) {
+                    r.schedulesLoaded = true;
+                    r.filterStatus = r.filterStatus || "notScheduled";
+                    r.filterType = r.filterType || "none";
+                });
                 this._pageModel.setProperty("/rows", rows2.slice());
+                this._updateSummary();
             }.bind(this));
         },
 
@@ -348,25 +366,70 @@ sap.ui.define([
             this._refreshSchedulesForRows();
         },
 
+        _updateSummary: function () {
+            var rows = this._pageModel.getProperty("/rows") || [];
+            var summary = { total: rows.length, scheduled: 0, notScheduled: 0, paused: 0 };
+            var aSpaces = [];
+            rows.forEach(function (r) {
+                if (r.filterStatus === "scheduled") summary.scheduled++;
+                else if (r.filterStatus === "paused") summary.paused++;
+                else summary.notScheduled++;
+                if (r.spaceId && aSpaces.indexOf(r.spaceId) === -1) aSpaces.push(r.spaceId);
+            });
+            aSpaces.sort();
+            this._pageModel.setProperty("/summary", summary);
+            this._pageModel.setProperty("/spaceOptions", [{ key: "all", text: this.i18n("list.filter.spaceAll") }]
+                .concat(aSpaces.map(function (s) { return { key: s, text: s }; })));
+        },
+
         onSearchTaskchains: function (oEvt) {
             var sQuery = (oEvt.getParameter("newValue") !== undefined
                 ? oEvt.getParameter("newValue")
                 : oEvt.getParameter("query")) || "";
-            var sQ = sQuery.toLowerCase().trim();
+            this._sSearchQuery = sQuery.toLowerCase().trim();
+            this._applyFilters();
+        },
+
+        onFilterChange: function () {
+            this._applyFilters();
+        },
+
+        _applyFilters: function () {
             var oTable = this.byId("taskchainsTable");
             if (!oTable) return;
             var oBinding = oTable.getBinding("items");
             if (!oBinding) return;
-            if (!sQ) {
-                oBinding.filter([]);
-                return;
+
+            var aFilters = [];
+
+            var sQ = this._sSearchQuery || "";
+            if (sQ) {
+                aFilters.push(new Filter({
+                    filters: [
+                        new Filter("spaceId", FilterOperator.Contains, sQ),
+                        new Filter("name", FilterOperator.Contains, sQ),
+                        new Filter("businessName", FilterOperator.Contains, sQ)
+                    ],
+                    and: false
+                }));
             }
-            var aFilters = [
-                new Filter("spaceId", FilterOperator.Contains, sQ),
-                new Filter("name", FilterOperator.Contains, sQ),
-                new Filter("businessName", FilterOperator.Contains, sQ)
-            ];
-            oBinding.filter(new Filter({ filters: aFilters, and: false }));
+
+            var sStatus = this._pageModel.getProperty("/filterStatus");
+            if (sStatus && sStatus !== "all") {
+                aFilters.push(new Filter("filterStatus", FilterOperator.EQ, sStatus));
+            }
+
+            var sType = this._pageModel.getProperty("/filterType");
+            if (sType && sType !== "all") {
+                aFilters.push(new Filter("filterType", FilterOperator.EQ, sType));
+            }
+
+            var sSpace = this._pageModel.getProperty("/filterSpace");
+            if (sSpace && sSpace !== "all") {
+                aFilters.push(new Filter("spaceId", FilterOperator.EQ, sSpace));
+            }
+
+            oBinding.filter(aFilters);
         },
 
         // ------------------------------------------------------------
@@ -448,7 +511,9 @@ sap.ui.define([
                     spaceId: o.spaceId,
                     name: o.name,
                     businessName: o.businessName || o.name,
-                    hasSchedule: false
+                    hasSchedule: false,
+                    filterStatus: "notScheduled",
+                    filterType: "none"
                 };
                 rows.push(newRow);
                 existing[k] = true;
@@ -461,6 +526,7 @@ sap.ui.define([
             }.bind(this));
 
             this._pageModel.setProperty("/rows", rows);
+            this._updateSummary();
             Promise.all(aCreated).then(function () {
                 this._refreshSchedulesForRows();
             }.bind(this)).catch(function (err) {
@@ -1357,6 +1423,7 @@ sap.ui.define([
                     return !(r.spaceId === row.spaceId && r.name === row.name);
                 });
                 this._pageModel.setProperty("/rows", rows);
+                this._updateSummary();
                 this._deleteSavedRow(row.spaceId, row.name);
             }.bind(this);
 

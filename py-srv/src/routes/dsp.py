@@ -127,6 +127,53 @@ def _extract_ibp_template_from_metadata(md: dict) -> str | None:
     return _deep_search(md)
 
 
+def _extract_sac_multiaction_from_metadata(md: dict) -> str | None:
+    """Try to extract a SAC multi-action ID from a DWC deployment-metadata dict.
+
+    SAC API-trigger steps store their config as JSON, e.g.::
+
+        {"integration": "sac", "multiaction_id": "t.F:A8B06D852F1681322AE35493186B1970", "parameters": {}}
+
+    possibly nested or embedded as a JSON string within other fields.
+    """
+    if not isinstance(md, dict):
+        return None
+
+    _KEYS = {"multiaction_id", "multiActionId", "MULTIACTION_ID", "MultiActionId", "MULTI_ACTION_ID"}
+
+    def _deep_search(obj, depth=0):
+        if depth > 8 or not isinstance(obj, dict):
+            return None
+        for k, v in obj.items():
+            if isinstance(k, str) and k in _KEYS and isinstance(v, str) and v.strip():
+                return v.strip()
+            if isinstance(v, str):
+                stripped = v.strip()
+                if stripped.startswith("{"):
+                    try:
+                        parsed = json.loads(stripped)
+                        if isinstance(parsed, dict):
+                            result = _deep_search(parsed, depth + 1)
+                            if result:
+                                return result
+                    except Exception:
+                        pass
+        for k, v in obj.items():
+            if isinstance(v, dict):
+                result = _deep_search(v, depth + 1)
+                if result:
+                    return result
+            elif isinstance(v, list):
+                for item in v:
+                    if isinstance(item, dict):
+                        result = _deep_search(item, depth + 1)
+                        if result:
+                            return result
+        return None
+
+    return _deep_search(md)
+
+
 def _truncate(s: str, limit: int = 6000) -> str:
     s = s or ""
     if len(s) <= limit:
@@ -430,7 +477,7 @@ def debug_step_metadata():
     except Exception as e:
         out["metadata_error"] = str(e)
 
-    # 2. Raw node definition from the taskchain DAG (if taskchain given)
+    # 2. Raw node definition from the taskchain deployment metadata (never-run DAG)
     if taskchain:
         try:
             rows2 = db.query(
@@ -451,6 +498,39 @@ def debug_step_metadata():
                 out["dag_nodes"] = matching
         except Exception as e:
             out["dag_nodes_error"] = str(e)
+
+        # 3. Raw node definition from the latest run's DAG snapshot (has-run taskchains)
+        try:
+            space_id = request.args.get("spaceId")
+            if space_id:
+                run_rows = db.query(
+                    'SELECT "JSON" FROM "ORCHESTRATION"."3VR_DWC_TASK_CHAIN_RUNS_01" '
+                    'WHERE "SPACE_ID" = ? AND "TECHNICAL_NAME" = ? '
+                    'ORDER BY "CHAIN_TASK_LOG_ID" DESC LIMIT 1',
+                    (space_id, taskchain)
+                )
+            else:
+                run_rows = db.query(
+                    'SELECT "JSON" FROM "ORCHESTRATION"."3VR_DWC_TASK_CHAIN_RUNS_01" '
+                    'WHERE "TECHNICAL_NAME" = ? '
+                    'ORDER BY "CHAIN_TASK_LOG_ID" DESC LIMIT 1',
+                    (taskchain,)
+                )
+            if run_rows:
+                run_raw = run_rows[0].get("JSON") or run_rows[0].get("json") or ""
+                run_dag = _json.loads(run_raw) if run_raw else {}
+                run_sec = (run_dag.get("taskchains") or {}).get(taskchain) or {}
+                run_nodes = run_sec.get("nodes") or []
+                matching_run = [
+                    n for n in run_nodes
+                    if (n.get("taskIdentifier") or {}).get("objectId") == object_id
+                    or n.get("objectId") == object_id
+                ]
+                out["run_dag_nodes"] = matching_run
+            else:
+                out["run_dag_nodes"] = []
+        except Exception as e:
+            out["run_dag_nodes_error"] = str(e)
 
     return jsonify(out), 200
 
@@ -766,17 +846,24 @@ def get_taskchain_dag():
             })
             business_name_map = {}
             ibp_template_map = {}
+            sac_multiaction_map = {}
+            object_type_map = {}
             if object_ids:
                 try:
                     ph = ",".join(["?"] * len(object_ids))
                     bname_rows = db_query_executor.query(
-                        f'SELECT "NAME", "JSON" FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" WHERE "NAME" IN ({ph})',
+                        f'SELECT "NAME", "REPOSITORY_OBJECT_TYPE", "JSON" FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" WHERE "NAME" IN ({ph})',
                         tuple(object_ids)
                     )
                     for mr in bname_rows or []:
                         nm = mr.get("NAME") or mr.get("name")
                         rj = mr.get("JSON") or mr.get("json")
-                        if not nm or not rj:
+                        if not nm:
+                            continue
+                        otype = mr.get("REPOSITORY_OBJECT_TYPE") or mr.get("repository_object_type")
+                        if otype:
+                            object_type_map[nm] = otype
+                        if not rj:
                             continue
                         try:
                             md = json.loads(rj)
@@ -798,6 +885,9 @@ def get_taskchain_dag():
                         tpl = _extract_ibp_template_from_metadata(md)
                         if tpl:
                             ibp_template_map[nm] = tpl
+                        sac_ma = _extract_sac_multiaction_from_metadata(md)
+                        if sac_ma:
+                            sac_multiaction_map[nm] = sac_ma
                 except Exception:
                     pass
 
@@ -813,7 +903,16 @@ def get_taskchain_dag():
                 if node_label and node_label == obj_id:
                     node_label = None
                 business_name = (business_name_map.get(obj_id) if obj_id else None) or node_label or None
-                ibp_tpl = (ibp_template_map.get(obj_id) if obj_id else None) or _extract_ibp_template_from_metadata(task_id)
+                ibp_tpl = (
+                    (ibp_template_map.get(obj_id) if obj_id else None)
+                    or _extract_ibp_template_from_metadata(task_id)
+                    or _extract_ibp_template_from_metadata(node)
+                )
+                sac_ma_id = (
+                    (sac_multiaction_map.get(obj_id) if obj_id else None)
+                    or _extract_sac_multiaction_from_metadata(task_id)
+                    or _extract_sac_multiaction_from_metadata(node)
+                )
                 nodes.append({
                     "id": node.get("id"),
                     "type": node.get("type", "TASK"),
@@ -827,6 +926,8 @@ def get_taskchain_dag():
                     "ignoreError": node.get("ignoreError", False),
                     "taskLogId": None,
                     "ibpTemplateName": ibp_tpl,
+                    "sacMultiActionId": sac_ma_id,
+                    "objectType": object_type_map.get(obj_id) if obj_id else None,
                 })
             for link in raw_links:
                 links.append({
@@ -948,18 +1049,25 @@ def get_taskchain_dag():
             })
             business_name_map = {}
             ibp_template_map = {}
+            sac_multiaction_map = {}
+            object_type_map = {}
             if object_ids:
                 try:
                     placeholders = ",".join(["?"] * len(object_ids))
                     meta_sql = (
-                        'SELECT "NAME", "JSON" FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" '
+                        'SELECT "NAME", "REPOSITORY_OBJECT_TYPE", "JSON" FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" '
                         f'WHERE "NAME" IN ({placeholders})'
                     )
                     meta_rows = db_query_executor.query(meta_sql, tuple(object_ids))
                     for mr in meta_rows or []:
                         nm = mr.get("NAME") or mr.get("name")
                         raw_json = mr.get("JSON") or mr.get("json")
-                        if not nm or not raw_json:
+                        if not nm:
+                            continue
+                        otype = mr.get("REPOSITORY_OBJECT_TYPE") or mr.get("repository_object_type")
+                        if otype:
+                            object_type_map[nm] = otype
+                        if not raw_json:
                             continue
                         try:
                             md = json.loads(raw_json)
@@ -983,6 +1091,9 @@ def get_taskchain_dag():
                         tpl = _extract_ibp_template_from_metadata(md)
                         if tpl:
                             ibp_template_map[nm] = tpl
+                        sac_ma = _extract_sac_multiaction_from_metadata(md)
+                        if sac_ma:
+                            sac_multiaction_map[nm] = sac_ma
                 except Exception as _e:  # metadata view may be missing — fall back silently
                     business_name_map = {}
 
@@ -1051,7 +1162,13 @@ def get_taskchain_dag():
                 ibp_tpl = (
                     (ibp_template_map.get(obj_id) if obj_id else None)
                     or _extract_ibp_template_from_metadata(task_id)
+                    or _extract_ibp_template_from_metadata(node)
                     or ibp_template_from_logs.get(exec_info.get("taskLogId"))
+                )
+                sac_ma_id = (
+                    (sac_multiaction_map.get(obj_id) if obj_id else None)
+                    or _extract_sac_multiaction_from_metadata(task_id)
+                    or _extract_sac_multiaction_from_metadata(node)
                 )
 
                 # Best-effort extraction of a human-readable label/description
@@ -1083,6 +1200,8 @@ def get_taskchain_dag():
                     "ignoreError": node.get("ignoreError", False),
                     "taskLogId": exec_info.get("taskLogId"),
                     "ibpTemplateName": ibp_tpl,
+                    "sacMultiActionId": sac_ma_id,
+                    "objectType": object_type_map.get(obj_id) if obj_id else None,
                 })
             
             for link in raw_links:
@@ -1398,18 +1517,25 @@ def get_taskchain_steps():
         def _build_metadata_maps(object_ids):
             bmap = {}
             ibp_tpl_map = {}
+            sac_ma_map = {}
+            otype_map = {}
             if not object_ids:
-                return bmap, ibp_tpl_map
+                return bmap, ibp_tpl_map, sac_ma_map, otype_map
             try:
                 ph = ",".join(["?"] * len(object_ids))
                 rows = db_query_executor.query(
-                    f'SELECT "NAME", "JSON" FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" WHERE "NAME" IN ({ph})',
+                    f'SELECT "NAME", "REPOSITORY_OBJECT_TYPE", "JSON" FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" WHERE "NAME" IN ({ph})',
                     tuple(object_ids)
                 )
                 for mr in (rows or []):
                     nm  = mr.get("NAME") or mr.get("name")
                     raw = mr.get("JSON") or mr.get("json")
-                    if not nm or not raw:
+                    if not nm:
+                        continue
+                    otype = mr.get("REPOSITORY_OBJECT_TYPE") or mr.get("repository_object_type")
+                    if otype:
+                        otype_map[nm] = otype
+                    if not raw:
                         continue
                     try:
                         md = _json.loads(raw)
@@ -1434,9 +1560,12 @@ def get_taskchain_steps():
                     tpl = _extract_ibp_template_from_metadata(md)
                     if tpl:
                         ibp_tpl_map[nm] = tpl
+                    sac_ma = _extract_sac_multiaction_from_metadata(md)
+                    if sac_ma:
+                        sac_ma_map[nm] = sac_ma
             except Exception:
                 pass
-            return bmap, ibp_tpl_map
+            return bmap, ibp_tpl_map, sac_ma_map, otype_map
 
         # ------------------------------------------------------------------
         # Read step IDs and descriptions from the deployment manifest JSON.
@@ -1550,7 +1679,7 @@ def get_taskchain_steps():
         if not object_ids_ordered:
             return jsonify({"success": True, "steps": [], "debug": debug_info}), 200
 
-        bmap, ibp_tpl_map = _build_metadata_maps([o for o, _ in object_ids_ordered])
+        bmap, ibp_tpl_map, sac_ma_map, otype_map = _build_metadata_maps([o for o, _ in object_ids_ordered])
         import logging as _logging
         _logging.getLogger(__name__).warning("[DIAG] raw nodes: %s", _json.dumps(object_ids_ordered, default=str))
         steps = []
@@ -1563,7 +1692,16 @@ def get_taskchain_steps():
             # Discard node_label if it is just the technical name repeated
             if node_label and node_label == obj_id:
                 node_label = None
-            ibp_tpl = ibp_tpl_map.get(obj_id) or _extract_ibp_template_from_metadata(task_id)
+            ibp_tpl = (
+                ibp_tpl_map.get(obj_id)
+                or _extract_ibp_template_from_metadata(task_id)
+                or _extract_ibp_template_from_metadata(node)
+            )
+            sac_ma_id = (
+                sac_ma_map.get(obj_id)
+                or _extract_sac_multiaction_from_metadata(task_id)
+                or _extract_sac_multiaction_from_metadata(node)
+            )
             steps.append({
                 "id":              node.get("id") or obj_id,
                 "order":           i + 1,
@@ -1571,6 +1709,8 @@ def get_taskchain_steps():
                 "applicationId":   task_id.get("applicationId") or node.get("applicationId") or "",
                 "businessName":    bmap.get(obj_id) or node_label or "",
                 "ibpTemplateName": ibp_tpl or "",
+                "sacMultiActionId": sac_ma_id or "",
+                "objectType":      otype_map.get(obj_id) or "",
             })
 
         return jsonify({"success": True, "steps": steps, "debug": debug_info}), 200
@@ -1612,7 +1752,9 @@ def get_taskchain_runs():
             params.append(space_id)
         
         if taskchain:
-            conditions.append("\"OBJECT_ID\" = ?")
+            # Match get_taskchain_schedules: OBJECT_ID casing in the DWC view
+            # may differ from the taskchain name as stored/displayed in our app.
+            conditions.append('UPPER("OBJECT_ID") = UPPER(?)')
             params.append(taskchain)
         
         where_clause = " AND ".join(conditions)

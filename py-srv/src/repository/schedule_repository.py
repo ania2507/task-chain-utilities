@@ -10,6 +10,7 @@ Tables (generated from CDS namespace `conditional.app.schedules`):
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -157,7 +158,7 @@ class ScheduleRepository:
         sql = (
             f"SELECT ID, NAME, DESCRIPTION, TARGETTYPE, SPACEID, TASKCHAIN, "
             f"JOBTEMPLATE, PARAMETERS, CRONEXPRESSION, TIMEZONE, ISACTIVE, "
-            f"NEXTRUNAT, LASTRUNSTATUS "
+            f"NEXTRUNAT, LASTRUNAT, LASTRUNSTATUS "
             f"FROM {SCHEDULE_TBL} "
             f"WHERE ISACTIVE = TRUE"
         )
@@ -179,22 +180,47 @@ class ScheduleRepository:
                 pass
 
     def update_schedule_run_status(self, schedule_id: str, status: str, next_run_at: Optional[str]) -> None:
-        """Update lastRunStatus and nextRunAt on a Schedule row after a cron tick."""
+        """Update lastRunStatus and nextRunAt on a Schedule row after a cron tick.
+
+        lastRunAt is only stamped for actual fires (status != 'skipped') -
+        ticks that were skipped (e.g. tl status not 'ready') don't count as a run.
+        """
         if self._use_mem:
             return
-        sql = (
-            f"UPDATE {SCHEDULE_TBL} "
-            f"SET LASTRUNSTATUS = ?, NEXTRUNAT = ? "
-            f"WHERE ID = ?"
-        )
+        if status == "skipped":
+            sql = f"UPDATE {SCHEDULE_TBL} SET LASTRUNSTATUS = ?, NEXTRUNAT = ? WHERE ID = ?"
+            params = (status, next_run_at, schedule_id)
+        else:
+            now = datetime.now(timezone.utc).isoformat()
+            sql = f"UPDATE {SCHEDULE_TBL} SET LASTRUNAT = ?, LASTRUNSTATUS = ?, NEXTRUNAT = ? WHERE ID = ?"
+            params = (now, status, next_run_at, schedule_id)
         conn = self._conn()
         try:
             cur = conn.cursor()
-            cur.execute(sql, (status, next_run_at, schedule_id))
+            cur.execute(sql, params)
             conn.commit()
             cur.close()
         except Exception as e:
             logger.warning("update_schedule_run_status failed: %s", e)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def delete_schedule(self, schedule_id: str) -> None:
+        """Delete a Schedule row (Traffic Lights schedule) by ID."""
+        if self._use_mem:
+            return
+        sql = f"DELETE FROM {SCHEDULE_TBL} WHERE ID = ?"
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(sql, (schedule_id,))
+            conn.commit()
+            cur.close()
+        except Exception as e:
+            logger.warning("delete_schedule failed: %s", e)
         finally:
             try:
                 conn.close()
@@ -210,7 +236,7 @@ class ScheduleRepository:
             mem = getattr(self, "_mem_traffic", {})
             return mem.get(f"{space_id}::{taskchain}")
         sql = (
-            f"SELECT SPACEID, TASKCHAIN, STATUS, UPDATEDAT, NOTE "
+            f"SELECT SPACEID, TASKCHAIN, STATUS, UPDATEDAT, NOTE, INITIALSTATE "
             f"FROM {TRAFFIC_LIGHT_TBL} "
             f"WHERE SPACEID = ? AND TASKCHAIN = ?"
         )
@@ -222,7 +248,7 @@ class ScheduleRepository:
             cur.close()
             if not row:
                 return None
-            cols = ["SPACEID", "TASKCHAIN", "STATUS", "UPDATEDAT", "NOTE"]
+            cols = ["SPACEID", "TASKCHAIN", "STATUS", "UPDATEDAT", "NOTE", "INITIALSTATE"]
             return _row_to_traffic_light(dict(zip(cols, row)))
         except Exception as e:
             logger.warning("get_traffic_light failed: %s", e)
@@ -239,10 +265,13 @@ class ScheduleRepository:
         if self._use_mem:
             if not hasattr(self, "_mem_traffic"):
                 self._mem_traffic: Dict[str, Any] = {}
-            self._mem_traffic[f"{space_id}::{taskchain}"] = {
+            row = self._mem_traffic.get(f"{space_id}::{taskchain}", {})
+            row.update({
                 "spaceId": space_id, "taskchain": taskchain,
                 "status": status, "updatedAt": now, "note": note,
-            }
+            })
+            row.setdefault("initialState", "GREEN")
+            self._mem_traffic[f"{space_id}::{taskchain}"] = row
             return
         # HANA UPSERT (MERGE INTO)
         sql = (
@@ -262,6 +291,44 @@ class ScheduleRepository:
             cur.close()
         except Exception as e:
             logger.warning("set_traffic_light_status failed: %s", e)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def set_traffic_light_initial_state(self, space_id: str, taskchain: str, initial_state: str) -> None:
+        """Upsert the initialState (Lifecycle/Current state: GREEN=Enabled,
+        RED=Disabled) for (spaceId, taskchain) in TrafficLightStatus, without
+        touching status/note. Defaults a new row's status to NULL (the
+        external system is responsible for setting 'ready')."""
+        if self._use_mem:
+            if not hasattr(self, "_mem_traffic"):
+                self._mem_traffic: Dict[str, Any] = {}
+            row = self._mem_traffic.get(f"{space_id}::{taskchain}", {
+                "spaceId": space_id, "taskchain": taskchain,
+                "status": None, "updatedAt": None, "note": None,
+            })
+            row["initialState"] = initial_state
+            self._mem_traffic[f"{space_id}::{taskchain}"] = row
+            return
+        sql = (
+            f"MERGE INTO {TRAFFIC_LIGHT_TBL} AS tgt "
+            f"USING (SELECT ? AS SPACEID, ? AS TASKCHAIN FROM DUMMY) AS src "
+            f"ON tgt.SPACEID = src.SPACEID AND tgt.TASKCHAIN = src.TASKCHAIN "
+            f"WHEN MATCHED THEN UPDATE SET INITIALSTATE = ? "
+            f"WHEN NOT MATCHED THEN INSERT (SPACEID, TASKCHAIN, INITIALSTATE) "
+            f"VALUES (?, ?, ?)"
+        )
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(sql, (space_id, taskchain, initial_state,
+                              space_id, taskchain, initial_state))
+            conn.commit()
+            cur.close()
+        except Exception as e:
+            logger.warning("set_traffic_light_initial_state failed: %s", e)
         finally:
             try:
                 conn.close()
@@ -298,6 +365,7 @@ def _row_to_schedule(row: Dict[str, Any]) -> Dict[str, Any]:
         "timezone": row.get("TIMEZONE") or "Europe/Rome",
         "isActive": bool(row.get("ISACTIVE")),
         "nextRunAt": row.get("NEXTRUNAT"),
+        "lastRunAt": row.get("LASTRUNAT"),
         "lastRunStatus": row.get("LASTRUNSTATUS"),
     }
 
@@ -309,4 +377,5 @@ def _row_to_traffic_light(row: Dict[str, Any]) -> Dict[str, Any]:
         "status": row.get("STATUS"),
         "updatedAt": row.get("UPDATEDAT"),
         "note": row.get("NOTE"),
+        "initialState": row.get("INITIALSTATE") or "GREEN",
     }

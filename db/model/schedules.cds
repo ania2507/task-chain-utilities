@@ -62,6 +62,7 @@ entity Schedule : cuid, managed {
   timezone       : String(50)   default 'Europe/Rome' @title: 'Timezone';
   isActive       : Boolean      default true @title: 'Active';
   nextRunAt      : Timestamp    @title: 'Next Run At';
+  lastRunAt      : Timestamp    @title: 'Last Run At';
   lastRunStatus  : String(20)   @title: 'Last Run Status'; // triggered|skipped|error
 }
 
@@ -69,21 +70,26 @@ entity Schedule : cuid, managed {
  * Semaphore table populated by external systems.
  * One row per (spaceId, taskchain) pair.
  * status values: 'ready' = ok to launch | 'running' = launched by scheduler |
- * 'on_hold' / 'disabled' = paused per the schedule's "After each run" policy |
- * 'completed' = run finished and "After each run" is disabled | other = blocked/wait
+ * 'completed' / 'error' = run outcome, set by the scheduler once a run finishes.
  * The Traffic Lights scheduler reads this table at each interval tick:
  * only rows with status = 'ready' trigger a DSP task chain launch.
  * After launch the scheduler sets status = 'running'. The scheduler watches
- * the run and, once it finishes, NEVER leaves it stuck on 'running':
- *   - if "After each run" is enabled, it sets 'on_hold' or 'disabled'
- *     (per the configured autoResetState);
- *   - otherwise it sets 'completed', and the external system is responsible
- *     for resetting it to 'ready' when a new run can be triggered.
+ * the run and, once it finishes, NEVER leaves it stuck on 'running': it sets
+ * 'completed' or 'error'. The 'ready' status is only ever set by the
+ * external system.
+ *
+ * initialState is the schedule's own Lifecycle / Current state
+ * (GREEN = Enabled | RED = Disabled), independent from status above.
+ * Defaults to 'GREEN' when the traffic-lights schedule is created, can be
+ * toggled by the user from the Lifecycle panel, and is also updated by the
+ * "After each run" policy once a run completes. When status = 'running' the
+ * UI shows "Running" regardless of initialState.
  */
 entity TrafficLightStatus {
   key spaceId   : String(100) @title: 'DSP Space ID';
   key taskchain : String(200) @title: 'Taskchain';
-  status        : String(20)  @title: 'Status'; // 'ready' | 'running' | 'on_hold' | 'disabled' | 'completed'
+  status        : String(20)  @title: 'Status'; // 'ready' | 'running' | 'completed' | 'error'
   updatedAt     : Timestamp   @title: 'Last Updated';
   note          : String(500) @title: 'Note';
+  initialState  : String(10)  default 'GREEN' @title: 'Initial State'; // 'GREEN' (Enabled) | 'RED' (Disabled)
 }

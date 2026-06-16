@@ -18,6 +18,8 @@ sap.ui.define([
                 onDemandTime: "",
                 parameters: "",
                 stepParamsSummary: "",
+                lastRunAt: null,
+                lastRunStatus: "",
                 busy: false
             });
             this.getView().setModel(oModel, "edit");
@@ -37,6 +39,7 @@ sap.ui.define([
                 oComp._onDemandState = null;
                 this._editModel.setData(savedState);
                 this._consumeStepParametersResult();
+                this._loadLastRun(savedState.spaceId, savedState.taskchain);
                 return;
             }
 
@@ -51,12 +54,38 @@ sap.ui.define([
                 onDemandTime: ("0" + now.getHours()).slice(-2) + ":" + ("0" + now.getMinutes()).slice(-2),
                 parameters: "",
                 stepParamsSummary: "",
+                lastRunAt: null,
+                lastRunStatus: "",
                 busy: false
             });
             this._consumeStepParametersResult();
+            this._loadLastRun(oQuery.spaceId, oQuery.taskchain);
             if (oQuery.entryId) {
                 this._loadEntry(oQuery.entryId);
             }
+        },
+
+        // "Last Run" panel data comes directly from DSP's task execution
+        // logs (v1/dsp/taskchain-runs), not from our own bookkeeping.
+        _loadLastRun: function (spaceId, taskchain) {
+            if (!spaceId || !taskchain) {
+                this._editModel.setProperty("/lastRunAt", null);
+                this._editModel.setProperty("/lastRunStatus", "");
+                return;
+            }
+            var sUrl = "v1/dsp/taskchain-runs?spaceId=" + encodeURIComponent(spaceId)
+                + "&taskchain=" + encodeURIComponent(taskchain) + "&limit=1";
+            fetch(sUrl, { headers: { "Accept": "application/json" } })
+                .then(function (res) { return res.json(); })
+                .then(function (data) {
+                    var run = (data && data.success && data.runs && data.runs[0]) || null;
+                    this._editModel.setProperty("/lastRunAt", run ? (run.endTime || run.startTime) : null);
+                    this._editModel.setProperty("/lastRunStatus", run ? run.status : "");
+                }.bind(this))
+                .catch(function () {
+                    this._editModel.setProperty("/lastRunAt", null);
+                    this._editModel.setProperty("/lastRunStatus", "");
+                }.bind(this));
         },
 
         _loadEntry: function (sId) {
@@ -105,6 +134,21 @@ sap.ui.define([
         formatBusinessName: function (v) {
             if (!v) return "";
             return String(v).replace(/^\s*task\s*chain\s*[-:–]\s*/i, "");
+        },
+
+        formatDateTime: function (v) {
+            if (!v) return "—";
+            try {
+                var d = new Date(v);
+                if (isNaN(d.getTime())) return String(v);
+                return d.toLocaleString("it-IT", {
+                    day: "2-digit", month: "2-digit", year: "numeric",
+                    hour: "2-digit", minute: "2-digit",
+                    timeZone: "Europe/Rome"
+                });
+            } catch (e) {
+                return String(v);
+            }
         },
 
         onNavBack: function () {

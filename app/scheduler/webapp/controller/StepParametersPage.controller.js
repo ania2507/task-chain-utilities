@@ -22,6 +22,7 @@ sap.ui.define([
                 steps: [],
                 selectedStepId: null,
                 selectedStepName: "",
+                selectedStepIsBlocked: false,
                 selectedStepParams: [],
                 newParam: _newParam(),
                 busy: false,
@@ -32,7 +33,9 @@ sap.ui.define([
                 selectedIbpStepIdx: null,
                 selectedIbpStepName: "",
                 selectedIbpStepParams: [],
-                newIbpParam: _newParam()
+                newIbpParam: _newParam(),
+                sacMultiActionId: "",
+                sacMultiActionName: ""
             });
             this.getView().setModel(this._editModel, "edit");
 
@@ -66,6 +69,7 @@ sap.ui.define([
                 steps: aSteps,
                 selectedStepId: null,
                 selectedStepName: "",
+                selectedStepIsBlocked: false,
                 selectedStepParams: [],
                 newParam: _newParam(),
                 busy: !bHasCached,
@@ -76,7 +80,9 @@ sap.ui.define([
                 selectedIbpStepIdx: null,
                 selectedIbpStepName: "",
                 selectedIbpStepParams: [],
-                newIbpParam: _newParam()
+                newIbpParam: _newParam(),
+                sacMultiActionId: "",
+                sacMultiActionName: ""
             });
 
             if (!bHasCached) {
@@ -161,6 +167,8 @@ sap.ui.define([
                                     description: n.description || "",
                                     applicationId: n.applicationId || "",
                                     ibpTemplateName: n.ibpTemplateName || "",
+                                    sacMultiActionId: n.sacMultiActionId || "",
+                                    objectType: n.objectType || "",
                                     allowParams: true,
                                     params: []
                                 };
@@ -190,6 +198,8 @@ sap.ui.define([
                                         description: "",
                                         applicationId: s.applicationId || "",
                                         ibpTemplateName: s.ibpTemplateName || "",
+                                        sacMultiActionId: s.sacMultiActionId || "",
+                                        objectType: s.objectType || "",
                                         allowParams: true,
                                         params: []
                                     };
@@ -346,12 +356,32 @@ sap.ui.define([
             var oCtx = oItem.getBindingContext("edit");
             if (!oCtx) return;
             var oStep = oCtx.getObject();
+
+            var sTargetType = this._editModel.getProperty("/targetType") || "DSP";
             var sDisplayName = oStep.businessName
                 ? oStep.name + " — " + oStep.businessName
                 : oStep.name;
+
+            if (sTargetType === "DSP" && !this._isApiStep(oStep)) {
+                this._editModel.setProperty("/selectedStepId", oStep.id);
+                this._editModel.setProperty("/selectedStepName", oStep.order + ": " + sDisplayName);
+                this._editModel.setProperty("/selectedStepIsBlocked", true);
+                this._editModel.setProperty("/selectedStepParams", []);
+                this._editModel.setProperty("/ibpTemplateName", "");
+                this._editModel.setProperty("/ibpSteps", []);
+                this._editModel.setProperty("/ibpLoading", false);
+                this._editModel.setProperty("/selectedIbpStepIdx", null);
+                this._editModel.setProperty("/selectedIbpStepName", "");
+                this._editModel.setProperty("/selectedIbpStepParams", []);
+                this._editModel.setProperty("/sacMultiActionId", "");
+                this._editModel.setProperty("/sacMultiActionName", "");
+                return;
+            }
+
             var aCachedIbpSteps = oStep.ibpSteps || [];
             this._editModel.setProperty("/selectedStepId", oStep.id);
             this._editModel.setProperty("/selectedStepName", oStep.order + ": " + sDisplayName);
+            this._editModel.setProperty("/selectedStepIsBlocked", false);
             this._editModel.setProperty("/selectedStepParams", oStep.params || []);
             this._editModel.setProperty("/newParam", _newParam());
             this._editModel.setProperty("/ibpTemplateName", oStep.ibpTemplateName || "");
@@ -361,10 +391,23 @@ sap.ui.define([
             this._editModel.setProperty("/selectedIbpStepName", "");
             this._editModel.setProperty("/selectedIbpStepParams", []);
             this._editModel.setProperty("/newIbpParam", _newParam());
+            this._editModel.setProperty("/sacMultiActionId", oStep.sacMultiActionId || "");
+            this._editModel.setProperty("/sacMultiActionName", oStep.sacMultiActionName || "");
 
             if (oStep.ibpTemplateName && !aCachedIbpSteps.length) {
                 this._doLoadIbpSteps(oStep.ibpTemplateName);
             }
+        },
+
+        // A DSP step accepts parameters only if it's an API-trigger task (DSP names
+        // these objects "APITask_..."), or its repository object type is "API",
+        // or it already has an IBP/SAC job template resolved.
+        _isApiStep: function (oStep) {
+            if (!oStep) return false;
+            if (oStep.ibpTemplateName) return true;
+            if (oStep.sacMultiActionId) return true;
+            if ((oStep.objectType || "").toUpperCase().indexOf("API") !== -1) return true;
+            return (oStep.objectId || "").toUpperCase().indexOf("APITASK") === 0;
         },
 
         _currentStep: function () {
@@ -612,10 +655,21 @@ sap.ui.define([
             var oCtx = oEvt.getSource().getBindingContext("edit");
             if (!oCtx) return;
             var oRow = oCtx.getObject();
+            var iIdx = parseInt(oCtx.getPath().split("/").pop(), 10);
+            var oCurIbp = this._currentIbpStep();
+            if (!oCurIbp || isNaN(iIdx)) return;
+
             this._editModel.setProperty("/newIbpParam", {
                 key: oRow.key, value: oRow.value, active: !!oRow.active, description: oRow.description || "", ibpParamName: oRow.ibpParamName || "", ibpVarNameParam: oRow.ibpVarNameParam || ""
             });
-            this.onDeleteIbpStepParam(oEvt);
+
+            // Move the row into the "new param" fields for editing, without the
+            // delete-confirmation popup (that's only for the standalone Delete
+            // action on global-variable params).
+            var aParams = (this._editModel.getProperty("/selectedIbpStepParams") || []).slice();
+            aParams.splice(iIdx, 1);
+            this._replaceIbpStepParams(oCurIbp.idx, aParams);
+            this._editModel.setProperty("/selectedIbpStepParams", aParams);
         },
 
         onDeleteIbpStepParam: function (oEvt) {

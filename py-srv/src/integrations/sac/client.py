@@ -30,9 +30,10 @@ Auth flow – two modes:
 
 from __future__ import annotations
 
+import json
 import logging
 import time
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from urllib.parse import quote
 
 import requests
@@ -46,6 +47,40 @@ logger = logging.getLogger(__name__)
 
 _TOKEN_PATH = "/api/v1/csrf"
 _MULTIACTION_PATH = "/api/v1/multiActions"
+
+
+def _build_parameter_values(run_params: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Convert a flat ``{parameterId: value}`` dict into SAC's
+    ``parameterValues`` array: ``[{"parameterId": ..., "value": ...}]``.
+
+    String values that look like JSON (e.g.
+    ``{"memberIds": [...], "hierarchyId": "..."}``) are parsed as-is, so
+    parameters with a non-default ``hierarchyId`` (e.g. time dimensions)
+    can be supplied as JSON text.
+
+    Plain (non-JSON) string values are wrapped into SAC's dimension-member
+    shape ``{"memberIds": [value], "hierarchyId": None}``, since most multi
+    action parameters (versions, legal entities, profit centers, ...) expect
+    that object rather than a bare string, and the step-execution validation
+    expects the ``hierarchyId`` key to be present (even if ``null``) -
+    omitting it entirely causes "No hierarchy was provided" errors.
+    Parameters that need a specific (non-null) ``hierarchyId`` (e.g. ``Date``,
+    ``FunctionalArea``) can be supplied as JSON text, e.g.
+    ``{"memberIds": ["202502"], "hierarchyId": "YQM"}``.
+    """
+    parameter_values: List[Dict[str, Any]] = []
+    for parameter_id, value in (run_params or {}).items():
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped and stripped[0] in "{[":
+                try:
+                    value = json.loads(stripped)
+                except ValueError:
+                    value = {"memberIds": [stripped], "hierarchyId": None}
+            elif stripped:
+                value = {"memberIds": [stripped], "hierarchyId": None}
+        parameter_values.append({"parameterId": parameter_id, "value": value})
+    return parameter_values
 
 
 class _SACSession:
@@ -253,7 +288,11 @@ class SACJobClient(BaseJobClient):
             • ``multiaction_id`` – technical ID  (e.g. ``t.16:9C88…``)
 
         Optional:
-            • ``parameters``  – dict of input parameters for the multi action
+            • ``parameters``  – dict of ``{parameterId: value}`` input
+              parameters for the multi action, sent as SAC's
+              ``parameterValues`` array. String values that look like JSON
+              (e.g. ``{"memberIds": [...], "hierarchyId": "..."}``) are
+              parsed so dimension-type parameters can be passed as JSON text.
         """
         multiaction_id = params.get("multiaction_id")
         if not multiaction_id:
@@ -265,9 +304,7 @@ class SACJobClient(BaseJobClient):
         #   POST /multiActions/{id}/executions
         path = f"{_MULTIACTION_PATH}/{quote(multiaction_id, safe='.:')}/executions"
 
-        body: Dict[str, Any] = {}
-        if run_params:
-            body["parameters"] = run_params
+        body: Dict[str, Any] = {"parameterValues": _build_parameter_values(run_params)}
 
         resp = self._sac.post(path, json=body)
 
@@ -297,6 +334,14 @@ class SACJobClient(BaseJobClient):
                 "execution_id": run_id,
             },
         )
+
+    def get_multiaction_definition(self, multiaction_id: str) -> Dict[str, Any]:
+        """Return the raw multi action definition (GET /multiActions/{id}),
+        including each parameter's configured dimension/hierarchy — used to
+        diagnose ``hierarchyId`` mismatches (SAC error 501000531)."""
+        path = f"{_MULTIACTION_PATH}/{quote(multiaction_id, safe='.:')}"
+        resp = self._sac.get(path)
+        return resp.json() if resp.content else {}
 
     def get_job_status(self, ref: JobReference) -> Dict[str, Any]:
         """Poll SAC for multi action execution status."""

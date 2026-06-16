@@ -56,8 +56,13 @@
                        width="auto" class="sapUiSmallMargin">
                     <content>
 
+                        <!-- CASE 0: step does not allow parameters (not an API call) -->
+                        <MessageStrip text="Parameters are not allowed for this step: it is not an API call."
+                                       type="Warning" showIcon="true" class="sapUiSmallMargin"
+                                       visible="{= !!${edit>/selectedStepId} &amp;&amp; !!${edit>/selectedStepIsBlocked} }"/>
+
                         <!-- CASE 1: Regular DSP step — no IBP/SAC template detected -->
-                        <VBox visible="{= !!${edit>/selectedStepId} &amp;&amp; !${edit>/ibpTemplateName} }">
+                        <VBox visible="{= !!${edit>/selectedStepId} &amp;&amp; !${edit>/selectedStepIsBlocked} &amp;&amp; !${edit>/ibpTemplateName} &amp;&amp; !${edit>/sacMultiActionId} }">
                             <Title text="Configured parameters:" level="H5" class="sapUiSmallMarginBottom"/>
                             <Table items="{edit>/selectedStepParams}" noDataText="No parameters yet">
                                 <columns>
@@ -106,7 +111,7 @@
                         </VBox>
 
                         <!-- CASE 2: API step → IBP/SAC template detected → edit sub-step params directly -->
-                        <VBox visible="{= !!${edit>/selectedStepId} &amp;&amp; !!${edit>/ibpTemplateName} }"
+                        <VBox visible="{= !!${edit>/selectedStepId} &amp;&amp; !${edit>/selectedStepIsBlocked} &amp;&amp; !!${edit>/ibpTemplateName} }"
                               busy="{edit>/ibpLoading}">
                             <HBox alignItems="Center" class="sapUiSmallMargin">
                                 <Label text="Template:" width="7rem"/>
@@ -174,6 +179,59 @@
                                     </VBox>
                                 </Panel>
                             </l:Splitter>
+                        </VBox>
+
+                        <!-- CASE 3: API step → SAC multi action detected → configure multi action parameters -->
+                        <VBox visible="{= !!${edit>/selectedStepId} &amp;&amp; !${edit>/selectedStepIsBlocked} &amp;&amp; !!${edit>/sacMultiActionId} }">
+                            <HBox alignItems="Center" class="sapUiSmallMargin">
+                                <Label text="Multi Action:" width="7rem"/>
+                                <Text text="{edit>/sacMultiActionId}" class="sapUiTinyMarginEnd"/>
+                            </HBox>
+                            <Title text="Configured parameters:" level="H5" class="sapUiSmallMarginBeginEnd sapUiSmallMarginBottom"/>
+                            <Table items="{edit>/selectedStepParams}" noDataText="No parameters yet" class="sapUiSmallMarginBeginEnd">
+                                <columns>
+                                    <Column><Text text="Parameter ID"/></Column>
+                                    <Column><Text text="Value"/></Column>
+                                    <Column hAlign="Center" width="6rem"><Text text="Active"/></Column>
+                                    <Column hAlign="End" width="7rem"><Text text=""/></Column>
+                                </columns>
+                                <ColumnListItem>
+                                    <cells>
+                                        <Text text="{edit>key}"/>
+                                        <Text text="{edit>value}"/>
+                                        <core:Icon src="{= ${edit>active} ? 'sap-icon://accept' : 'sap-icon://decline' }"
+                                                   color="{= ${edit>active} ? '#2ecc71' : '#bdc3c7' }"/>
+                                        <HBox justifyContent="End">
+                                            <Button icon="sap-icon://edit" type="Transparent" press=".onEditParam" tooltip="Edit"/>
+                                            <Button icon="sap-icon://delete" type="Reject" press=".onDeleteParam" tooltip="Delete"/>
+                                        </HBox>
+                                    </cells>
+                                </ColumnListItem>
+                            </Table>
+                            <Panel headerText="Add New Parameter" class="sapUiSmallMarginTop sapUiSmallMarginBeginEnd"
+                                   expandable="true" expanded="true">
+                                <content>
+                                    <VBox class="sapUiSmallMargin">
+                                        <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                            <Label text="Parameter ID:" width="9rem"/>
+                                            <Input value="{edit>/newParam/key}" width="20rem" placeholder="e.g. TargetVersion"/>
+                                        </HBox>
+                                        <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                            <Label text="Value:" width="9rem"/>
+                                            <Input value="{edit>/newParam/value}" width="20rem" placeholder="e.g. public.FCST_Sim5, or JSON for advanced cases"/>
+                                        </HBox>
+                                        <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                            <Label text="Active:" width="9rem"/>
+                                            <CheckBox selected="{edit>/newParam/active}"/>
+                                        </HBox>
+                                        <HBox class="sapUiSmallMarginTop">
+                                            <Button text="Confirm" type="Accept" icon="sap-icon://accept"
+                                                    press=".onAddParam" class="sapUiTinyMarginEnd"/>
+                                            <Button text="Cancel" press=".onResetNewParam"/>
+                                        </HBox>
+                                    </VBox>
+                                </content>
+                            </Panel>
                         </VBox>
 
                         <Text text="Select a step from the list on the left"

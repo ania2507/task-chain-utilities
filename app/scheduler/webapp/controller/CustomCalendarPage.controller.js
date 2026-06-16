@@ -25,6 +25,14 @@ sap.ui.define([
                 entryActive: true,
                 entryParameters: "",
                 parameters: "",
+                activeCount: 0,
+                totalCount: 0,
+                nextRunLabel: "",
+                lastRunAt: null,
+                lastRunStatus: "",
+                showPastEntries: false,
+                filterDateFrom: null,
+                filterDateTo: null,
                 busy: false
             });
             this.getView().setModel(oModel, "edit");
@@ -46,15 +54,81 @@ sap.ui.define([
                 entryActive: true,
                 entryParameters: "",
                 parameters: "",
+                activeCount: 0,
+                totalCount: 0,
+                nextRunLabel: "",
+                lastRunAt: null,
+                lastRunStatus: "",
+                showPastEntries: false,
+                filterDateFrom: null,
+                filterDateTo: null,
                 busy: false
             });
             this._loadCalendarEntries();
+            this._loadLastRun(oQuery.spaceId, oQuery.taskchain);
             this._consumeStepParametersResult();
+        },
+
+        // "Last Run" panel data comes directly from DSP's task execution
+        // logs (v1/dsp/taskchain-runs), not from our own bookkeeping.
+        _loadLastRun: function (spaceId, taskchain) {
+            if (!spaceId || !taskchain) {
+                this._editModel.setProperty("/lastRunAt", null);
+                this._editModel.setProperty("/lastRunStatus", "");
+                return;
+            }
+            var sUrl = "v1/dsp/taskchain-runs?spaceId=" + encodeURIComponent(spaceId)
+                + "&taskchain=" + encodeURIComponent(taskchain) + "&limit=1";
+            fetch(sUrl, { headers: { "Accept": "application/json" } })
+                .then(function (res) { return res.json(); })
+                .then(function (data) {
+                    var run = (data && data.success && data.runs && data.runs[0]) || null;
+                    this._editModel.setProperty("/lastRunAt", run ? (run.endTime || run.startTime) : null);
+                    this._editModel.setProperty("/lastRunStatus", run ? run.status : "");
+                }.bind(this))
+                .catch(function () {
+                    this._editModel.setProperty("/lastRunAt", null);
+                    this._editModel.setProperty("/lastRunStatus", "");
+                }.bind(this));
+        },
+
+        // Recompute the header summary (active/total entry counts and the
+        // next upcoming active entry) whenever /calendarEntries changes.
+        _updateSummary: function () {
+            var aEntries = this._editModel.getProperty("/calendarEntries") || [];
+            var aActive = aEntries.filter(function (e) { return e.active; });
+            this._editModel.setProperty("/totalCount", aEntries.length);
+            this._editModel.setProperty("/activeCount", aActive.length);
+
+            var now = new Date();
+            var oNext = null;
+            aActive.forEach(function (e) {
+                var sTime = e.rawTime || (e.time || "").replace(/\s*CET.*$/i, "");
+                var dt = new Date(e.date + "T" + (sTime.length === 5 ? sTime + ":00" : sTime));
+                if (isNaN(dt.getTime()) || dt < now) return;
+                if (!oNext || dt < oNext.dt) oNext = { dt: dt, entry: e };
+            });
+            this._editModel.setProperty("/nextRunLabel", oNext ? (oNext.entry.dateLabel + "  " + oNext.entry.time) : "");
         },
 
         formatBusinessName: function (v) {
             if (!v) return "";
             return String(v).replace(/^\s*task\s*chain\s*[-:–]\s*/i, "");
+        },
+
+        formatDateTime: function (v) {
+            if (!v) return "—";
+            try {
+                var d = new Date(v);
+                if (isNaN(d.getTime())) return String(v);
+                return d.toLocaleString("it-IT", {
+                    day: "2-digit", month: "2-digit", year: "numeric",
+                    hour: "2-digit", minute: "2-digit",
+                    timeZone: "Europe/Rome"
+                });
+            } catch (e) {
+                return String(v);
+            }
         },
 
         formatCalendarEntriesTitle: function (sTaskchain) {
@@ -223,22 +297,38 @@ sap.ui.define([
             ], [
                 new Filter("spaceId", FilterOperator.EQ, sSpace),
                 new Filter("taskchain", FilterOperator.EQ, sChain)
-            ], { $select: "ID,spaceId,taskchain,runDate,runTime,timezone,active,parameters" });
+            ], {
+                $select: "ID,spaceId,taskchain,runDate,runTime,timezone,active,parameters,source",
+                $expand: "runs"
+            });
             var that = this;
             this._editModel.setProperty("/busy", true);
             return oList.requestContexts(0, 1000).then(function (aCtx) {
-                var aEntries = aCtx.map(function (c) {
+                var now = new Date();
+                var aEntries = aCtx.filter(function (c) {
                     var o = c.getObject();
+                    return o.source !== "onDemand";
+                }).map(function (c) {
+                    var o = c.getObject();
+                    var sTime = o.runTime || "00:00";
+                    var dt = new Date(o.runDate + "T" + (sTime.length === 5 ? sTime + ":00" : sTime));
+                    var aRuns = (o.runs || []).slice().sort(function (a, b) {
+                        return new Date(b.triggeredAt) - new Date(a.triggeredAt);
+                    });
+                    var oLastRun = aRuns[0] || null;
                     return {
                         ID: o.ID,
                         chain: o.taskchain,
                         date: o.runDate,
                         dateLabel: that._formatDateLabel(o.runDate),
-                        time: (o.runTime || "00:00") + " CET",
-                        rawTime: o.runTime || "00:00",
+                        time: sTime + " CET",
+                        rawTime: sTime,
                         timezone: o.timezone || "Europe/Rome",
                         active: !!o.active,
-                        parameters: o.parameters || ""
+                        parameters: o.parameters || "",
+                        isPast: !isNaN(dt.getTime()) && dt < now,
+                        runStatus: oLastRun ? (oLastRun.status || "") : "",
+                        runAt: oLastRun ? (oLastRun.finishedAt || oLastRun.triggeredAt) : null
                     };
                 });
                 that._editModel.setProperty("/calendarEntries", aEntries);
@@ -246,11 +336,48 @@ sap.ui.define([
                     that._editModel.setProperty("/calendarFileStatus",
                         aEntries.length + " entries loaded from server");
                 }
+                that._updateSummary();
+                that._applyPastFilter();
                 that._editModel.setProperty("/busy", false);
             }).catch(function (err) {
                 that._editModel.setProperty("/busy", false);
                 console.warn("Could not load calendar entries:", err && err.message);
             });
+        },
+
+        // Default: hide past entries (only future schedules). The "Show past
+        // entries" switch reveals everything, so the user can review the
+        // outcome of runs that already fired from this custom calendar.
+        onTogglePastEntries: function () {
+            this._applyPastFilter();
+        },
+
+        onDateFilterChange: function () {
+            this._applyPastFilter();
+        },
+
+        _applyPastFilter: function () {
+            var oTable = this.byId("calendarEntriesTable");
+            if (!oTable) return;
+            var oBinding = oTable.getBinding("items");
+            if (!oBinding) return;
+
+            var aFilters = [];
+            var bShowPast = this._editModel.getProperty("/showPastEntries");
+            if (!bShowPast) {
+                aFilters.push(new Filter("isPast", FilterOperator.EQ, false));
+            }
+
+            var oFrom = this._editModel.getProperty("/filterDateFrom");
+            if (oFrom) {
+                aFilters.push(new Filter("date", FilterOperator.GE, this._toIsoDate(oFrom)));
+            }
+            var oTo = this._editModel.getProperty("/filterDateTo");
+            if (oTo) {
+                aFilters.push(new Filter("date", FilterOperator.LE, this._toIsoDate(oTo)));
+            }
+
+            oBinding.filter(aFilters);
         },
 
         _persistCalendarEntries: function (aEntries) {
@@ -403,6 +530,7 @@ sap.ui.define([
                         that._editModel.setProperty("/busy", false);
                         that._editModel.setProperty("/calendarEntries", []);
                         that._editModel.setProperty("/calendarFileStatus", "");
+                        that._updateSummary();
                     }).catch(function (err) {
                         that._editModel.setProperty("/busy", false);
                         that.error(err.message || String(err));

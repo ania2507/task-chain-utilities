@@ -41,10 +41,12 @@ class SchedulerService:
         repo: ScheduleRepository,
         taskchain_executor=None,
         job_executor=None,
+        db_query_executor=None,
     ):
         self._repo = repo
         self._tc_exec = taskchain_executor
         self._job_exec = job_executor
+        self._db_query = db_query_executor
         self._lock = threading.Lock()
 
         if not _APS_AVAILABLE:
@@ -199,6 +201,15 @@ class SchedulerService:
         taskchain = schedule.get("taskchain")
         triggered_at = datetime.now(timezone.utc).isoformat()
 
+        # Condition 0: isActive must be true
+        is_active = schedule.get("isActive")
+        if is_active is False or str(is_active).lower() in ("false", "0", "no"):
+            logger.info(
+                "Traffic light skip (isActive=False): schedule=%s spaceId=%s taskchain=%s",
+                schedule_id, space_id, taskchain,
+            )
+            return {"entry_id": schedule_id, "status": "skipped", "tl_status": "(inactive)"}
+
         tl = self._repo.get_traffic_light(space_id, taskchain) if hasattr(self._repo, "get_traffic_light") else None
 
         # Condition 1: record must exist
@@ -214,6 +225,30 @@ class SchedulerService:
             return {"entry_id": schedule_id, "status": "skipped", "tl_status": "(no record)"}
 
         tl_status = (tl.get("status") or "").lower()
+
+        try:
+            tl_settings = json.loads(schedule.get("parameters") or "{}")
+        except Exception:
+            tl_settings = {}
+        auto_reset = bool(tl_settings.get("autoReset"))
+        reset_state = tl_settings.get("autoResetState") or "GREEN"
+
+        # Self-heal: if the technical table is stuck on 'running' (e.g. the
+        # in-process watch job was lost on a service restart before the run
+        # finished), check DSP directly for the actual outcome and reconcile.
+        if tl_status == "running":
+            dsp_status = self._get_latest_dsp_run_status(space_id, taskchain)
+            if dsp_status in ("COMPLETED", "SUCCESS", "FAILED", "ERROR", "CANCELLED"):
+                finished_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+                new_status = "completed" if dsp_status in ("COMPLETED", "SUCCESS") else "error"
+                try:
+                    self._repo.set_traffic_light_status(
+                        space_id, taskchain, new_status,
+                        note=f"Run finished ({dsp_status.lower()}) at {finished_at} (reconciled from DSP)",
+                    )
+                except Exception:
+                    logger.warning("Could not reconcile traffic light status for %s/%s", space_id, taskchain)
+                self._apply_after_run_policy(schedule_id, space_id, taskchain, auto_reset, reset_state)
 
         # Condition 2: status must be 'ready'
         if tl_status != "ready":
@@ -249,19 +284,25 @@ class SchedulerService:
             pass
 
         # Watch the remote execution so the semaphore never stays stuck on
-        # 'running': once it finishes, set it per the "After each run" policy
-        # if enabled, otherwise just mark it 'completed'.
+        # 'running': once it finishes, mark the technical table 'completed' or
+        # 'error' (the 'ready' status is only ever set by the external system).
         remote_id = result.get("remote_id")
         if remote_id and result.get("status") == "success":
-            try:
-                tl_settings = json.loads(schedule.get("parameters") or "{}")
-            except Exception:
-                tl_settings = {}
             self._watch_traffic_light_completion(
                 schedule_id, remote_id, space_id, taskchain,
-                auto_reset=bool(tl_settings.get("autoReset")),
-                reset_state=tl_settings.get("autoResetState") or "GREY",
+                auto_reset=auto_reset, reset_state=reset_state,
             )
+        else:
+            # Fire failed immediately - no remote execution to watch
+            run_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            try:
+                self._repo.set_traffic_light_status(
+                    space_id, taskchain, "error",
+                    note=f"Run failed at {run_at}: {result.get('error') or 'unknown error'}",
+                )
+            except Exception:
+                logger.warning("Could not update traffic light after failed fire for %s/%s", space_id, taskchain)
+            self._apply_after_run_policy(schedule_id, space_id, taskchain, auto_reset, reset_state)
 
         return result
 
@@ -269,9 +310,8 @@ class SchedulerService:
                                          space_id: str, taskchain: str,
                                          auto_reset: bool, reset_state: str) -> None:
         """Register a polling job that watches a fired execution and, once it
-        finishes, updates the semaphore so it never stays stuck on 'running':
-          - if "After each run" is enabled: GREY -> 'on_hold', RED -> 'disabled'
-          - otherwise: 'completed'
+        finishes, marks the technical table 'completed' or 'error' and applies
+        the "After each run" policy to the schedule's own lifecycle state.
         """
         if not self._scheduler or not self._tc_exec:
             return
@@ -282,6 +322,7 @@ class SchedulerService:
             seconds=60,
             id=watch_job_id,
             kwargs={
+                "schedule_id": schedule_id,
                 "remote_id": remote_id,
                 "space_id": space_id,
                 "taskchain": taskchain,
@@ -293,11 +334,12 @@ class SchedulerService:
             misfire_grace_time=120,
         )
 
-    def _check_traffic_light_completion(self, remote_id: str, space_id: str, taskchain: str,
+    def _check_traffic_light_completion(self, schedule_id: str, remote_id: str, space_id: str, taskchain: str,
                                          auto_reset: bool, reset_state: str, watch_job_id: str) -> None:
-        """Poll a fired execution; once it reaches a terminal state, set the
-        semaphore (per the "After each run" policy, or 'completed' if that
-        policy is disabled) and stop watching."""
+        """Poll a fired execution; once it reaches a terminal state, replace the
+        technical table's 'ready' status with 'completed' (success) or 'error'
+        (failure), record the run's date/time in the note, and apply the
+        "After each run" policy to the schedule's own lifecycle state."""
         try:
             info = self._tc_exec.get_status(remote_id)
             status = (info.get("status") or "").upper()
@@ -308,22 +350,73 @@ class SchedulerService:
         if status not in ("COMPLETED", "SUCCESS", "FAILED", "ERROR", "CANCELLED"):
             return  # still running - keep watching
 
-        if auto_reset:
-            new_status = "disabled" if reset_state == "RED" else "on_hold"
-        else:
-            new_status = "completed"
+        finished_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        new_status = "completed" if status in ("COMPLETED", "SUCCESS") else "error"
         try:
             self._repo.set_traffic_light_status(
                 space_id, taskchain, new_status,
-                note=f"Run finished ({status.lower()}) - set to '{new_status}' per After-each-run policy",
+                note=f"Run finished ({status.lower()}) at {finished_at}",
             )
         except Exception:
             logger.warning("Could not update traffic light after run for %s/%s", space_id, taskchain)
+
+        self._apply_after_run_policy(schedule_id, space_id, taskchain, auto_reset, reset_state)
 
         try:
             self._scheduler.remove_job(watch_job_id)
         except Exception:
             pass
+
+    def _get_latest_dsp_run_status(self, space_id: str, taskchain: str) -> Optional[str]:
+        """Return the status (upper-case) of the most recent DSP run for
+        (space_id, taskchain), or None if unavailable.
+
+        Used to reconcile a technical table stuck on 'running' when the
+        in-process watch job that would normally do this was lost
+        (e.g. after a service restart).
+        """
+        if not self._db_query:
+            return None
+        try:
+            rows = self._db_query.query(
+                'SELECT "STATUS" as "status" '
+                'FROM "ORCHESTRATION"."3VR_DWC_TASK_LOGS_01" '
+                'WHERE "APPLICATION_ID" = \'TASK_CHAINS\' AND "SPACE_ID" = ? AND "OBJECT_ID" = ? '
+                'ORDER BY "START_TIME" DESC LIMIT 1',
+                (space_id, taskchain),
+            )
+        except Exception:
+            logger.warning("Could not query latest DSP run status for %s/%s", space_id, taskchain)
+            return None
+        if not rows:
+            return None
+        return (rows[0].get("status") or "").upper()
+
+    def _apply_after_run_policy(self, schedule_id: str, space_id: str, taskchain: str,
+                                 auto_reset: bool, reset_state: str) -> None:
+        """Apply the "After each run" policy once a run completes.
+
+        - If "After each run" is enabled: set the Lifecycle / Current state
+          (TrafficLightStatus.initialState, GREEN/RED) for (space_id, taskchain).
+        - If disabled: the traffic lights schedule is deleted entirely (its
+          job is removed and the Schedule row is deleted).
+        """
+        if not auto_reset:
+            try:
+                self._repo.delete_schedule(schedule_id)
+            except Exception:
+                logger.warning("Could not delete schedule %s", schedule_id)
+            if self._scheduler:
+                try:
+                    self._scheduler.remove_job(f"tl::{schedule_id}")
+                except Exception:
+                    pass
+            return
+        new_state = "GREEN" if reset_state == "GREEN" else "RED"
+        try:
+            self._repo.set_traffic_light_initial_state(space_id, taskchain, new_state)
+        except Exception:
+            logger.warning("Could not update initialState for %s/%s", space_id, taskchain)
 
     # ------------------------------------------------------------------
     def run_now(self, schedule_id: str, schedule_payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
