@@ -100,31 +100,24 @@ sap.ui.define([
 
         _loadSingleRunData: function (sRunId, sBaseUrl) {
             var that = this;
-            
-            // Load run details and nodes
+
             return Promise.all([
-                that._fetchDsp(sBaseUrl + "/v1/dsp/taskchain-runs?limit=1000").then(function(r) { return r.json(); }),
+                that._fetchDsp(sBaseUrl + "/v1/dsp/taskchain-runs?runId=" + encodeURIComponent(sRunId)).then(function(r) { return r.json(); }),
                 that._fetchDsp(sBaseUrl + "/v1/dsp/taskchain-run-nodes?chainTaskLogId=" + encodeURIComponent(sRunId)).then(function(r) { return r.json(); })
             ]).then(function (aResponses) {
                 var oRunsResult = aResponses[0];
                 var oNodesResult = aResponses[1];
-                
-                // Find the specific run
-                var oRun = null;
-                if (oRunsResult.success && oRunsResult.runs) {
-                    oRun = oRunsResult.runs.find(function (r) {
-                        return String(r.runId) === String(sRunId);
-                    });
-                }
-                
+
+                var oRun = oRunsResult.success && oRunsResult.runs && oRunsResult.runs.length > 0
+                    ? oRunsResult.runs[0]
+                    : null;
+
                 if (!oRun) {
                     console.warn("Run not found:", sRunId);
                     return null;
                 }
-                
-                // Attach nodes to run
+
                 oRun.nodes = oNodesResult.success ? oNodesResult.nodes : [];
-                
                 return oRun;
             }).catch(function (error) {
                 console.error("Error loading run " + sRunId + ":", error);

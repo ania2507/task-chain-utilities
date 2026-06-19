@@ -1738,19 +1738,24 @@ def get_taskchain_runs():
     
     space_id = payload.get("spaceId") or request.args.get("spaceId")
     taskchain = payload.get("taskchain") or request.args.get("taskchain")
+    run_id = payload.get("runId") or request.args.get("runId")
     limit = int(payload.get("limit") or request.args.get("limit") or 50)
-    
+
     try:
         db_query_executor = current_app.extensions["taskchain"]["db_query_executor"]
-        
+
         # Build query with optional filters
         conditions = ["\"APPLICATION_ID\" = 'TASK_CHAINS'"]
         params = []
-        
+
+        if run_id:
+            conditions.append("\"TASK_LOG_ID\" = ?")
+            params.append(run_id)
+
         if space_id:
             conditions.append("\"SPACE_ID\" = ?")
             params.append(space_id)
-        
+
         if taskchain:
             # Match get_taskchain_schedules: OBJECT_ID casing in the DWC view
             # may differ from the taskchain name as stored/displayed in our app.
