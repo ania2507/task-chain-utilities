@@ -1,0 +1,88 @@
+<mvc:View
+    controllerName="home.controller.App"
+    displayBlock="true"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:tnt="sap.tnt"
+    xmlns:core="sap.ui.core">
+
+    <tnt:ToolPage id="toolPage" sideExpanded="true">
+
+        <tnt:header>
+            <tnt:ToolHeader>
+                <Button icon="sap-icon://menu2" type="Transparent" press=".onToggleSidebar" tooltip="Toggle menu"/>
+                <ToolbarSpacer width="0.5rem"/>
+                <Title text="Task Chain Utilities" level="H4"/>
+                <ToolbarSpacer/>
+            </tnt:ToolHeader>
+        </tnt:header>
+
+        <tnt:sideContent>
+            <tnt:SideNavigation id="sideNav" itemSelect=".onNavItemSelect">
+                <tnt:NavigationList>
+                    <tnt:NavigationListItem text="Home"              icon="sap-icon://home"      key="home"/>
+                    <tnt:NavigationListItem text="Monitoring"        icon="sap-icon://bar-chart"  key="monitoring"/>
+                    <tnt:NavigationListItem text="Scheduler"         icon="sap-icon://calendar"   key="scheduler"/>
+                    <tnt:NavigationListItem text="Skip Overrides"    icon="sap-icon://step"        key="skipoverrides"/>
+                    <tnt:NavigationListItem text="Conditional Rules" icon="sap-icon://filter"      key="conditionalrules"/>
+                </tnt:NavigationList>
+            </tnt:SideNavigation>
+        </tnt:sideContent>
+
+        <tnt:mainContents>
+            <ScrollContainer id="welcomeContainer" height="100%" width="100%" vertical="true">
+                <VBox class="homeWelcomeBox" alignItems="Center">
+                    <VBox class="homeHeroSection" alignItems="Center">
+                        <core:Icon src="sap-icon://task" size="4rem" class="homeHeroIcon"/>
+                        <Title text="Task Chain Utilities" level="H1" class="homeHeroTitle"/>
+                        <Text
+                            text="Seleziona un'applicazione dal menu laterale o clicca su una delle card qui sotto."
+                            class="homeHeroSubtitle"
+                            wrapping="true"
+                            textAlign="Center"/>
+                    </VBox>
+                    <FlexBox wrap="Wrap" justifyContent="Center" class="homeTileBox">
+                        <GenericTile header="Monitoring" subheader="Monitoraggio Task Chain"
+                            press=".onTilePress" class="homeTile" frameType="OneByOne">
+                            <customData><core:CustomData key="appKey" value="monitoring"/></customData>
+                            <tileContent>
+                                <TileContent>
+                                    <content><ImageContent src="sap-icon://bar-chart"/></content>
+                                </TileContent>
+                            </tileContent>
+                        </GenericTile>
+                        <GenericTile header="Scheduler" subheader="Pianificazione Task Chain"
+                            press=".onTilePress" class="homeTile" frameType="OneByOne">
+                            <customData><core:CustomData key="appKey" value="scheduler"/></customData>
+                            <tileContent>
+                                <TileContent>
+                                    <content><ImageContent src="sap-icon://calendar"/></content>
+                                </TileContent>
+                            </tileContent>
+                        </GenericTile>
+                        <GenericTile header="Skip Overrides" subheader="Gestione Skip Override"
+                            press=".onTilePress" class="homeTile" frameType="OneByOne">
+                            <customData><core:CustomData key="appKey" value="skipoverrides"/></customData>
+                            <tileContent>
+                                <TileContent>
+                                    <content><ImageContent src="sap-icon://step"/></content>
+                                </TileContent>
+                            </tileContent>
+                        </GenericTile>
+                        <GenericTile header="Conditional Rules" subheader="Regole Condizionali"
+                            press=".onTilePress" class="homeTile" frameType="OneByOne">
+                            <customData><core:CustomData key="appKey" value="conditionalrules"/></customData>
+                            <tileContent>
+                                <TileContent>
+                                    <content><ImageContent src="sap-icon://filter"/></content>
+                                </TileContent>
+                            </tileContent>
+                        </GenericTile>
+                    </FlexBox>
+                </VBox>
+            </ScrollContainer>
+        </tnt:mainContents>
+
+    </tnt:ToolPage>
+
+</mvc:View>

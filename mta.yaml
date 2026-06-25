@@ -53,6 +53,10 @@ modules:
     build-result: resources/
     requires:
     - artifacts:
+      - home.zip
+      name: home
+      target-path: resources/
+    - artifacts:
       - conditionalrules.zip
       name: conditionalrules
       target-path: resources/
@@ -98,6 +102,16 @@ modules:
         existing_destinations_policy: update
   build-parameters:
     no-source: true
+- name: home
+  type: html5
+  path: app/home
+  build-parameters:
+    build-result: dist
+    builder: custom
+    commands:
+    - npm ci
+    - npm run build
+    supported-platforms: []
 - name: conditionalrules
   type: html5
   path: app/conditionalrules

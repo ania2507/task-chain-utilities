@@ -1,0 +1,45 @@
+/* ==========================================================================
+   Home Shell - Custom Styles
+   ========================================================================== */
+
+.homeWelcomeBox {
+    padding: 2rem 1rem;
+    max-width: 960px;
+    margin: 0 auto;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.homeHeroSection {
+    padding: 3rem 1rem 2.5rem;
+    text-align: center;
+}
+
+.homeHeroIcon.sapUiIcon {
+    color: #0070f2;
+    margin-bottom: 1rem;
+}
+
+.homeHeroTitle.sapMTitle {
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+}
+
+.homeHeroSubtitle.sapMText {
+    color: #6a6d70;
+    max-width: 480px;
+    margin-top: 0.5rem;
+    line-height: 1.5;
+}
+
+.homeTileBox {
+    gap: 1rem;
+    padding: 0.5rem;
+    width: 100%;
+}
+
+.homeTile.sapMGT {
+    width: 11rem !important;
+    min-width: 11rem;
+    flex: 0 0 auto;
+}

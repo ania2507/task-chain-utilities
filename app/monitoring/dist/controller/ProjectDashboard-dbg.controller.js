@@ -306,7 +306,6 @@ sap.ui.define([
          * Fetch wrapper for DSP API calls - includes credentials for XSUAA auth in production
          */
         _fetchDsp: function (sUrl) {
-            console.log("[DSP] fetch →", sUrl);
             return fetch(sUrl, { credentials: "same-origin" });
         },
 

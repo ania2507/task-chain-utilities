@@ -1,5 +1,5 @@
 {
-  "welcomeFile": "/monitoring/index.html",
+  "welcomeFile": "/home/index.html",
   "authenticationMethod": "route",
   "routes": [
     {
