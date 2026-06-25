@@ -17,6 +17,10 @@ POST /v1/jobs/ibp/template    – read IBP template metadata (helper)
 from __future__ import annotations
 
 import logging
+import threading
+import time as _time
+import uuid
+from typing import Any, Dict, Optional
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -26,6 +30,13 @@ from ..integrations.base import IntegrationType
 logger = logging.getLogger(__name__)
 
 bp = Blueprint("jobs", __name__)
+
+# In-memory store for async SAC validation results.
+# Key → None while running, dict when done.
+_VALIDATION_RESULTS: Dict[str, Optional[Dict[str, Any]]] = {}
+_VALIDATION_LOCK_V = threading.Lock()
+_VALIDATION_TTL: Dict[str, float] = {}
+_VALIDATION_TTL_SECONDS = 600
 
 
 @bp.route("/ibp/debug-conn", methods=["GET"])
@@ -54,6 +65,33 @@ def debug_ibp_connection():
         return jsonify({"error": str(e)}), 500
 
 
+@bp.route("/sac/dataexport/providers", methods=["GET"])
+@flask_access_validation(required_scope="admin")
+def sac_dataexport_providers():
+    """List SAC Data Export providers (planning models)."""
+    try:
+        client = _get_executor().get_client(IntegrationType.SAC)
+        return jsonify(client.list_dataexport_providers()), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/sac/dataexport/members", methods=["GET"])
+@flask_access_validation(required_scope="admin")
+def sac_dataexport_members():
+    """Fetch members of a SAC dimension using the user's JWT.
+
+    Query params: modelId, dimensionId
+    """
+    model_id = request.args.get("modelId", "")
+    dimension_id = request.args.get("dimensionId", "")
+    try:
+        client = _get_executor().get_client(IntegrationType.SAC)
+        return jsonify(client.probe_dimension(model_id, dimension_id)), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @bp.route("/sac/multiaction-definition/<multiaction_id>", methods=["GET"])
 @flask_access_validation(required_scope="admin")
 def sac_multiaction_definition(multiaction_id):
@@ -66,6 +104,190 @@ def sac_multiaction_definition(multiaction_id):
         return jsonify({"success": True, "multiaction_id": multiaction_id, "definition": data}), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@bp.route("/sac/probe-multiaction/<path:multiaction_id>", methods=["GET"])
+@flask_access_validation(required_scope="admin")
+def sac_probe_multiaction(multiaction_id):
+    """Probe GET paths for a multi-action to discover model/param info."""
+    try:
+        client = _get_executor().get_client(IntegrationType.SAC)
+        return jsonify(client.probe_multiaction(multiaction_id)), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/sac/multiaction-parameters/<path:multiaction_id>", methods=["GET"])
+@flask_access_validation(required_scope="admin")
+def sac_multiaction_parameters(multiaction_id):
+    """Return the normalized parameter schema for a SAC multi action.
+
+    Parses the raw ``GET /api/v1/multiActions/{id}`` response and returns a
+    structured list of parameters with mandatory flag and pre-configured values,
+    so the scheduler UI can pre-populate and validate the parameters form.
+
+    Response::
+
+        {
+            "multiaction_id": "t.F:...",
+            "name": "My Multi Action",
+            "parameters": [
+                {
+                    "id": "TargetVersion",
+                    "label": "Target Version",
+                    "mandatory": true,
+                    "currentValue": "public.FCST_Sim5"
+                }
+            ]
+        }
+    """
+    try:
+        client = _get_executor().get_client(IntegrationType.SAC)
+        raw = client.get_multiaction_definition(multiaction_id)
+        params = _parse_sac_parameters(raw)
+        return jsonify({
+            "multiaction_id": multiaction_id,
+            "name": raw.get("name") or raw.get("multiActionName") or "",
+            "parameters": params,
+            "probing": bool(raw.get("probing")),
+        }), 200
+    except Exception as e:
+        logger.exception("Error fetching SAC multi action parameters for %s", multiaction_id)
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/sac/validate-parameters", methods=["POST"])
+@flask_access_validation(required_scope="admin")
+def sac_validate_parameters():
+    """Validate SAC multi action parameter values by running a test execution.
+
+    First call (start)::
+
+        POST {"multiactionId": "t.F:...", "parameters": [...]}
+        → {"probing": true, "validationKey": "<key>"}
+
+    Poll call (check result)::
+
+        POST {"validationKey": "<key>"}
+        → {"probing": true}          # still running
+        → {"valid": true}            # done — all params OK
+        → {"valid": false, "errors": [...]}
+        → {"valid": null, "error": "..."}
+    """
+    body = request.json or {}
+    validation_key = body.get("validationKey")
+
+    # Poll mode: return cached result
+    if validation_key:
+        with _VALIDATION_LOCK_V:
+            if validation_key not in _VALIDATION_RESULTS:
+                return jsonify({"valid": None, "error": "Unknown validation key"}), 404
+            result = _VALIDATION_RESULTS.get(validation_key)
+        if result is None:
+            return jsonify({"probing": True}), 200
+        return jsonify(result), 200
+
+    # Start mode
+    multiaction_id = body.get("multiactionId")
+    parameters = body.get("parameters", [])
+    if not multiaction_id:
+        return jsonify({"error": "multiactionId required"}), 400
+
+    key = uuid.uuid4().hex[:12]
+    with _VALIDATION_LOCK_V:
+        _VALIDATION_RESULTS[key] = None  # None = still running
+        _VALIDATION_TTL[key] = _time.time() + _VALIDATION_TTL_SECONDS
+        now = _time.time()
+        expired = [k for k, exp in _VALIDATION_TTL.items() if exp < now]
+        for k in expired:
+            _VALIDATION_RESULTS.pop(k, None)
+            _VALIDATION_TTL.pop(k, None)
+
+    logger.info("SAC validate-parameters: starting async validation for %s (key=%s)", multiaction_id, key)
+
+    app = current_app._get_current_object()
+
+    def _run():
+        with app.app_context():
+            try:
+                client = _get_executor().get_client(IntegrationType.SAC)
+                result = client.validate_parameters(multiaction_id, parameters)
+            except Exception as e:
+                logger.exception("Error validating SAC parameters for %s", multiaction_id)
+                result = {"valid": None, "error": str(e)}
+            with _VALIDATION_LOCK_V:
+                _VALIDATION_RESULTS[key] = result
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"probing": True, "validationKey": key}), 200
+
+
+def _parse_sac_parameters(raw: dict) -> list:
+    """Normalise the SAC multi action definition into a flat parameter list.
+
+    SAC API field names vary across versions; we probe multiple candidates so
+    the parser stays robust against minor API changes.
+    """
+    # Locate the parameters array — SAC uses several possible keys
+    candidates = [
+        "parameters", "inputParameters", "parameterDefinitions",
+        "inputParameterDefinitions", "params", "inputParams",
+    ]
+    raw_params = []
+    for key in candidates:
+        val = raw.get(key)
+        if isinstance(val, list) and val:
+            raw_params = val
+            break
+
+    result = []
+    for p in raw_params:
+        if not isinstance(p, dict):
+            continue
+
+        param_id = (
+            p.get("id") or p.get("parameterId") or p.get("name") or p.get("parameterName") or ""
+        ).strip()
+        if not param_id:
+            continue
+
+        label = (
+            p.get("description") or p.get("label") or p.get("displayName") or p.get("text") or param_id
+        ).strip()
+
+        # Mandatory: probe several boolean/string variants
+        mandatory_raw = (
+            p.get("mandatory") or p.get("isMandatory") or p.get("required")
+            or p.get("isRequired") or p.get("obligatory") or False
+        )
+        mandatory = mandatory_raw is True or str(mandatory_raw).lower() in ("true", "1", "x", "yes")
+
+        # Pre-configured / default value
+        current_value = (
+            p.get("value") or p.get("defaultValue") or p.get("currentValue")
+            or p.get("configuredValue") or ""
+        )
+        if not isinstance(current_value, str):
+            import json as _json
+            try:
+                current_value = _json.dumps(current_value)
+            except Exception:
+                current_value = str(current_value)
+
+        needs_hierarchy = bool(p.get("needsHierarchyId"))
+        # For params that require a hierarchyId, pre-fill a JSON template as hint
+        if needs_hierarchy and not current_value:
+            current_value = '{"memberIds": [], "hierarchyId": ""}'
+
+        result.append({
+            "id": param_id,
+            "label": label,
+            "mandatory": mandatory,
+            "currentValue": current_value,
+            "needsHierarchyId": needs_hierarchy,
+        })
+
+    return result
 
 
 def _get_executor():
@@ -136,20 +358,34 @@ def launch_job():
 
     # SAC: inject saved step params as a flat {parameterId: value} dict, which
     # SACJobClient.launch_job converts into the multi action's "parameterValues".
+    # Filter by sacMultiActionId so each SAC step gets only its own params when
+    # there are multiple SAC steps in the same task chain.
     if integration == "sac" and taskchain_ctx and not payload.get("parameters"):
         from ..services.taskchain_executor import TaskchainExecutor
         step_params = TaskchainExecutor.consume_pending_step_params(taskchain_ctx)
         if step_params:
+            current_ma_id = (payload.get("multiActionId") or payload.get("sacMultiActionId") or "").strip()
             sac_params: dict = {}
             for _step_name, sparams in step_params.items():
-                for p in sparams if isinstance(sparams, list) else []:
-                    if p.get("active", True) and p.get("key"):
+                sparams_list = sparams if isinstance(sparams, list) else []
+                if not sparams_list:
+                    continue
+                # If the step has a sacMultiActionId, only use it for the matching call.
+                step_ma_id = ""
+                for p in sparams_list:
+                    if p.get("key") == "__sacMultiActionId":
+                        step_ma_id = p.get("value", "")
+                        break
+                if current_ma_id and step_ma_id and step_ma_id != current_ma_id:
+                    continue
+                for p in sparams_list:
+                    if p.get("active", True) and p.get("key") and not p.get("key", "").startswith("__"):
                         sac_params[p["key"]] = p.get("value", "")
             if sac_params:
                 payload = {**payload, "parameters": sac_params}
                 logger.info(
-                    "Injected %d param(s) from taskchain '%s' into SAC launch",
-                    len(sac_params), taskchain_ctx,
+                    "Injected %d param(s) from taskchain '%s' step matching multiActionId '%s'",
+                    len(sac_params), taskchain_ctx, current_ma_id,
                 )
 
     if integration == "ibp" and taskchain_ctx and not payload.get("parameters"):
@@ -302,6 +538,18 @@ def get_job_status(execution_id: str):
             http_code = 200
         elif job_status in ("FAILED", "CANCELLED"):
             http_code = 500
+            steps = result.get("steps") or []
+            failed_steps = [s for s in steps if s.get("status") in ("FAILED", "CANCELLED")]
+            for s in failed_steps:
+                msgs = []
+                for log in (s.get("logs") or []):
+                    for m in (log.get("messages") or []):
+                        if m.get("text"):
+                            msgs.append(m["text"])
+                logger.warning(
+                    "IBP job FAILED: execution_id=%s step=%s app_rc=%s messages=%s",
+                    execution_id, s.get("catalog_entry"), s.get("app_rc"), msgs
+                )
         else:  # RUNNING, PENDING, UNKNOWN
             http_code = 202
         return jsonify(result), http_code

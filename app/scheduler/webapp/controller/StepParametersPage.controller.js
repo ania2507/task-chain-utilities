@@ -7,8 +7,17 @@ sap.ui.define([
     "use strict";
 
 
+    // Expand YYYYMM → SAC time-hierarchy nested path.
+    // "202502" → ["(all)", "2025", "20251", "202502"]  (quarter = ceil(month/3))
+    function _expandDateYYYYMM(sVal) {
+        var m = /^(20\d\d)(0[1-9]|1[0-2])$/.exec((sVal || "").trim());
+        if (!m) { return null; }
+        var sYear = m[1], nQuarter = Math.ceil(parseInt(m[2], 10) / 3);
+        return ["(all)", sYear, sYear + nQuarter, sVal.trim()];
+    }
+
     function _newParam() {
-        return { key: "", value: "", active: true, description: "" };
+        return { key: "", value: "", active: true, description: "", hierarchyId: "", needsHierarchyId: false };
     }
 
     return BaseController.extend("scheduler.controller.StepParametersPage", {
@@ -35,7 +44,12 @@ sap.ui.define([
                 selectedIbpStepParams: [],
                 newIbpParam: _newParam(),
                 sacMultiActionId: "",
-                sacMultiActionName: ""
+                sacMultiActionName: "",
+                sacLoading: false,
+                sacLoadingText: "",
+                sacParamSchema: [],
+                sacParamSchemaUnavailable: false,
+                hasSacSteps: false
             });
             this.getView().setModel(this._editModel, "edit");
 
@@ -54,10 +68,8 @@ sap.ui.define([
                 ? oComp._stepParamsState
                 : null;
 
-            var bHasCached = !!(oExisting && oExisting.steps && oExisting.steps.length);
-            var aSteps = bHasCached ? oExisting.steps.map(function (s) {
-                var c = Object.assign({}, s); delete c.selected; return c;
-            }) : [];
+            // Always fetch steps fresh from DSP/IBP so external changes are reflected.
+            // Parameter values are loaded from the OData model by _applyParamsJsonToSteps().
 
             this._editModel.setData({
                 taskchain: oQuery.taskchain || "",
@@ -66,13 +78,14 @@ sap.ui.define([
                 jobTemplate: sJobTemplate,
                 returnTo: oQuery.returnTo || "scheduleList",
                 returnQuery: this._parseReturnQuery(oQuery),
-                steps: aSteps,
+                viewOnly: oQuery.viewOnly === "1",
+                steps: [],
                 selectedStepId: null,
                 selectedStepName: "",
                 selectedStepIsBlocked: false,
                 selectedStepParams: [],
                 newParam: _newParam(),
-                busy: !bHasCached,
+                busy: true,
                 ibpTemplateName: "",
                 ibpSteps: [],
                 ibpLoading: false,
@@ -82,15 +95,18 @@ sap.ui.define([
                 selectedIbpStepParams: [],
                 newIbpParam: _newParam(),
                 sacMultiActionId: "",
-                sacMultiActionName: ""
+                sacMultiActionName: "",
+                sacLoading: false,
+                sacLoadingText: "",
+                sacParamSchema: [],
+                sacParamSchemaUnavailable: false,
+                hasSacSteps: false
             });
 
-            if (!bHasCached) {
-                if (sTargetType === "IBP" && sJobTemplate) {
-                    this._loadStepsFromIbpTemplate(sJobTemplate);
-                } else {
-                    this._loadStepsFromDsp(oQuery.spaceId, oQuery.taskchain);
-                }
+            if (sTargetType === "IBP" && sJobTemplate) {
+                this._loadStepsFromIbpTemplate(sJobTemplate);
+            } else {
+                this._loadStepsFromDsp(oQuery.spaceId, oQuery.taskchain);
             }
         },
 
@@ -142,7 +158,7 @@ sap.ui.define([
             var sDagUrl = "v1/dsp/taskchain-dag?spaceId=" + encodeURIComponent(sSpaceId)
                 + "&taskchain=" + encodeURIComponent(sTaskchain);
 
-            fetch(sDagUrl, { headers: { "Accept": "application/json" } })
+            fetch(sDagUrl, { headers: { "Accept": "application/json", "Cache-Control": "no-cache" } })
                 .then(function (res) {
                     return res.text().then(function (txt) {
                         return { ok: res.ok, data: parseJson(txt) };
@@ -180,7 +196,7 @@ sap.ui.define([
                     // 2. Fallback: query distinct steps from execution logs.
                     var sStepsUrl = "v1/dsp/taskchain-steps?spaceId=" + encodeURIComponent(sSpaceId)
                         + "&taskchain=" + encodeURIComponent(sTaskchain);
-                    return fetch(sStepsUrl, { headers: { "Accept": "application/json" } })
+                    return fetch(sStepsUrl, { headers: { "Accept": "application/json", "Cache-Control": "no-cache" } })
                         .then(function (res2) {
                             return res2.text().then(function (txt2) {
                                 return { ok: res2.ok, data: parseJson(txt2) };
@@ -211,6 +227,8 @@ sap.ui.define([
                 .then(function (aSteps) {
                     that._editModel.setProperty("/steps", aSteps || []);
                     that._applyParamsJsonToSteps();
+                    var bHasSac = (aSteps || []).some(function (s) { return !!s.sacMultiActionId; });
+                    that._editModel.setProperty("/hasSacSteps", bHasSac);
                     // Pre-load IBP sub-steps in background so param count is visible immediately
                     (aSteps || []).forEach(function (step, idx) {
                         if (step.ibpTemplateName) {
@@ -226,13 +244,6 @@ sap.ui.define([
 
         _preloadIbpStepsForDspStep: function (iDspIdx, sTemplate, sStepName) {
             var that = this;
-            // Consume any restored IBP params for this DSP step before the fetch
-            var oExistingByName = {};
-            var oRestored = this._restoredIbpParams && this._restoredIbpParams[sStepName];
-            if (oRestored) {
-                Object.keys(oRestored).forEach(function (n) { oExistingByName[n] = oRestored[n]; });
-                delete this._restoredIbpParams[sStepName];
-            }
             fetch("v1/jobs/ibp/template-steps", {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "Accept": "application/json" },
@@ -241,6 +252,15 @@ sap.ui.define([
                 .then(function (res) { return res.json(); })
                 .then(function (data) {
                     if (data.error) return;
+                    // Consume _restoredIbpParams here (inside the .then) so that
+                    // _doLoadIbpSteps triggered by the user clicking a step before
+                    // this response arrives can still read and consume it first.
+                    var oExistingByName = {};
+                    var oRestored = that._restoredIbpParams && that._restoredIbpParams[sStepName];
+                    if (oRestored) {
+                        Object.keys(oRestored).forEach(function (n) { oExistingByName[n] = oRestored[n]; });
+                        delete that._restoredIbpParams[sStepName];
+                    }
                     var aIbpSteps = (Array.isArray(data.steps) ? data.steps : []).map(function (s) {
                         var aExisting = oExistingByName[s.name] || [];
                         var aParams = aExisting;
@@ -273,6 +293,155 @@ sap.ui.define([
                 .catch(function () {});
         },
 
+        _loadSacParameters: function (sSacId, iRetry) {
+            var that = this;
+            var nRetry = iRetry || 0;
+            if (!nRetry) {
+                this._editModel.setProperty("/sacLoading", true);
+            }
+            fetch("v1/jobs/sac/multiaction-parameters/" + encodeURIComponent(sSacId), {
+                headers: { "Accept": "application/json" }
+            })
+                .then(function (res) { return res.json(); })
+                .then(function (data) {
+                    if (data.error) {
+                        that._editModel.setProperty("/sacLoading", false);
+                        return;
+                    }
+                    if (data.name) {
+                        that._editModel.setProperty("/sacMultiActionName", data.name);
+                    }
+
+                    // Backend probe runs in a background thread — keep loading indicator
+                    // active and retry every 8s while the probe is still running (up to 10x)
+                    if (data.probing && nRetry < 10) {
+                        setTimeout(function () {
+                            if (that._editModel.getProperty("/sacMultiActionId") === sSacId) {
+                                that._loadSacParameters(sSacId, nRetry + 1);
+                            } else {
+                                that._editModel.setProperty("/sacLoading", false);
+                            }
+                        }, 8000);
+                        return;
+                    }
+
+                    var aSchema = data.parameters || [];
+                    that._editModel.setProperty("/sacParamSchema", aSchema);
+                    that._editModel.setProperty("/sacParamSchemaUnavailable", !aSchema.length);
+                    var aParams = aSchema.map(function (p) {
+                        var sVal = p.currentValue || "";
+                        var sHId = "";
+                        // For hierarchyId params, split the JSON template into separate fields
+                        if (sVal.indexOf("{") === 0) {
+                            try {
+                                var oParsed = JSON.parse(sVal);
+                                var aMembers = oParsed.memberIds || [];
+                                var firstMember = aMembers[0];
+                                if (Array.isArray(firstMember)) {
+                                    // Time hierarchy nested path → show only the leaf (e.g. "202502")
+                                    sVal = firstMember.length ? firstMember[firstMember.length - 1] : "";
+                                } else {
+                                    sVal = firstMember || "";
+                                }
+                                sHId = oParsed.hierarchyId || "";
+                            } catch (e) { /* leave sVal as-is */ }
+                        }
+                        return {
+                            key: p.id,
+                            value: sVal,
+                            active: true,
+                            description: p.label || "",
+                            mandatory: !!p.mandatory,
+                            needsHierarchyId: !!p.needsHierarchyId,
+                            hierarchyId: sHId
+                        };
+                    });
+                    var oCur = that._currentStep();
+                    var aExisting = oCur ? (oCur.step.params || []) : [];
+                    if (!aExisting.length && aParams.length) {
+                        that._editModel.setProperty("/selectedStepParams", aParams);
+                        if (oCur) {
+                            that._editModel.setProperty("/steps/" + oCur.idx + "/params", aParams);
+                        }
+                    }
+                    that._editModel.setProperty("/sacLoading", false);
+                })
+                .catch(function () {
+                    that._editModel.setProperty("/sacLoading", false);
+                });
+        },
+
+        onSacKeyValueHelp: function () {
+            var aSchema = this._editModel.getProperty("/sacParamSchema") || [];
+            if (!aSchema.length) {
+                var sSacId = this._editModel.getProperty("/sacMultiActionId");
+                if (!sSacId) {
+                    sap.m.MessageToast.show("Select a SAC step first");
+                } else {
+                    sap.m.MessageToast.show("SAC does not expose parameter definitions for this multi action — add parameters manually using the form below");
+                }
+                return;
+            }
+
+            var that = this;
+            var oVhModel = new sap.ui.model.json.JSONModel({ params: aSchema });
+
+            if (this._oSacKeyVHD) {
+                this._oSacKeyVHD.setModel(oVhModel, "vh");
+                this._oSacKeyVHD.open();
+                return;
+            }
+
+            sap.ui.require([
+                "sap/m/SelectDialog",
+                "sap/m/StandardListItem",
+                "sap/ui/model/Filter",
+                "sap/ui/model/FilterOperator"
+            ], function (SelectDialog, StandardListItem, Filter, FilterOperator) {
+                that._oSacKeyVHD = new SelectDialog({
+                    title: "SAC Multi Action — Parameters",
+                    rememberSelections: false,
+                    confirm: function (oEvt) {
+                        var oItem = oEvt.getParameter("selectedItem");
+                        if (!oItem) return;
+                        var oCtx = oItem.getBindingContext("vh");
+                        if (!oCtx) return;
+                        that._editModel.setProperty("/newParam/key", oCtx.getProperty("id"));
+                        that._editModel.setProperty("/newParam/description", oCtx.getProperty("label") || "");
+                        var sVal = oCtx.getProperty("currentValue");
+                        if (sVal) {
+                            that._editModel.setProperty("/newParam/value", sVal);
+                        }
+                    },
+                    liveChange: function (oEvt) {
+                        var sVal = oEvt.getParameter("value");
+                        var oBinding = that._oSacKeyVHD.getBinding("items");
+                        if (oBinding) {
+                            oBinding.filter(sVal ? [new Filter({
+                                filters: [
+                                    new Filter("id", FilterOperator.Contains, sVal),
+                                    new Filter("label", FilterOperator.Contains, sVal)
+                                ],
+                                and: false
+                            })] : []);
+                        }
+                    }
+                });
+                that.getView().addDependent(that._oSacKeyVHD);
+                that._oSacKeyVHD.setModel(oVhModel, "vh");
+                that._oSacKeyVHD.bindAggregation("items", {
+                    path: "vh>/params",
+                    template: new StandardListItem({
+                        title: "{vh>id}",
+                        description: "{vh>label}",
+                        info: "{= ${vh>mandatory} ? 'Mandatory' : 'Optional' }",
+                        infoState: "{= ${vh>mandatory} ? 'Error' : 'None' }"
+                    })
+                });
+                that._oSacKeyVHD.open();
+            });
+        },
+
         _parseReturnQuery: function (oQuery) {
             // Re-build query string for the calling page from what we received
             var out = {};
@@ -296,7 +465,7 @@ sap.ui.define([
         _applyParamsJsonToSteps: function () {
             var oComp = this.getOwnerComponent();
             var s = oComp && oComp._stepParamsState;
-            if (!s || !s.parametersJson || (s.steps && s.steps.length)) return;
+            if (!s || !s.parametersJson) return;
             try {
                 var oParams = JSON.parse(s.parametersJson);
                 var aSteps = (this._editModel.getProperty("/steps") || []).slice();
@@ -396,6 +565,9 @@ sap.ui.define([
 
             if (oStep.ibpTemplateName && !aCachedIbpSteps.length) {
                 this._doLoadIbpSteps(oStep.ibpTemplateName);
+            }
+            if (oStep.sacMultiActionId && !(oStep.params || []).length) {
+                this._loadSacParameters(oStep.sacMultiActionId);
             }
         },
 
@@ -834,6 +1006,41 @@ sap.ui.define([
             return n + " params";
         },
 
+        _buildSaveOutput: function (aSteps) {
+            var oOut = {};
+            var aSacValidations = [];
+            aSteps.forEach(function (s) {
+                var allParams = (s.params || []).filter(function (p) { return p.active !== false; });
+                (s.ibpSteps || []).forEach(function (is) {
+                    (is.params || []).filter(function (p) { return p.active !== false; }).forEach(function (p) {
+                        allParams.push(Object.assign({}, p, { step: is.name }));
+                    });
+                });
+                allParams = allParams.map(function (p) {
+                    if (p.hierarchyId) {
+                        var sVal = (p.value || "").trim();
+                        if (sVal === "*" || sVal === "") {
+                            return Object.assign({}, p, { value: "*" });
+                        }
+                        var aDatePath = _expandDateYYYYMM(sVal);
+                        var memberIds = aDatePath ? [aDatePath] : [sVal];
+                        return Object.assign({}, p, { value: JSON.stringify({ memberIds: memberIds, hierarchyId: p.hierarchyId }) });
+                    }
+                    return p;
+                });
+                if (allParams.length) {
+                    var aToSave = s.sacMultiActionId
+                        ? allParams.concat([{ key: "__sacMultiActionId", value: s.sacMultiActionId, active: true }])
+                        : allParams;
+                    oOut[s.name] = aToSave;
+                }
+                if (s.sacMultiActionId && allParams.length) {
+                    aSacValidations.push({ multiactionId: s.sacMultiActionId, parameters: allParams });
+                }
+            });
+            return { oOut: oOut, aSacValidations: aSacValidations };
+        },
+
         onSave: function () {
             var oComp = this.getOwnerComponent();
             var aSteps = this._editModel.getProperty("/steps") || [];
@@ -842,32 +1049,112 @@ sap.ui.define([
             var sJobTemplate = this._editModel.getProperty("/jobTemplate") || "";
             var sCacheKey = sTargetType === "IBP" ? ("IBP:" + sJobTemplate) : sTc;
 
-            // Build parameters JSON: { stepName: [{key,value,active[,step]}] }
-            // IBP sub-step params are aggregated under the DSP step name, tagged with step field.
-            var oOut = {};
-            aSteps.forEach(function (s) {
-                var allParams = (s.params || []).filter(function (p) { return p.active !== false; });
-                (s.ibpSteps || []).forEach(function (is) {
-                    (is.params || []).filter(function (p) { return p.active !== false; }).forEach(function (p) {
-                        allParams.push(Object.assign({}, p, { step: is.name }));
-                    });
-                });
-                if (allParams.length) {
-                    oOut[s.name] = allParams;
-                }
-            });
+            var built = this._buildSaveOutput(aSteps);
 
             oComp._stepParamsState = {
                 cacheKey: sCacheKey,
                 taskchain: sTc,
-                steps: aSteps,
-                parametersJson: JSON.stringify(oOut)
+                parametersJson: JSON.stringify(built.oOut),
+                _fresh: true
             };
 
-            MessageToast.show("Step parameters saved");
             var sReturnTo = this._editModel.getProperty("/returnTo") || "scheduleList";
             var oReturnQuery = this._editModel.getProperty("/returnQuery") || {};
+            MessageToast.show("Step parameters saved");
             this.getRouter().navTo(sReturnTo, { "?query": oReturnQuery }, true);
+        },
+
+        onValidateSac: function () {
+            var that = this;
+            var aSteps = this._editModel.getProperty("/steps") || [];
+            var built = this._buildSaveOutput(aSteps);
+            var aSacValidations = built.aSacValidations;
+
+            if (!aSacValidations.length) {
+                MessageToast.show("No SAC steps with parameters to validate.");
+                return;
+            }
+
+            this._editModel.setProperty("/sacLoading", true);
+            this._editModel.setProperty("/sacLoadingText", "Validating parameters…");
+
+            var aPromises = aSacValidations.map(function (v) {
+                return fetch("v1/jobs/sac/validate-parameters", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                    body: JSON.stringify({ multiactionId: v.multiactionId, parameters: v.parameters })
+                }).then(function (r) {
+                    if (!r.ok) { return r.text().then(function (t) { throw new Error("HTTP " + r.status + ": " + t.slice(0, 200)); }); }
+                    return r.json();
+                }).then(function (res) {
+                    if (res.probing && res.validationKey) {
+                        return that._pollValidation(v.multiactionId, res.validationKey, 0);
+                    }
+                    return { multiactionId: v.multiactionId, result: res };
+                }).catch(function (err) {
+                    return { multiactionId: v.multiactionId, result: { valid: null, error: String(err && err.message || err) } };
+                });
+            });
+
+            Promise.all(aPromises).then(function (aResults) {
+                that._editModel.setProperty("/sacLoading", false);
+                that._editModel.setProperty("/sacLoadingText", "");
+
+                var aErrors = [];
+                var aWarnings = [];
+                aResults.forEach(function (item) {
+                    var r = item.result;
+                    if (r.valid === false && r.errors) {
+                        r.errors.forEach(function (e) {
+                            var sHint = e.needsHierarchyId ? " [fill HierarchyId]" : "";
+                            aErrors.push("• " + e.parameterId + sHint + ": " + e.message);
+                        });
+                    } else if (r.valid === null) {
+                        aWarnings.push("⚠ " + (r.message || r.error || "Validation unavailable"));
+                    }
+                });
+
+                if (aErrors.length) {
+                    MessageBox.error(
+                        "The following parameters have invalid or missing values:\n\n" + aErrors.join("\n"),
+                        { title: "SAC Validation Errors" }
+                    );
+                } else if (aWarnings.length) {
+                    MessageBox.warning(aWarnings.join("\n"), { title: "SAC Validation" });
+                } else {
+                    MessageToast.show("SAC validation OK — all parameters are valid");
+                }
+            });
+        },
+
+        _pollValidation: function (multiactionId, validationKey, nRetry) {
+            var that = this;
+            if (nRetry > 20) {
+                return Promise.resolve({
+                    multiactionId: multiactionId,
+                    result: { valid: null, error: "Validation timed out" }
+                });
+            }
+            return new Promise(function (resolve) {
+                setTimeout(function () {
+                    fetch("v1/jobs/sac/validate-parameters", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                        body: JSON.stringify({ validationKey: validationKey })
+                    }).then(function (r) {
+                        if (!r.ok) { return r.text().then(function (t) { throw new Error("HTTP " + r.status + ": " + t.slice(0, 200)); }); }
+                        return r.json();
+                    }).then(function (res) {
+                        if (res.probing) {
+                            resolve(that._pollValidation(multiactionId, validationKey, nRetry + 1));
+                        } else {
+                            resolve({ multiactionId: multiactionId, result: res });
+                        }
+                    }).catch(function (err) {
+                        resolve({ multiactionId: multiactionId, result: { valid: null, error: String(err && err.message || err) } });
+                    });
+                }, 3000);
+            });
         }
     });
 });

@@ -527,8 +527,13 @@ class SchedulerService:
             if target_type == "DSP":
                 if not self._tc_exec:
                     raise RuntimeError("TaskchainExecutor not available")
+                # Traffic-lights schedules embed step params under __stepParams to
+                # avoid conflict with the TL config keys (checkInterval etc.).
+                dsp_params = params.pop("__stepParams", None)
+                if dsp_params is None:
+                    dsp_params = params  # regular DSP schedule: params ARE the step params
                 remote_id = self._tc_exec.execute_async_dsp(
-                    entry.get("spaceId"), entry.get("taskchain"), params
+                    entry.get("spaceId"), entry.get("taskchain"), dsp_params
                 )
             elif target_type in ("IBP", "SAC"):
                 if not self._job_exec:

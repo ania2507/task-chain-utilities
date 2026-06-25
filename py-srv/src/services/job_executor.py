@@ -11,6 +11,8 @@ remote system's identifiers.
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import threading
 import uuid
@@ -99,7 +101,12 @@ class JobExecutor:
 
         ref = client.launch_job(params)
 
-        execution_id = f"{itype.value}__{uuid.uuid4().hex}"
+        # Encode integration + remote_id into execution_id so we can recover
+        # after a process restart without a persistent store.
+        payload = base64.urlsafe_b64encode(
+            json.dumps({"i": itype.value, "r": ref.remote_id}).encode()
+        ).decode().rstrip("=")
+        execution_id = f"{itype.value}__{payload}"
         execution = JobExecution(
             execution_id=execution_id,
             integration_type=itype,
@@ -129,10 +136,45 @@ class JobExecutor:
     # Status
     # ------------------------------------------------------------------
 
+    def _recover_execution(self, execution_id: str) -> Optional["JobExecution"]:
+        """Try to reconstruct a JobExecution from a self-describing execution_id.
+
+        The execution_id format is ``{integration}__{b64({"i":integration,"r":remote_id})}``.
+        Returns None if the ID is not in the self-describing format (legacy UUIDs).
+        """
+        try:
+            parts = execution_id.split("__", 1)
+            if len(parts) != 2:
+                return None
+            # Restore base64 padding
+            b64 = parts[1] + "=" * (-len(parts[1]) % 4)
+            meta = json.loads(base64.urlsafe_b64decode(b64).decode())
+            itype = IntegrationType(meta["i"])
+            remote_id = meta["r"]
+        except Exception:
+            return None
+
+        ref = JobReference(remote_id=remote_id)
+        execution = JobExecution(
+            execution_id=execution_id,
+            integration_type=itype,
+            ref=ref,
+            params={},
+            status=JobStatus.UNKNOWN,
+            created_at=datetime.utcnow(),
+        )
+        with self._lock:
+            self._executions[execution_id] = execution
+        logger.info("Recovered execution %s from execution_id after restart", execution_id)
+        return execution
+
     def get_status(self, execution_id: str) -> Dict[str, Any]:
         """Poll the remote system and return the latest status."""
         with self._lock:
             execution = self._executions.get(execution_id)
+
+        if not execution:
+            execution = self._recover_execution(execution_id)
 
         if not execution:
             raise ValueError(f"Unknown execution_id: {execution_id}")
@@ -169,6 +211,9 @@ class JobExecutor:
         """Cancel a running job."""
         with self._lock:
             execution = self._executions.get(execution_id)
+
+        if not execution:
+            execution = self._recover_execution(execution_id)
 
         if not execution:
             raise ValueError(f"Unknown execution_id: {execution_id}")

@@ -23,7 +23,12 @@
         </f:title>
 
         <f:content>
-            <l:Splitter height="100%">
+            <VBox>
+                <MessageStrip text="This entry has already run. Parameters are shown in read-only mode."
+                              type="Information" showIcon="true"
+                              visible="{edit>/viewOnly}"
+                              class="sapUiSmallMargin"/>
+                <l:Splitter height="100%">
                 <!-- LEFT: chain steps / IBP template steps list -->
                 <Panel headerText="{= ${edit>/targetType} === 'IBP' ? 'IBP Job Template Steps' : 'Chain Steps (click to add params)' }"
                        width="auto" class="sapUiSmallMargin">
@@ -77,7 +82,7 @@
                                         <Text text="{edit>value}"/>
                                         <core:Icon src="{= ${edit>active} ? 'sap-icon://accept' : 'sap-icon://decline' }"
                                                    color="{= ${edit>active} ? '#2ecc71' : '#bdc3c7' }"/>
-                                        <HBox justifyContent="End">
+                                        <HBox justifyContent="End" visible="{= !${edit>/viewOnly} }">
                                             <Button icon="sap-icon://edit" type="Transparent" press=".onEditParam" tooltip="Edit"/>
                                             <Button icon="sap-icon://delete" type="Reject" press=".onDeleteParam" tooltip="Delete"/>
                                         </HBox>
@@ -85,7 +90,8 @@
                                 </ColumnListItem>
                             </Table>
                             <Panel headerText="Add New Parameter" class="sapUiSmallMarginTop"
-                                   expandable="true" expanded="true">
+                                   expandable="true" expanded="true"
+                                   visible="{= !${edit>/viewOnly} }">
                                 <content>
                                     <VBox class="sapUiSmallMargin">
                                         <HBox alignItems="Center" class="sapUiTinyMarginBottom">
@@ -157,25 +163,35 @@
                                                     <Text text="{edit>value}"/>
                                                     <core:Icon src="{= ${edit>active} ? 'sap-icon://accept' : 'sap-icon://decline' }"
                                                                color="{= ${edit>active} ? '#2ecc71' : '#bdc3c7' }"/>
-                                                    <HBox justifyContent="End">
+                                                    <HBox justifyContent="End" visible="{= !${edit>/viewOnly} }">
                                                         <Button icon="sap-icon://edit" type="Transparent" press=".onEditIbpStepParam" tooltip="Edit"/>
                                                         <Button icon="sap-icon://delete" type="Reject" press=".onDeleteIbpStepParam" tooltip="Delete"/>
                                                     </HBox>
                                                 </cells>
                                             </ColumnListItem>
                                         </Table>
-                                        <HBox alignItems="Center" class="sapUiSmallMarginTop" wrap="Wrap">
-                                            <Label text="Key:" width="4rem"/>
-                                            <Input value="{edit>/newIbpParam/key}" width="12rem" placeholder="param key"/>
-                                            <Button icon="sap-icon://value-help" type="Transparent"
-                                                    press=".onIbpKeyValueHelp" tooltip="Match code — select from available IBP parameters"/>
-                                            <Label text="Value:" width="4rem" class="sapUiTinyMarginBegin"/>
-                                            <Input value="{edit>/newIbpParam/value}" width="12rem" placeholder="param value"/>
-                                            <CheckBox selected="{edit>/newIbpParam/active}" text="Active" class="sapUiTinyMarginBegin"/>
-                                            <Button text="Add" type="Accept" icon="sap-icon://add"
-                                                    press=".onAddIbpStepParam" class="sapUiTinyMarginBegin"/>
-                                            <Button text="Cancel" press=".onResetIbpNewParam" class="sapUiTinyMarginBegin"/>
-                                        </HBox>
+                                        <VBox class="sapUiSmallMarginTop" visible="{= !${edit>/viewOnly} }">
+                                            <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                                <Label text="Key:" width="9rem"/>
+                                                <Input value="{edit>/newIbpParam/key}" width="20rem" placeholder="param key"
+                                                       class="sapUiTinyMarginEnd"/>
+                                                <Button icon="sap-icon://value-help" type="Transparent"
+                                                        press=".onIbpKeyValueHelp" tooltip="Match code — select from available IBP parameters"/>
+                                            </HBox>
+                                            <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                                <Label text="Value:" width="9rem"/>
+                                                <Input value="{edit>/newIbpParam/value}" width="20rem" placeholder="param value"/>
+                                            </HBox>
+                                            <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                                <Label text="Active:" width="9rem"/>
+                                                <CheckBox selected="{edit>/newIbpParam/active}"/>
+                                            </HBox>
+                                            <HBox class="sapUiSmallMarginTop">
+                                                <Button text="Add" type="Accept" icon="sap-icon://add"
+                                                        press=".onAddIbpStepParam" class="sapUiTinyMarginEnd"/>
+                                                <Button text="Cancel" press=".onResetIbpNewParam"/>
+                                            </HBox>
+                                        </VBox>
                                     </VBox>
                                 </Panel>
                             </l:Splitter>
@@ -185,47 +201,71 @@
                         <VBox visible="{= !!${edit>/selectedStepId} &amp;&amp; !${edit>/selectedStepIsBlocked} &amp;&amp; !!${edit>/sacMultiActionId} }">
                             <HBox alignItems="Center" class="sapUiSmallMargin">
                                 <Label text="Multi Action:" width="7rem"/>
-                                <Text text="{edit>/sacMultiActionId}" class="sapUiTinyMarginEnd"/>
+                                <Text text="{= ${edit>/sacMultiActionName} ? ${edit>/sacMultiActionName} + ' (' + ${edit>/sacMultiActionId} + ')' : ${edit>/sacMultiActionId} }"
+                                      class="sapUiTinyMarginEnd"/>
                             </HBox>
-                            <Title text="Configured parameters:" level="H5" class="sapUiSmallMarginBeginEnd sapUiSmallMarginBottom"/>
-                            <Table items="{edit>/selectedStepParams}" noDataText="No parameters yet" class="sapUiSmallMarginBeginEnd">
+                            <HBox visible="{edit>/sacLoading}" alignItems="Center" class="sapUiSmallMarginBeginEnd sapUiSmallMarginBottom">
+                                <core:Icon src="sap-icon://synchronize" class="sapUiTinyMarginEnd"/>
+                                <Text text="Loading parameters from SAC…"/>
+                            </HBox>
+                            <Title text="Configured parameters:" level="H5" class="sapUiSmallMarginBeginEnd sapUiSmallMarginBottom"
+                                   visible="{= !${edit>/sacLoading} }"/>
+                            <Table items="{edit>/selectedStepParams}" noDataText="No parameters yet"
+                                   class="sapUiSmallMarginBeginEnd"
+                                   visible="{= !${edit>/sacLoading} }">
                                 <columns>
-                                    <Column><Text text="Parameter ID"/></Column>
-                                    <Column><Text text="Value"/></Column>
-                                    <Column hAlign="Center" width="6rem"><Text text="Active"/></Column>
-                                    <Column hAlign="End" width="7rem"><Text text=""/></Column>
+                                    <Column width="12rem"><Text text="Parameter ID"/></Column>
+                                    <Column width="12rem"><Text text="Description"/></Column>
+                                    <Column><Text text="Value (memberIds)"/></Column>
+                                    <Column width="10rem"><Text text="HierarchyId"/></Column>
+                                    <Column hAlign="End" width="3.5rem" visible="{= !${edit>/viewOnly} }"><Text text=""/></Column>
                                 </columns>
                                 <ColumnListItem>
                                     <cells>
-                                        <Text text="{edit>key}"/>
-                                        <Text text="{edit>value}"/>
-                                        <core:Icon src="{= ${edit>active} ? 'sap-icon://accept' : 'sap-icon://decline' }"
-                                                   color="{= ${edit>active} ? '#2ecc71' : '#bdc3c7' }"/>
-                                        <HBox justifyContent="End">
-                                            <Button icon="sap-icon://edit" type="Transparent" press=".onEditParam" tooltip="Edit"/>
-                                            <Button icon="sap-icon://delete" type="Reject" press=".onDeleteParam" tooltip="Delete"/>
+                                        <HBox alignItems="Center">
+                                            <core:Icon src="{= ${edit>mandatory} ? 'sap-icon://status-critical' : '' }"
+                                                       color="#e74c3c" class="sapUiTinyMarginEnd"
+                                                       tooltip="{= ${edit>mandatory} ? 'Mandatory' : '' }"
+                                                       visible="{= !!${edit>mandatory} }"/>
+                                            <Text text="{edit>key}"/>
                                         </HBox>
+                                        <Text text="{edit>description}"/>
+                                        <Input value="{edit>value}"
+                                               width="100%"
+                                               editable="{= !${edit>/viewOnly} }"/>
+                                        <Input value="{edit>hierarchyId}"
+                                               width="100%"
+                                               editable="{= !${edit>/viewOnly} }"
+                                               tooltip="{= ${edit>needsHierarchyId} ? 'Required: this parameter needs a Hierarchy ID to resolve members' : 'Optional: leave empty to use the default hierarchy' }"/>
+                                        <Button icon="sap-icon://delete" type="Transparent"
+                                                press=".onDeleteParam" tooltip="Delete"
+                                                visible="{= !${edit>/viewOnly} }"/>
                                     </cells>
                                 </ColumnListItem>
                             </Table>
                             <Panel headerText="Add New Parameter" class="sapUiSmallMarginTop sapUiSmallMarginBeginEnd"
-                                   expandable="true" expanded="true">
+                                   expandable="true" expanded="true"
+                                   visible="{= !${edit>/viewOnly} &amp;&amp; !${edit>/sacLoading} }">
                                 <content>
                                     <VBox class="sapUiSmallMargin">
                                         <HBox alignItems="Center" class="sapUiTinyMarginBottom">
-                                            <Label text="Parameter ID:" width="9rem"/>
-                                            <Input value="{edit>/newParam/key}" width="20rem" placeholder="e.g. TargetVersion"/>
+                                            <Label text="Key:" width="9rem"/>
+                                            <Input value="{edit>/newParam/key}" width="20rem"
+                                                   class="sapUiTinyMarginEnd"/>
+                                            <Button icon="sap-icon://value-help" type="Transparent"
+                                                    press=".onSacKeyValueHelp"
+                                                    tooltip="Match code — select from available SAC parameters"/>
                                         </HBox>
                                         <HBox alignItems="Center" class="sapUiTinyMarginBottom">
                                             <Label text="Value:" width="9rem"/>
-                                            <Input value="{edit>/newParam/value}" width="20rem" placeholder="e.g. public.FCST_Sim5, or JSON for advanced cases"/>
+                                            <Input value="{edit>/newParam/value}" width="20rem"/>
                                         </HBox>
                                         <HBox alignItems="Center" class="sapUiTinyMarginBottom">
-                                            <Label text="Active:" width="9rem"/>
-                                            <CheckBox selected="{edit>/newParam/active}"/>
+                                            <Label text="HierarchyId:" width="9rem"/>
+                                            <Input value="{edit>/newParam/hierarchyId}" width="20rem"/>
                                         </HBox>
                                         <HBox class="sapUiSmallMarginTop">
-                                            <Button text="Confirm" type="Accept" icon="sap-icon://accept"
+                                            <Button text="Add" type="Accept" icon="sap-icon://add"
                                                     press=".onAddParam" class="sapUiTinyMarginEnd"/>
                                             <Button text="Cancel" press=".onResetNewParam"/>
                                         </HBox>
@@ -239,14 +279,19 @@
                               visible="{= !${edit>/selectedStepId} }"/>
                     </content>
                 </Panel>
-            </l:Splitter>
+                </l:Splitter>
+            </VBox>
         </f:content>
 
         <f:footer>
             <OverflowToolbar>
                 <ToolbarSpacer/>
-                <Button text="{i18n>common.cancel}" press=".onNavBack"/>
-                <Button text="{i18n>common.save}" type="Emphasized" press=".onSave"/>
+                <Button text="{= ${edit>/viewOnly} ? 'Close' : ${i18n>common.cancel} }" press=".onNavBack"/>
+                <Button text="Validate" icon="sap-icon://simulate" press=".onValidateSac"
+                        visible="{= !${edit>/viewOnly} &amp;&amp; ${edit>/hasSacSteps} }"
+                        enabled="{= !${edit>/sacLoading} }"/>
+                <Button text="{i18n>common.save}" type="Emphasized" press=".onSave"
+                        visible="{= !${edit>/viewOnly} }"/>
             </OverflowToolbar>
         </f:footer>
     </f:DynamicPage>

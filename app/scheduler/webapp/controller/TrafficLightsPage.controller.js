@@ -86,10 +86,20 @@ sap.ui.define([
             oBind.requestObject().then(function (obj) {
                 if (!obj) return;
                 var tl = {};
+                var stepParamsJson = "";
                 if (obj.parameters) {
-                    try { tl = JSON.parse(obj.parameters); } catch (_) {}
+                    try {
+                        tl = JSON.parse(obj.parameters);
+                        // Step params are stored nested under __stepParams to avoid
+                        // conflict with traffic-light settings.
+                        if (tl.__stepParams) {
+                            stepParamsJson = JSON.stringify(tl.__stepParams);
+                        }
+                    } catch (_) {}
                 }
-                this._editModel.setData(Object.assign({}, DEFAULTS, obj, tl));
+                this._editModel.setData(Object.assign({}, DEFAULTS, obj, tl, {
+                    parameters: stepParamsJson
+                }));
                 this._loadTrafficLightStatus(obj.spaceId, obj.taskchain);
                 this._loadLastRun(obj.spaceId, obj.taskchain);
             }.bind(this)).catch(function (err) {
@@ -149,6 +159,12 @@ sap.ui.define([
                     var run = (data && data.success && data.runs && data.runs[0]) || null;
                     this._editModel.setProperty("/lastRunAt", run ? (run.endTime || run.startTime) : null);
                     this._editModel.setProperty("/lastRunStatus", run ? run.status : "");
+                    // If DSP reports the task chain is currently running, override
+                    // currentState immediately without waiting for the monitoring cycle.
+                    if (run && (run.status || "").toLowerCase() === "running") {
+                        this._editModel.setProperty("/currentState", "GREY");
+                        this._editModel.setProperty("/tlStatus", "running");
+                    }
                 }.bind(this))
                 .catch(function () {
                     this._editModel.setProperty("/lastRunAt", null);
@@ -324,12 +340,15 @@ sap.ui.define([
             }
             var oModel = this.getModel();
 
+            var oStepParams = {};
+            try { oStepParams = JSON.parse(d.parameters || "{}"); } catch (_) {}
             var tlSettings = {
                 scheduleKind: "TRAFFIC_LIGHTS",
                 checkInterval: d.checkInterval || "15",
                 autoReset: !!d.autoReset,
                 autoResetState: d.autoResetState || "GREEN",
-                timeout: d.timeout || "48"
+                timeout: d.timeout || "48",
+                __stepParams: oStepParams
             };
             var payload = {
                 name: d.name, description: d.description,

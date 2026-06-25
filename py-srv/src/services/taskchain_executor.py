@@ -18,11 +18,13 @@ from typing import Any, Callable, Dict, Optional
 logger = logging.getLogger(__name__)
 
 # Pending step-parameters registered by the scheduler when it fires a task
-# chain run.  Keyed by taskchain name so the /v1/jobs/launch endpoint can
-# look them up when DSP's API task calls in (expects {"taskchain": "..."} in
-# the request body).  Entries are consumed once, preventing stale look-ups.
+# chain run.  Keyed by taskchain name; each entry holds all steps for that
+# run so multiple SAC/IBP steps in the same chain can each look up their own
+# params.  Entries expire after TTL_SECONDS to avoid unbounded growth.
 _PENDING_STEP_PARAMS: Dict[str, Any] = {}
 _PENDING_STEP_PARAMS_LOCK = threading.Lock()
+_PENDING_STEP_PARAMS_TTL: Dict[str, float] = {}
+_STEP_PARAMS_TTL_SECONDS = 7200  # 2 hours — longer than any realistic task chain run
 
 
 class TaskchainStatus(Enum):
@@ -66,12 +68,30 @@ class TaskchainExecutor:
         """Store step-level params for *taskchain* so the job-launch endpoint can pick them up."""
         with _PENDING_STEP_PARAMS_LOCK:
             _PENDING_STEP_PARAMS[taskchain] = params
+            _PENDING_STEP_PARAMS_TTL[taskchain] = time.time() + _STEP_PARAMS_TTL_SECONDS
+            # Evict expired entries to prevent unbounded growth.
+            expired = [k for k, exp in _PENDING_STEP_PARAMS_TTL.items() if exp < time.time()]
+            for k in expired:
+                _PENDING_STEP_PARAMS.pop(k, None)
+                _PENDING_STEP_PARAMS_TTL.pop(k, None)
 
     @staticmethod
     def consume_pending_step_params(taskchain: str) -> Optional[Dict[str, Any]]:
-        """Return and remove the stored step params for *taskchain*, or None if absent."""
+        """Return stored step params for *taskchain* without removing them.
+
+        Params are kept so multiple steps in the same task chain can each
+        read their own params.  Entries expire via TTL set in store_pending_step_params.
+        """
         with _PENDING_STEP_PARAMS_LOCK:
-            return _PENDING_STEP_PARAMS.pop(taskchain, None)
+            entry = _PENDING_STEP_PARAMS.get(taskchain)
+            if entry is None:
+                return None
+            exp = _PENDING_STEP_PARAMS_TTL.get(taskchain, 0)
+            if exp and time.time() > exp:
+                _PENDING_STEP_PARAMS.pop(taskchain, None)
+                _PENDING_STEP_PARAMS_TTL.pop(taskchain, None)
+                return None
+            return entry
 
     @staticmethod
     def make_execution_id(space: str, logid: str) -> str:

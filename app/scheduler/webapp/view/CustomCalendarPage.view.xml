@@ -183,6 +183,7 @@
                                             <Button icon="sap-icon://edit"
                                                     tooltip="{i18n>calendar.edit}"
                                                     type="Transparent"
+                                                    visible="{= !${edit>isPast} }"
                                                     press=".onEditCalendarEntry"/>
                                             <Button icon="sap-icon://delete"
                                                     tooltip="{i18n>calendar.remove}"

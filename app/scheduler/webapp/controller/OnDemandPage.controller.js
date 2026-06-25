@@ -115,9 +115,9 @@ sap.ui.define([
             if (!sTaskchain || !sParametersJson || !String(sParametersJson).trim()) return;
             var oComp = this.getOwnerComponent();
             if (!oComp) return;
-            // Don't overwrite a fresher in-memory state that already has real steps
+            // Don't overwrite params freshly edited by the user in StepParametersPage
             if (oComp._stepParamsState && oComp._stepParamsState.taskchain === sTaskchain
-                    && oComp._stepParamsState.steps && oComp._stepParamsState.steps.length) return;
+                    && oComp._stepParamsState._fresh) return;
             try {
                 JSON.parse(sParametersJson); // validate JSON before storing
                 // Store only parametersJson (no synthetic steps).

@@ -24,6 +24,7 @@ modules:
     routes:
     - route: ${default-url}
     - route: ${default-host}.cert.${default-domain}
+    - route: davide-campari---milano-s-p-a--orchestrator-no-prod-dev39cf15dd.cfapps.eu10-004.hana.ondemand.com
   build-parameters:
     builder: npm-ci
 - name: task-chain-utilities-db-deployer

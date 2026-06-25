@@ -852,7 +852,7 @@ def get_taskchain_dag():
                 try:
                     ph = ",".join(["?"] * len(object_ids))
                     bname_rows = db_query_executor.query(
-                        f'SELECT "NAME", "REPOSITORY_OBJECT_TYPE", "JSON" FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" WHERE "NAME" IN ({ph})',
+                        f'SELECT "NAME", "REPOSITORY_OBJECT_TYPE", "JSON" FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" WHERE "NAME" IN ({ph}) ORDER BY "DEPLOYED_AT" ASC',
                         tuple(object_ids)
                     )
                     for mr in bname_rows or []:
@@ -1026,14 +1026,54 @@ def get_taskchain_dag():
             except Exception:
                 pass
 
-        # Extract nodes and links from DAG
+        # Extract nodes and links from DAG.
+        # Prefer current deployment metadata so that changes made to the task
+        # chain in DSP after the last run are reflected immediately.  Fall back
+        # to the run's embedded DAG JSON only when no deployment record exists.
         nodes = []
         links = []
-        
-        if dag_data and "taskchains" in dag_data:
+        raw_nodes, raw_links = [], []
+
+        try:
+            current_meta_rows = db_query_executor.query(
+                'SELECT "JSON" FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" '
+                'WHERE "NAME" = ? ORDER BY "DEPLOYED_AT" DESC LIMIT 1',
+                (taskchain,)
+            )
+            if current_meta_rows:
+                raw_meta = (current_meta_rows[0].get("JSON") or current_meta_rows[0].get("json") or "")
+                try:
+                    meta_obj = json.loads(raw_meta) if raw_meta else {}
+                    tc_section = (meta_obj.get("taskchains") or {}).get(taskchain)
+                    if isinstance(tc_section, dict):
+                        raw_nodes = tc_section.get("nodes") or []
+                        raw_links = tc_section.get("links") or []
+                        logger.info(
+                            "taskchain-dag: using deployment metadata for '%s': %d node(s)",
+                            taskchain, len(raw_nodes)
+                        )
+                    else:
+                        logger.info(
+                            "taskchain-dag: deployment metadata for '%s' has no taskchains section, keys=%s",
+                            taskchain, list(meta_obj.keys())[:10]
+                        )
+                except Exception as _me:
+                    logger.warning("taskchain-dag: failed to parse deployment metadata for '%s': %s", taskchain, _me)
+            else:
+                logger.info("taskchain-dag: no deployment metadata row found for '%s'", taskchain)
+        except Exception as _qe:
+            logger.warning("taskchain-dag: deployment metadata query failed for '%s': %s", taskchain, _qe)
+
+        if not raw_nodes and dag_data and "taskchains" in dag_data:
             tc_data = dag_data["taskchains"].get(taskchain, {})
             raw_nodes = tc_data.get("nodes", [])
             raw_links = tc_data.get("links", [])
+            logger.info(
+                "taskchain-dag: falling back to last-run JSON for '%s': %d node(s)",
+                taskchain, len(raw_nodes)
+            )
+
+        if raw_nodes:
 
             # ----------------------------------------------------------
             # Look up business names for the objects referenced by the
@@ -1056,7 +1096,7 @@ def get_taskchain_dag():
                     placeholders = ",".join(["?"] * len(object_ids))
                     meta_sql = (
                         'SELECT "NAME", "REPOSITORY_OBJECT_TYPE", "JSON" FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" '
-                        f'WHERE "NAME" IN ({placeholders})'
+                        f'WHERE "NAME" IN ({placeholders}) ORDER BY "DEPLOYED_AT" ASC'
                     )
                     meta_rows = db_query_executor.query(meta_sql, tuple(object_ids))
                     for mr in meta_rows or []:
