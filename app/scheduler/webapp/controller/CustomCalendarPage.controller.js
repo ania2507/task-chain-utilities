@@ -656,6 +656,40 @@ sap.ui.define([
                 that._updateSummary();
                 that._applyPastFilter();
                 that._editModel.setProperty("/busy", false);
+
+                // Enrich past entries that have no ScheduleRun record with DSP run history
+                var aPastNoStatus = aEntries.filter(function (e) { return e.isPast && !e.runStatus; });
+                if (aPastNoStatus.length && sSpace && sChain) {
+                    var sRunsUrl = "v1/dsp/taskchain-runs?spaceId=" + encodeURIComponent(sSpace)
+                        + "&taskchain=" + encodeURIComponent(sChain) + "&limit=200";
+                    fetch(sRunsUrl, { headers: { "Accept": "application/json" } })
+                        .then(function (res) { return res.json(); })
+                        .then(function (data) {
+                            var aDspRuns = (data && data.success && data.runs) || [];
+                            if (!aDspRuns.length) return;
+                            var WINDOW_MS = 90 * 60 * 1000;
+                            aPastNoStatus.forEach(function (oEntry) {
+                                var sT = oEntry.rawTime || "00:00";
+                                var dtEntry = new Date(oEntry.date + "T" + (sT.length === 5 ? sT + ":00" : sT));
+                                var nEntry = dtEntry.getTime();
+                                var oBest = null, nBestDiff = Infinity;
+                                aDspRuns.forEach(function (r) {
+                                    if (!r.startTime) return;
+                                    var diff = Math.abs(new Date(r.startTime).getTime() - nEntry);
+                                    if (diff < WINDOW_MS && diff < nBestDiff) {
+                                        nBestDiff = diff; oBest = r;
+                                    }
+                                });
+                                if (oBest) {
+                                    oEntry.runStatus = oBest.status || "";
+                                    oEntry.runAt = oBest.endTime || oBest.startTime;
+                                }
+                            });
+                            that._editModel.setProperty("/calendarEntries", aEntries);
+                            that._applyPastFilter();
+                        })
+                        .catch(function () { /* best-effort */ });
+                }
             }).catch(function (err) {
                 that._editModel.setProperty("/busy", false);
                 console.warn("Could not load calendar entries:", err && err.message);

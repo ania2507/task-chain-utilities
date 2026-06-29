@@ -370,20 +370,30 @@ def launch_job():
         if step_params:
             current_ma_id = (payload.get("multiActionId") or payload.get("sacMultiActionId") or "").strip()
             sac_params: dict = {}
+            # Pre-check: does any step carry a matching __sacMultiActionId sentinel?
+            # If so, restrict to only those steps (handles chains with multiple SAC steps).
+            has_matched_sentinel = any(
+                any(p.get("key") == "__sacMultiActionId" and p.get("value") == current_ma_id
+                    for p in (sparams if isinstance(sparams, list) else []))
+                for sparams in step_params.values()
+            )
             for _step_name, sparams in step_params.items():
                 sparams_list = sparams if isinstance(sparams, list) else []
                 if not sparams_list:
                     continue
-                # If the step has a sacMultiActionId, only use it for the matching call.
                 step_ma_id = ""
                 for p in sparams_list:
                     if p.get("key") == "__sacMultiActionId":
                         step_ma_id = p.get("value", "")
                         break
-                if current_ma_id and step_ma_id and step_ma_id != current_ma_id:
+                if step_ma_id and step_ma_id != current_ma_id:
+                    continue
+                if not step_ma_id and has_matched_sentinel:
                     continue
                 for p in sparams_list:
-                    if p.get("active", True) and p.get("key") and not p.get("key", "").startswith("__"):
+                    if (p.get("active", True) and p.get("key")
+                            and not p.get("key", "").startswith("__")
+                            and not p.get("step")):  # skip IBP params (always carry a "step" field)
                         sac_params[p["key"]] = p.get("value", "")
             if sac_params:
                 payload = {**payload, "parameters": sac_params}
