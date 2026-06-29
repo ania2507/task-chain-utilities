@@ -7,6 +7,7 @@ and return sanitized outputs (no secrets/tokens) to help troubleshoot permission
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -29,6 +30,7 @@ def _utc_str(value) -> str | None:
     return s.replace(" ", "T") + "Z"
 
 bp = Blueprint("dsp", __name__)
+logger = logging.getLogger(__name__)
 
 
 _TOKEN_CACHE: dict[str, Any] = {

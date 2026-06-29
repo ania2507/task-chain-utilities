@@ -49,7 +49,7 @@
             </Panel>
 
             <!-- Alternative: Custom DAG using Boxes (fallback without SVG) -->
-            <Panel id="dagBoxPanel" headerText="Task Flow" class="sapUiSmallMargin" visible="{= !${chainDetail>/useSvgDag}}">
+            <Panel id="dagBoxPanel" headerText="Task Flow" class="sapUiSmallMargin" visible="{= !${chainDetail>/useSvgDag} &amp;&amp; !${chainDetail>/dagLoading}}">
                 <HBox id="dagFlowContainer" wrap="Wrap" alignItems="Center" justifyContent="Center">
                     <VBox id="dagCol1" alignItems="Center" class="sapUiSmallMarginEnd">
                         <Button id="dagNode1" 

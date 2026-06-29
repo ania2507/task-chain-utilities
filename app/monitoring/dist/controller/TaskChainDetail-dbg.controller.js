@@ -57,6 +57,7 @@ sap.ui.define([
                 status: "loading",
                 statusText: "Loading...",
                 useSvgDag: false,
+                dagLoading: true,
                 nodes: [],
                 executions: [],
                 dagHtml: ""
@@ -94,18 +95,20 @@ sap.ui.define([
             this._fetchDsp(sUrl)
                 .then(function(response) { return response.json(); })
                 .then(function(result) {
+                    oModel.setProperty("/dagLoading", false);
                     if (result.success) {
                         // Generate SVG from real DAG data
                         var sSvg = this._generateDagSvgFromData(result.nodes, result.links);
                         oModel.setProperty("/dagHtml", sSvg);
                         oModel.setProperty("/useSvgDag", true);
-                        
+
                         // Also store nodes for the box-based fallback
                         oModel.setProperty("/nodes", result.nodes);
                         oModel.setProperty("/links", result.links);
                     }
                 }.bind(this))
                 .catch(function(error) {
+                    oModel.setProperty("/dagLoading", false);
                     console.error("Error loading DAG structure:", error);
                 });
         },
@@ -357,9 +360,12 @@ sap.ui.define([
                         if (!sFoundSpaceId && aRuns.length > 0 && aRuns[0].spaceId) {
                             sFoundSpaceId = aRuns[0].spaceId;
                             oModel.setProperty("/spaceId", sFoundSpaceId);
-                            
+
                             // Now load DAG with the discovered spaceId
                             this._loadDagStructure(sChainId, sFoundSpaceId, oModel);
+                        } else if (!oModel.getProperty("/spaceId")) {
+                            // No spaceId found anywhere — DAG will never load
+                            oModel.setProperty("/dagLoading", false);
                         }
                         
                         // Calculate status based on most recent run
@@ -396,6 +402,9 @@ sap.ui.define([
                 }.bind(this))
                 .catch(function(error) {
                     console.error("Error loading execution history:", error);
+                    if (!oModel.getProperty("/spaceId")) {
+                        oModel.setProperty("/dagLoading", false);
+                    }
                     this.getOwnerComponent()._setBusy(false);
                 }.bind(this));
         },
