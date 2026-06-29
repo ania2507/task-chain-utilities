@@ -145,11 +145,15 @@ def sac_multiaction_parameters(multiaction_id):
         client = _get_executor().get_client(IntegrationType.SAC)
         raw = client.get_multiaction_definition(multiaction_id)
         params = _parse_sac_parameters(raw)
+        is_probing = bool(raw.get("probing"))
+        probe_done = bool(raw.get("done"))
+        no_parameters = not is_probing and probe_done and not params
         return jsonify({
             "multiaction_id": multiaction_id,
             "name": raw.get("name") or raw.get("multiActionName") or "",
             "parameters": params,
-            "probing": bool(raw.get("probing")),
+            "probing": is_probing,
+            "noParameters": no_parameters,
         }), 200
     except Exception as e:
         logger.exception("Error fetching SAC multi action parameters for %s", multiaction_id)

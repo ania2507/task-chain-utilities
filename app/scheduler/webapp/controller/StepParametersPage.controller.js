@@ -49,6 +49,7 @@ sap.ui.define([
                 sacLoadingText: "",
                 sacParamSchema: [],
                 sacParamSchemaUnavailable: false,
+                sacNoParameters: false,
                 hasSacSteps: false
             });
             this.getView().setModel(this._editModel, "edit");
@@ -100,6 +101,7 @@ sap.ui.define([
                 sacLoadingText: "",
                 sacParamSchema: [],
                 sacParamSchemaUnavailable: false,
+                sacNoParameters: false,
                 hasSacSteps: false
             });
 
@@ -327,7 +329,8 @@ sap.ui.define([
 
                     var aSchema = data.parameters || [];
                     that._editModel.setProperty("/sacParamSchema", aSchema);
-                    that._editModel.setProperty("/sacParamSchemaUnavailable", !aSchema.length);
+                    that._editModel.setProperty("/sacNoParameters", !!data.noParameters);
+                    that._editModel.setProperty("/sacParamSchemaUnavailable", !aSchema.length && !data.noParameters);
                     var aParams = aSchema.map(function (p) {
                         var sVal = p.currentValue || "";
                         var sHId = "";
@@ -551,7 +554,9 @@ sap.ui.define([
             this._editModel.setProperty("/selectedStepId", oStep.id);
             this._editModel.setProperty("/selectedStepName", oStep.order + ": " + sDisplayName);
             this._editModel.setProperty("/selectedStepIsBlocked", false);
-            this._editModel.setProperty("/selectedStepParams", oStep.params || []);
+            this._editModel.setProperty("/selectedStepParams", (oStep.params || []).filter(function (p) {
+                return !String(p.key || "").startsWith("__");
+            }));
             this._editModel.setProperty("/newParam", _newParam());
             this._editModel.setProperty("/ibpTemplateName", oStep.ibpTemplateName || "");
             this._editModel.setProperty("/ibpSteps", aCachedIbpSteps);

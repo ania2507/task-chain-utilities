@@ -527,7 +527,8 @@ class SACJobClient(BaseJobClient):
         Strategy (each step is a fallback for the previous):
         1. GET /multiActions/{id}          — standard read endpoint
         2. GET /multiActions               — list endpoint, filter by id
-        3. POST /executions (empty params) — parse SAC validation error for param names
+        3. GET /multiActions/{id}/executions — infer params from past executions (no side effects)
+        4. POST /executions (empty params) — parse SAC validation error for param names
         """
         path = f"{_MULTIACTION_PATH}/{quote(multiaction_id, safe='.:')}"
         try:
@@ -567,7 +568,39 @@ class SACJobClient(BaseJobClient):
                 "falling back to probe via POST executions"
             )
 
-        # Fallback 2: probe via background thread to avoid gateway timeout.
+        # Fallback 2: look at recent past executions to infer parameter IDs.
+        # This avoids launching a new execution (probe side-effect) and uses the public API.
+        try:
+            exec_list_path = f"{_MULTIACTION_PATH}/{quote(multiaction_id, safe='.:')}/executions?$top=5"
+            resp = self._sac.get(exec_list_path)
+            exec_data = resp.json() if resp.content else {}
+            executions = (
+                exec_data.get("value")
+                or exec_data.get("executions")
+                or (exec_data if isinstance(exec_data, list) else [])
+            )
+            seen: Dict[str, Dict[str, Any]] = {}
+            for ex in executions:
+                if not isinstance(ex, dict):
+                    continue
+                for pv in (ex.get("parameterValues") or []):
+                    pid = pv.get("parameterId") or ""
+                    if pid and pid not in seen:
+                        seen[pid] = {"id": pid, "label": pid, "mandatory": True, "needsHierarchyId": False}
+            if seen:
+                logger.info(
+                    "SAC executions fallback: found %d param(s) from past executions for %s: %s",
+                    len(seen), multiaction_id, list(seen.keys())
+                )
+                return {"parameters": list(seen.values())}
+            logger.info(
+                "SAC executions fallback: no parameterValues in past executions for %s — falling back to probe",
+                multiaction_id,
+            )
+        except Exception as e:
+            logger.info("SAC executions fallback failed for %s: %s — falling back to probe", multiaction_id, e)
+
+        # Fallback 3: probe via background thread to avoid gateway timeout.
         # Return cached result if already done; otherwise start the probe and return empty
         # so the caller can retry in a few seconds.
         if multiaction_id in self._probe_cache:

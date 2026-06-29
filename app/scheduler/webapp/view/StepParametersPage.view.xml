@@ -208,8 +208,11 @@
                                 <core:Icon src="sap-icon://synchronize" class="sapUiTinyMarginEnd"/>
                                 <Text text="Loading parameters from SAC…"/>
                             </HBox>
+                            <MessageStrip text="This multi action has no mandatory parameters — it will run with the values pre-configured in SAC."
+                                          type="Information" showIcon="true" class="sapUiSmallMargin"
+                                          visible="{= !${edit>/sacLoading} &amp;&amp; ${edit>/sacNoParameters} }"/>
                             <Title text="Configured parameters:" level="H5" class="sapUiSmallMarginBeginEnd sapUiSmallMarginBottom"
-                                   visible="{= !${edit>/sacLoading} }"/>
+                                   visible="{= !${edit>/sacLoading} &amp;&amp; !${edit>/sacNoParameters} }"/>
                             <Table items="{edit>/selectedStepParams}" noDataText="No parameters yet"
                                    class="sapUiSmallMarginBeginEnd"
                                    visible="{= !${edit>/sacLoading} }">

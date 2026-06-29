@@ -260,15 +260,17 @@ sap.ui.define([
                 XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aIbpRows), "IBP");
             }
 
-            // SAC sheets: one per step (Schedule ID | Parameter | Value).
-            // One empty param row per calendar ID so the user fills in values per run.
-            aSacSteps.forEach(function (s) {
-                var sRaw = "SAC_" + (s.objectId || s.sacMultiActionId || "");
-                var sName = sRaw.replace(/[:\\/?\*\[\]]/g, "_").slice(0, 31);
-                var aSacRows = [["Schedule ID", "Parameter", "Value"]];
-                aCalIds.forEach(function (id) { aSacRows.push([id, "", ""]); });
-                XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aSacRows), sName);
-            });
+            // SAC sheet: single flat sheet mirroring the IBP structure.
+            // Columns: Schedule ID | DSP Step | Parameter | Value | HierarchyId
+            if (aSacSteps.length) {
+                var aSacRows = [["Schedule ID", "DSP Step", "Parameter", "Value", "HierarchyId"]];
+                aCalIds.forEach(function (id) {
+                    aSacSteps.forEach(function (s) {
+                        aSacRows.push([id, s.objectId || s.name || "", "", "", ""]);
+                    });
+                });
+                XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aSacRows), "SAC");
+            }
 
             var out = XLSX.write(wb, { bookType: "xlsx", type: "array" });
             this._downloadBlob(new Blob([out], { type: "application/octet-stream" }), "calendar_template.xlsx");
@@ -289,9 +291,49 @@ sap.ui.define([
             var that = this;
             var reader = new FileReader();
             reader.onload = function (e) {
+                var oParsed;
                 try {
-                    var oParsed = that._parseCalendarBuffer(e.target.result, oFile.name);
-                    var sChain = that._editModel.getProperty("/taskchain");
+                    oParsed = that._parseCalendarBuffer(e.target.result, oFile.name);
+                } catch (err) {
+                    console.error("[Scheduler] calendar parse error", err);
+                    var oRb = that.getResourceBundle();
+                    MessageBox.error(oRb.getText("calendar.parseError", [err.message || String(err)]));
+                    return;
+                }
+
+                var sChain = that._editModel.getProperty("/taskchain");
+
+                // If the file has the new flat SAC sheet, fetch step definitions to inject
+                // __sacMultiActionId sentinel for each DSP step referenced in the sheet.
+                var pStepMap = Promise.resolve({});
+                if (oParsed.sacFlatDspSteps && oParsed.sacFlatDspSteps.length) {
+                    var sSpaceId = that._editModel.getProperty("/spaceId") || "";
+                    pStepMap = fetch("v1/dsp/taskchain-steps?spaceId=" + encodeURIComponent(sSpaceId)
+                        + "&taskchain=" + encodeURIComponent(sChain))
+                        .then(function (r) { return r.json(); })
+                        .then(function (d) {
+                            var oMap = {};
+                            ((d && d.steps) || []).forEach(function (s) {
+                                if (s.objectId && s.sacMultiActionId) oMap[s.objectId] = s.sacMultiActionId;
+                            });
+                            return oMap;
+                        })
+                        .catch(function () { return {}; });
+                }
+
+                pStepMap.then(function (oStepMaMap) {
+                    // Inject __sacMultiActionId sentinel for flat SAC steps
+                    (oParsed.sacFlatDspSteps || []).forEach(function (sDspStep) {
+                        var sSacMaId = oStepMaMap[sDspStep] || "";
+                        if (!sSacMaId) return;
+                        Object.keys(oParsed.paramsByScheduleId).forEach(function (schId) {
+                            var aList = oParsed.paramsByScheduleId[schId][sDspStep];
+                            if (!aList) return;
+                            var hasSentinel = aList.some(function (p) { return p.key === "__sacMultiActionId"; });
+                            if (!hasSentinel) aList.push({ key: "__sacMultiActionId", value: sSacMaId, active: true });
+                        });
+                    });
+
                     var aEntries = that._buildCalendarEntries(oParsed.rows, sChain, oParsed.paramsByScheduleId);
 
                     // Check 1: intra-file duplicates (same date+time in the file itself)
@@ -355,11 +397,10 @@ sap.ui.define([
                     } else {
                         doUpload();
                     }
-                } catch (err) {
-                    console.error("[Scheduler] calendar parse error", err);
-                    var oRb = that.getResourceBundle();
-                    MessageBox.error(oRb.getText("calendar.parseError", [err.message || String(err)]));
-                }
+                }).catch(function (err) {
+                    console.error("[Scheduler] calendar upload error", err);
+                    MessageBox.error(String(err.message || err));
+                });
             };
             reader.onerror = function () { MessageBox.error("Could not read file"); };
             if (/\.csv$/i.test(oFile.name)) {
@@ -418,7 +459,7 @@ sap.ui.define([
                 }
             }
 
-            // SAC_<dspStepId> sheets columns: Schedule ID | Parameter | Value
+            // Legacy SAC_<dspStepId> sheets (backward compat): Schedule ID | Parameter | Value
             wb.SheetNames.forEach(function (sName) {
                 if (sName.indexOf("SAC_") !== 0) return;
                 var sDspStep = sName.slice(4);
@@ -442,7 +483,41 @@ sap.ui.define([
                 }
             });
 
-            return { rows: rows, paramsByScheduleId: oBySchId };
+            // New flat SAC sheet: Schedule ID | DSP Step | Parameter | Value
+            // oDspStepsWithSac: objectId → sacMultiActionId, injected by onCalendarFileSelect after fetch
+            var aSacFlatDspSteps = [];
+            if (wb.SheetNames.indexOf("SAC") !== -1) {
+                var wsSacFlat = wb.Sheets["SAC"];
+                var aSacFlatRows = XLSX.utils.sheet_to_json(wsSacFlat, { header: 1, raw: false });
+                var hSacFlat = (aSacFlatRows[0] || []).map(function (s) { return String(s || "").toLowerCase().trim(); });
+                var bSacFlatHasId = hSacFlat[0] === "schedule id" || hSacFlat[0] === "id";
+                var iSF_Sch = bSacFlatHasId ? 0 : -1;
+                var iSF_Dsp = bSacFlatHasId ? 1 : 0;
+                var iSF_Par = bSacFlatHasId ? 2 : 1;
+                var iSF_Val = bSacFlatHasId ? 3 : 2;
+                var iSF_Hid = bSacFlatHasId ? 4 : 3;
+                for (var sf = 1; sf < aSacFlatRows.length; sf++) {
+                    var rsf = aSacFlatRows[sf] || [];
+                    var sSF_SchId   = iSF_Sch >= 0 ? String(rsf[iSF_Sch] || "").trim() : "1";
+                    var sSF_DspStep = String(rsf[iSF_Dsp] || "").trim();
+                    var sSF_ParamId = String(rsf[iSF_Par] || "").trim();
+                    var sSF_Val     = String(rsf[iSF_Val] || "").trim();
+                    var sSF_HId     = String(rsf[iSF_Hid] || "").trim();
+                    if (!sSF_DspStep || !sSF_ParamId) continue;
+                    // Store value and hierarchyId as separate fields (same shape as UI model).
+                    // _buildSaveOutput in StepParametersPage will serialize them to JSON when saving.
+                    if (!oBySchId[sSF_SchId]) oBySchId[sSF_SchId] = {};
+                    if (!oBySchId[sSF_SchId][sSF_DspStep]) {
+                        oBySchId[sSF_SchId][sSF_DspStep] = [];
+                        if (aSacFlatDspSteps.indexOf(sSF_DspStep) === -1) aSacFlatDspSteps.push(sSF_DspStep);
+                    }
+                    var oParam = { key: sSF_ParamId, value: sSF_Val, active: true };
+                    if (sSF_HId) oParam.hierarchyId = sSF_HId;
+                    oBySchId[sSF_SchId][sSF_DspStep].push(oParam);
+                }
+            }
+
+            return { rows: rows, paramsByScheduleId: oBySchId, sacFlatDspSteps: aSacFlatDspSteps };
         },
 
         _buildCalendarEntries: function (aRows, sChain, oParamsByScheduleId) {
@@ -492,11 +567,21 @@ sap.ui.define([
             var s = String(v).trim();
             // ISO yyyy-MM-dd
             if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-            // dd/MM/yyyy, dd-MM-yyyy, dd.MM.yyyy (European day-first, any separator)
+            // d1/d2/yyyy or d1/d2/yy — detect American (MM/DD) vs European (DD/MM) by checking
+            // which part exceeds 12 (only valid as a day, not a month).
             var m = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})$/);
             if (m) {
                 var yyyy = m[3].length === 2 ? ("20" + m[3]) : m[3];
-                return yyyy + "-" + ("0" + m[2]).slice(-2) + "-" + ("0" + m[1]).slice(-2);
+                var p1 = parseInt(m[1], 10), p2 = parseInt(m[2], 10);
+                var month, day;
+                if (p2 > 12) {
+                    // p2 can only be a day → American format M/DD/YY
+                    month = p1; day = p2;
+                } else {
+                    // European format DD/MM/YYYY (default)
+                    month = p2; day = p1;
+                }
+                return yyyy + "-" + ("0" + month).slice(-2) + "-" + ("0" + day).slice(-2);
             }
             // yyyy/MM/dd
             var m2 = s.match(/^(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})$/);
