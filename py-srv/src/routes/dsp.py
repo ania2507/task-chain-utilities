@@ -905,15 +905,25 @@ def get_taskchain_dag():
                 if node_label and node_label == obj_id:
                     node_label = None
                 business_name = (business_name_map.get(obj_id) if obj_id else None) or node_label or None
+                # Prefer the task chain's own (freshly redeployed) manifest over the API
+                # task object's separate metadata row, which only updates when that
+                # object itself is redeployed and can go stale after editing in-chain.
                 ibp_tpl = (
-                    (ibp_template_map.get(obj_id) if obj_id else None)
-                    or _extract_ibp_template_from_metadata(task_id)
+                    _extract_ibp_template_from_metadata(task_id)
                     or _extract_ibp_template_from_metadata(node)
+                    or (ibp_template_map.get(obj_id) if obj_id else None)
                 )
+                if ibp_tpl or (obj_id and ibp_template_map.get(obj_id)):
+                    logger.warning(
+                        "[DIAG][dag] obj_id=%s from_task_id=%r from_node=%r from_map=%r -> chosen=%r",
+                        obj_id, _extract_ibp_template_from_metadata(task_id),
+                        _extract_ibp_template_from_metadata(node),
+                        ibp_template_map.get(obj_id) if obj_id else None, ibp_tpl,
+                    )
                 sac_ma_id = (
-                    (sac_multiaction_map.get(obj_id) if obj_id else None)
-                    or _extract_sac_multiaction_from_metadata(task_id)
+                    _extract_sac_multiaction_from_metadata(task_id)
                     or _extract_sac_multiaction_from_metadata(node)
+                    or (sac_multiaction_map.get(obj_id) if obj_id else None)
                 )
                 nodes.append({
                     "id": node.get("id"),
@@ -1201,16 +1211,27 @@ def get_taskchain_dag():
 
                 obj_id = task_id.get("objectId") or exec_info.get("objectId")
                 business_name = business_name_map.get(obj_id) if obj_id else None
+                # Prefer the task chain's own (freshly redeployed) manifest over the API
+                # task object's separate metadata row, which only updates when that
+                # object itself is redeployed and can go stale after editing in-chain.
                 ibp_tpl = (
-                    (ibp_template_map.get(obj_id) if obj_id else None)
-                    or _extract_ibp_template_from_metadata(task_id)
+                    _extract_ibp_template_from_metadata(task_id)
                     or _extract_ibp_template_from_metadata(node)
+                    or (ibp_template_map.get(obj_id) if obj_id else None)
                     or ibp_template_from_logs.get(exec_info.get("taskLogId"))
                 )
+                if ibp_tpl or (obj_id and ibp_template_map.get(obj_id)):
+                    logger.warning(
+                        "[DIAG][run-nodes] obj_id=%s from_task_id=%r from_node=%r from_map=%r from_logs=%r -> chosen=%r",
+                        obj_id, _extract_ibp_template_from_metadata(task_id),
+                        _extract_ibp_template_from_metadata(node),
+                        ibp_template_map.get(obj_id) if obj_id else None,
+                        ibp_template_from_logs.get(exec_info.get("taskLogId")), ibp_tpl,
+                    )
                 sac_ma_id = (
-                    (sac_multiaction_map.get(obj_id) if obj_id else None)
-                    or _extract_sac_multiaction_from_metadata(task_id)
+                    _extract_sac_multiaction_from_metadata(task_id)
                     or _extract_sac_multiaction_from_metadata(node)
+                    or (sac_multiaction_map.get(obj_id) if obj_id else None)
                 )
 
                 # Best-effort extraction of a human-readable label/description
@@ -1724,6 +1745,9 @@ def get_taskchain_steps():
         bmap, ibp_tpl_map, sac_ma_map, otype_map = _build_metadata_maps([o for o, _ in object_ids_ordered])
         import logging as _logging
         _logging.getLogger(__name__).warning("[DIAG] raw nodes: %s", _json.dumps(object_ids_ordered, default=str))
+        _logging.getLogger(__name__).warning(
+            "[DIAG] ibp_tpl_map (from separate object metadata rows): %s", ibp_tpl_map
+        )
         steps = []
         for i, (obj_id, node) in enumerate(object_ids_ordered):
             task_id = node.get("taskIdentifier") or {}
@@ -1734,15 +1758,22 @@ def get_taskchain_steps():
             # Discard node_label if it is just the technical name repeated
             if node_label and node_label == obj_id:
                 node_label = None
-            ibp_tpl = (
-                ibp_tpl_map.get(obj_id)
-                or _extract_ibp_template_from_metadata(task_id)
-                or _extract_ibp_template_from_metadata(node)
-            )
+            # Prefer the task chain's own deployment manifest (task_id/node) — refreshed
+            # every time the chain is redeployed — over the API task's own metadata row
+            # in ibp_tpl_map/sac_ma_map, which only updates when that object itself is
+            # redeployed and can therefore go stale after editing the step in-chain.
+            _ibp_from_task_id = _extract_ibp_template_from_metadata(task_id)
+            _ibp_from_node = _extract_ibp_template_from_metadata(node)
+            _ibp_from_map = ibp_tpl_map.get(obj_id)
+            ibp_tpl = _ibp_from_task_id or _ibp_from_node or _ibp_from_map
             sac_ma_id = (
-                sac_ma_map.get(obj_id)
-                or _extract_sac_multiaction_from_metadata(task_id)
+                _extract_sac_multiaction_from_metadata(task_id)
                 or _extract_sac_multiaction_from_metadata(node)
+                or sac_ma_map.get(obj_id)
+            )
+            _logging.getLogger(__name__).warning(
+                "[DIAG] obj_id=%s ibp_from_task_id=%r ibp_from_node=%r ibp_from_map=%r -> chosen=%r",
+                obj_id, _ibp_from_task_id, _ibp_from_node, _ibp_from_map, ibp_tpl,
             )
             steps.append({
                 "id":              node.get("id") or obj_id,

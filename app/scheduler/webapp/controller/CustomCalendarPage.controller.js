@@ -153,124 +153,45 @@ sap.ui.define([
         // Template / upload
         // ------------------------------------------------------------
         onDownloadCalendarTemplate: function () {
-            var that = this;
             var sChain = this._editModel.getProperty("/taskchain") || "TASK_CHAIN_NAME";
-            var sSpaceId = this._editModel.getProperty("/spaceId") || "";
-            var aCalRows = [
-                ["ID", "Chain", "Date", "Time"],
-                [1, sChain, "2026-09-19", "04:00"],
-                [2, sChain, "2026-09-26", "04:00"],
-                [3, sChain, "2026-10-10", "04:00"]
-            ];
 
             if (typeof window.XLSX === "undefined") {
-                var sCsv = aCalRows.map(function (r) { return r.join(","); }).join("\n");
+                var sCsv = [
+                    ["ID", "Chain", "Date", "Time"].join(","),
+                    [1, sChain, "2026-09-19", "04:00"].join(",")
+                ].join("\n");
                 this._downloadBlob(new Blob([sCsv], { type: "text/csv" }), "calendar_template.csv");
                 return;
             }
 
-            // No step context → simple single-sheet download
-            if (!sSpaceId || !sChain || sChain === "TASK_CHAIN_NAME") {
-                this._writeCalendarXlsx(aCalRows, [], []);
-                return;
-            }
-
-            this._editModel.setProperty("/busy", true);
-            fetch("v1/dsp/taskchain-steps?spaceId=" + encodeURIComponent(sSpaceId)
-                + "&taskchain=" + encodeURIComponent(sChain), {
-                headers: { "Accept": "application/json" }
-            })
-            .then(function (res) { return res.json(); })
-            .then(function (data) {
-                var aSteps = (data && data.steps) || [];
-
-                // Unique IBP templates (preserve DSP step objectId for upload mapping)
-                var aIbpEntries = [];
-                var oIbpSeen = {};
-                aSteps.forEach(function (s) {
-                    if (s.ibpTemplateName && !oIbpSeen[s.ibpTemplateName]) {
-                        oIbpSeen[s.ibpTemplateName] = true;
-                        aIbpEntries.push({ objectId: s.objectId, template: s.ibpTemplateName });
-                    }
-                });
-
-                // SAC steps (one sheet per step)
-                var aSacSteps = aSteps.filter(function (s) { return !!s.sacMultiActionId; });
-
-                var aIbpPromises = aIbpEntries.map(function (entry) {
-                    return fetch("v1/jobs/ibp/template-steps", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json", "Accept": "application/json" },
-                        body: JSON.stringify({ template_name: entry.template })
-                    })
-                    .then(function (r) { return r.json(); })
-                    .then(function (d) { return { objectId: entry.objectId, template: entry.template, data: d }; })
-                    .catch(function () { return { objectId: entry.objectId, template: entry.template, data: {} }; });
-                });
-
-                return Promise.all(aIbpPromises).then(function (aIbpResults) {
-                    return { ibpResults: aIbpResults, sacSteps: aSacSteps };
-                });
-            })
-            .then(function (result) {
-                that._editModel.setProperty("/busy", false);
-                that._writeCalendarXlsx(aCalRows, result.ibpResults, result.sacSteps);
-            })
-            .catch(function (err) {
-                that._editModel.setProperty("/busy", false);
-                console.warn("[Scheduler] template fetch failed, falling back to simple template:", err);
-                that._writeCalendarXlsx(aCalRows, [], []);
-            });
-        },
-
-        _writeCalendarXlsx: function (aCalRows, aIbpResults, aSacSteps) {
             var XLSX = window.XLSX;
             var wb = XLSX.utils.book_new();
 
-            // IDs from data rows (skip header row)
-            var aCalIds = aCalRows.slice(1).map(function (r) { return r[0]; });
+            // Calendar sheet
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+                ["ID", "Chain", "Date", "Time"],
+                [1, sChain, "2026-09-19", "04:00"],
+                [2, sChain, "2026-09-26", "04:00"],
+                [3, sChain, "2026-10-10", "04:00"]
+            ]), "Calendar");
 
-            // Sheet 1: Calendar (ID | Chain | Date | Time)
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aCalRows), "Calendar");
-
-            // Sheet 2: IBP — one row per (scheduleId × dspStep × ibpStep × parameter)
-            // Steps without globalVars are skipped entirely.
-            var aIbpRows = [["Schedule ID", "DSP Step", "IBP Step", "Parameter", "Value"]];
-            var bHasIbpData = false;
-            aCalIds.forEach(function (id) {
-                aIbpResults.forEach(function (ibpResult) {
-                    var aIbpSteps = (ibpResult.data && ibpResult.data.steps) || [];
-                    aIbpSteps.forEach(function (s) {
-                        var aVars = (s.globalVars || []).filter(function (g) { return !!g.name; });
-                        if (!aVars.length) return;
-                        bHasIbpData = true;
-                        aVars.forEach(function (g) {
-                            aIbpRows.push([
-                                id,
-                                ibpResult.objectId,
-                                s.name || ("Step " + s.order),
-                                g.name,
-                                g.currentValue || ""
-                            ]);
-                        });
-                    });
-                });
+            // Parameters sheet — static example rows.
+            // IBP Step filled → IBP param; IBP Step blank → SAC param.
+            // Replace DSP Step names, IBP Step names and values with your actual configuration.
+            var aIds = [1, 2, 3];
+            var aParamRows = [["Schedule ID", "DSP Step", "IBP Step", "Parameter", "Value", "HierarchyId"]];
+            aIds.forEach(function (id) {
+                // IBP examples
+                aParamRows.push([id, "APITask_IBP", "IBP_STEP_NAME_1", "$G_SORG",      "BE40", ""]);
+                aParamRows.push([id, "APITask_IBP", "IBP_STEP_NAME_2", "$G_FCSTTYPE",  "U",    ""]);
+                // SAC examples (IBP Step blank)
+                aParamRows.push([id, "APITask_SAC", "", "PlanningVersion", "public.Curr_FCST", ""]);
+                aParamRows.push([id, "APITask_SAC", "", "Legal_Entity",    "BE40",              ""]);
+                aParamRows.push([id, "APITask_SAC", "", "Product",         "*",                 "parentId"]);
+                aParamRows.push([id, "APITask_SAC", "", "Profit_Center",   "*",                 "parentId"]);
+                aParamRows.push([id, "APITask_SAC", "", "Date",            "202606",            ""]);
             });
-            if (bHasIbpData) {
-                XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aIbpRows), "IBP");
-            }
-
-            // SAC sheet: single flat sheet mirroring the IBP structure.
-            // Columns: Schedule ID | DSP Step | Parameter | Value | HierarchyId
-            if (aSacSteps.length) {
-                var aSacRows = [["Schedule ID", "DSP Step", "Parameter", "Value", "HierarchyId"]];
-                aCalIds.forEach(function (id) {
-                    aSacSteps.forEach(function (s) {
-                        aSacRows.push([id, s.objectId || s.name || "", "", "", ""]);
-                    });
-                });
-                XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aSacRows), "SAC");
-            }
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aParamRows), "Parameters");
 
             var out = XLSX.write(wb, { bookType: "xlsx", type: "array" });
             this._downloadBlob(new Blob([out], { type: "application/octet-stream" }), "calendar_template.xlsx");
@@ -334,7 +255,15 @@ sap.ui.define([
                         });
                     });
 
-                    var aEntries = that._buildCalendarEntries(oParsed.rows, sChain, oParsed.paramsByScheduleId);
+                    var aAllEntries = that._buildCalendarEntries(oParsed.rows, sChain, oParsed.paramsByScheduleId);
+
+                    // Ignore past entries from the file — they are historical records already in the DB
+                    var now = new Date();
+                    var aEntries = aAllEntries.filter(function (entry) {
+                        var sT = entry.rawTime || "00:00";
+                        var dt = new Date(entry.date + "T" + (sT.length === 5 ? sT + ":00" : sT));
+                        return dt >= now;
+                    });
 
                     // Check 1: intra-file duplicates (same date+time in the file itself)
                     var oFileSeen = {};
@@ -355,21 +284,27 @@ sap.ui.define([
                         return;
                     }
 
-                    // Check 2: collision with entries already on the app (same date+time)
+                    // Check 2: collision with future entries already on the app (same date+time)
+                    // Past entries in the app are never touched by an upload
                     var aExisting = that._editModel.getProperty("/calendarEntries") || [];
-                    var oAppSeen = {};
-                    aExisting.forEach(function (entry) {
-                        oAppSeen[entry.date + "T" + (entry.rawTime || "")] = true;
+                    var oAppByKey = {};
+                    aExisting.filter(function (e) { return !e.isPast; }).forEach(function (entry) {
+                        oAppByKey[entry.date + "T" + (entry.rawTime || "")] = entry;
                     });
                     var aCollisions = aEntries.filter(function (entry) {
-                        return !!oAppSeen[entry.date + "T" + entry.rawTime];
+                        return !!oAppByKey[entry.date + "T" + entry.rawTime];
                     });
 
                     function doUpload() {
                         that._editModel.setProperty("/calendarFileStatus",
                             oFile.name + " — " + aEntries.length + " entries");
-                        var aExistingIds = aExisting.map(function (e) { return e.ID; }).filter(Boolean);
-                        that._deleteEntriesByIds(aExistingIds)
+                        // Delete only future entries that collide with the new file (same date+time)
+                        var aCollidingExisting = aCollisions.map(function (entry) {
+                            return oAppByKey[entry.date + "T" + entry.rawTime];
+                        }).filter(Boolean);
+                        var aOverwriteIds = aCollidingExisting.map(function (e) { return e.ID; }).filter(Boolean);
+                        that._cancelSchedulerJobs(aCollidingExisting).catch(function () {});
+                        that._deleteEntriesByIds(aOverwriteIds)
                             .catch(function () {})
                             .then(function () { return that._persistCalendarEntries(aEntries); })
                             .then(function () { that._loadCalendarEntries(); });
@@ -385,7 +320,7 @@ sap.ui.define([
                             " in the file already exist on the app:\n" +
                             aLabels.join("\n") +
                             (aCollisions.length > 5 ? "\n…and " + (aCollisions.length - 5) + " more" : "") +
-                            "\n\nProceed and overwrite all existing entries?",
+                            "\n\nProceed and overwrite the conflicting entries?",
                             {
                                 actions: [MessageBox.Action.OK, MessageBox.Action.CANCEL],
                                 emphasizedAction: MessageBox.Action.OK,
@@ -429,91 +364,34 @@ sap.ui.define([
             var ws = wb.Sheets[wb.SheetNames[0]];
             var rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: "yyyy-mm-dd" });
 
-            // paramsByScheduleId: { scheduleId: { dspStepId: [{key, value, active, step?}] } }
+            // paramsByScheduleId: { scheduleId: { dspStepId: [{key, value, active, step?, hierarchyId?}] } }
             var oBySchId = {};
-
-            // IBP sheet columns: Schedule ID | DSP Step | IBP Step | Parameter | Value
-            if (wb.SheetNames.indexOf("IBP") !== -1) {
-                var wsIbp = wb.Sheets["IBP"];
-                var aIbpRows = XLSX.utils.sheet_to_json(wsIbp, { header: 1, raw: false });
-                var hIbp = (aIbpRows[0] || []).map(function (s) { return String(s || "").toLowerCase().trim(); });
-                var bIbpHasId = hIbp[0] === "schedule id" || hIbp[0] === "id";
-                var iSch = bIbpHasId ? 0 : -1;
-                var iDsp = bIbpHasId ? 1 : 0;
-                var iStp = bIbpHasId ? 2 : 1;
-                var iKey = bIbpHasId ? 3 : 2;
-                var iVal = bIbpHasId ? 4 : 3;
-                for (var ii = 1; ii < aIbpRows.length; ii++) {
-                    var ri = aIbpRows[ii] || [];
-                    var sSchId   = iSch >= 0 ? String(ri[iSch] || "").trim() : "1";
-                    var sDspStep = String(ri[iDsp] || "").trim();
-                    var sIbpStep = String(ri[iStp] || "").trim();
-                    var sKey     = String(ri[iKey] || "").trim();
-                    var sVal     = String(ri[iVal] || "").trim();
-                    if (!sDspStep || !sKey || !sVal) continue;
-                    if (!oBySchId[sSchId]) oBySchId[sSchId] = {};
-                    if (!oBySchId[sSchId][sDspStep]) oBySchId[sSchId][sDspStep] = [];
-                    var oParam = { key: sKey, value: sVal, active: true };
-                    if (sIbpStep) oParam.step = sIbpStep;
-                    oBySchId[sSchId][sDspStep].push(oParam);
-                }
-            }
-
-            // Legacy SAC_<dspStepId> sheets (backward compat): Schedule ID | Parameter | Value
-            wb.SheetNames.forEach(function (sName) {
-                if (sName.indexOf("SAC_") !== 0) return;
-                var sDspStep = sName.slice(4);
-                if (!sDspStep) return;
-                var wsSac = wb.Sheets[sName];
-                var aSacRows = XLSX.utils.sheet_to_json(wsSac, { header: 1, raw: false });
-                var hSac = (aSacRows[0] || []).map(function (s) { return String(s || "").toLowerCase().trim(); });
-                var bSacHasId = hSac[0] === "schedule id" || hSac[0] === "id";
-                var iSchS = bSacHasId ? 0 : -1;
-                var iPId  = bSacHasId ? 1 : 0;
-                var iPVal = bSacHasId ? 2 : 1;
-                for (var is = 1; is < aSacRows.length; is++) {
-                    var rs = aSacRows[is] || [];
-                    var sSchId  = iSchS >= 0 ? String(rs[iSchS] || "").trim() : "1";
-                    var sParamId  = String(rs[iPId]  || "").trim();
-                    var sParamVal = String(rs[iPVal] || "").trim();
-                    if (!sParamId) continue;
-                    if (!oBySchId[sSchId]) oBySchId[sSchId] = {};
-                    if (!oBySchId[sSchId][sDspStep]) oBySchId[sSchId][sDspStep] = [];
-                    oBySchId[sSchId][sDspStep].push({ key: sParamId, value: sParamVal, active: true });
-                }
-            });
-
-            // New flat SAC sheet: Schedule ID | DSP Step | Parameter | Value
-            // oDspStepsWithSac: objectId → sacMultiActionId, injected by onCalendarFileSelect after fetch
             var aSacFlatDspSteps = [];
-            if (wb.SheetNames.indexOf("SAC") !== -1) {
-                var wsSacFlat = wb.Sheets["SAC"];
-                var aSacFlatRows = XLSX.utils.sheet_to_json(wsSacFlat, { header: 1, raw: false });
-                var hSacFlat = (aSacFlatRows[0] || []).map(function (s) { return String(s || "").toLowerCase().trim(); });
-                var bSacFlatHasId = hSacFlat[0] === "schedule id" || hSacFlat[0] === "id";
-                var iSF_Sch = bSacFlatHasId ? 0 : -1;
-                var iSF_Dsp = bSacFlatHasId ? 1 : 0;
-                var iSF_Par = bSacFlatHasId ? 2 : 1;
-                var iSF_Val = bSacFlatHasId ? 3 : 2;
-                var iSF_Hid = bSacFlatHasId ? 4 : 3;
-                for (var sf = 1; sf < aSacFlatRows.length; sf++) {
-                    var rsf = aSacFlatRows[sf] || [];
-                    var sSF_SchId   = iSF_Sch >= 0 ? String(rsf[iSF_Sch] || "").trim() : "1";
-                    var sSF_DspStep = String(rsf[iSF_Dsp] || "").trim();
-                    var sSF_ParamId = String(rsf[iSF_Par] || "").trim();
-                    var sSF_Val     = String(rsf[iSF_Val] || "").trim();
-                    var sSF_HId     = String(rsf[iSF_Hid] || "").trim();
-                    if (!sSF_DspStep || !sSF_ParamId) continue;
-                    // Store value and hierarchyId as separate fields (same shape as UI model).
-                    // _buildSaveOutput in StepParametersPage will serialize them to JSON when saving.
-                    if (!oBySchId[sSF_SchId]) oBySchId[sSF_SchId] = {};
-                    if (!oBySchId[sSF_SchId][sSF_DspStep]) {
-                        oBySchId[sSF_SchId][sSF_DspStep] = [];
-                        if (aSacFlatDspSteps.indexOf(sSF_DspStep) === -1) aSacFlatDspSteps.push(sSF_DspStep);
+
+            // Parameters sheet: Schedule ID | DSP Step | IBP Step | Parameter | Value | HierarchyId
+            // IBP Step filled → IBP param (with step field); IBP Step blank → SAC param.
+            if (wb.SheetNames.indexOf("Parameters") !== -1) {
+                var wsP = wb.Sheets["Parameters"];
+                var aPRows = XLSX.utils.sheet_to_json(wsP, { header: 1, raw: false });
+                for (var pi = 1; pi < aPRows.length; pi++) {
+                    var rp = aPRows[pi] || [];
+                    var sP_SchId   = String(rp[0] || "").trim();
+                    var sP_DspStep = String(rp[1] || "").trim();
+                    var sP_IbpStep = String(rp[2] || "").trim();
+                    var sP_Key     = String(rp[3] || "").trim();
+                    var sP_Val     = String(rp[4] || "").trim();
+                    var sP_HId     = String(rp[5] || "").trim();
+                    if (!sP_SchId || !sP_DspStep || !sP_Key) continue;
+                    if (!oBySchId[sP_SchId]) oBySchId[sP_SchId] = {};
+                    if (!oBySchId[sP_SchId][sP_DspStep]) oBySchId[sP_SchId][sP_DspStep] = [];
+                    var oP = { key: sP_Key, value: sP_Val, active: true };
+                    if (sP_IbpStep) {
+                        oP.step = sP_IbpStep;
+                    } else {
+                        if (sP_HId) oP.hierarchyId = sP_HId;
+                        if (aSacFlatDspSteps.indexOf(sP_DspStep) === -1) aSacFlatDspSteps.push(sP_DspStep);
                     }
-                    var oParam = { key: sSF_ParamId, value: sSF_Val, active: true };
-                    if (sSF_HId) oParam.hierarchyId = sSF_HId;
-                    oBySchId[sSF_SchId][sSF_DspStep].push(oParam);
+                    oBySchId[sP_SchId][sP_DspStep].push(oP);
                 }
             }
 
@@ -616,7 +494,7 @@ sap.ui.define([
                 new Filter("taskchain", FilterOperator.EQ, sChain)
             ], {
                 $select: "ID,spaceId,taskchain,runDate,runTime,timezone,active,parameters,source",
-                $expand: "runs($select=status,triggeredAt,finishedAt,errorMessage)"
+                $expand: "runs($select=status,triggeredAt,finishedAt,errorMessage,remoteId)"
             });
             var that = this;
             this._editModel.setProperty("/busy", true);
@@ -645,7 +523,8 @@ sap.ui.define([
                         parameters: o.parameters || "",
                         isPast: !isNaN(dt.getTime()) && dt < now,
                         runStatus: oLastRun ? (oLastRun.status || "") : "",
-                        runAt: oLastRun ? (oLastRun.finishedAt || oLastRun.triggeredAt) : null
+                        runAt: oLastRun ? (oLastRun.finishedAt || oLastRun.triggeredAt) : null,
+                        _remoteId: oLastRun ? (oLastRun.remoteId || "") : ""
                     };
                 });
                 that._editModel.setProperty("/calendarEntries", aEntries);
@@ -657,38 +536,59 @@ sap.ui.define([
                 that._applyPastFilter();
                 that._editModel.setProperty("/busy", false);
 
-                // Enrich past entries that have no ScheduleRun record with DSP run history
-                var aPastNoStatus = aEntries.filter(function (e) { return e.isPast && !e.runStatus; });
-                if (aPastNoStatus.length && sSpace && sChain) {
-                    var sRunsUrl = "v1/dsp/taskchain-runs?spaceId=" + encodeURIComponent(sSpace)
-                        + "&taskchain=" + encodeURIComponent(sChain) + "&limit=200";
-                    fetch(sRunsUrl, { headers: { "Accept": "application/json" } })
-                        .then(function (res) { return res.json(); })
-                        .then(function (data) {
-                            var aDspRuns = (data && data.success && data.runs) || [];
-                            if (!aDspRuns.length) return;
-                            var WINDOW_MS = 90 * 60 * 1000;
-                            aPastNoStatus.forEach(function (oEntry) {
-                                var sT = oEntry.rawTime || "00:00";
-                                var dtEntry = new Date(oEntry.date + "T" + (sT.length === 5 ? sT + ":00" : sT));
-                                var nEntry = dtEntry.getTime();
-                                var oBest = null, nBestDiff = Infinity;
-                                aDspRuns.forEach(function (r) {
-                                    if (!r.startTime) return;
-                                    var diff = Math.abs(new Date(r.startTime).getTime() - nEntry);
-                                    if (diff < WINDOW_MS && diff < nBestDiff) {
-                                        nBestDiff = diff; oBest = r;
+                // Enrich past entries with real DSP run status
+                var aPast = aEntries.filter(function (e) { return e.isPast; });
+                if (aPast.length) {
+                    // Entries with a remoteId → query DSP directly by logId for accurate status
+                    var aRemotePromises = aPast
+                        .filter(function (e) { return e._remoteId; })
+                        .map(function (oEntry) {
+                            var sLogId = (oEntry._remoteId || "").split("__")[1] || "";
+                            if (!sLogId) return Promise.resolve();
+                            return fetch("v1/dsp/taskchain-runs?runId=" + encodeURIComponent(sLogId),
+                                { headers: { "Accept": "application/json" } })
+                                .then(function (res) { return res.json(); })
+                                .then(function (data) {
+                                    var r = (data && data.success && data.runs && data.runs[0]) || null;
+                                    if (r) {
+                                        oEntry.runStatus = r.status || "";
+                                        oEntry.runAt = r.endTime || r.startTime;
                                     }
+                                })
+                                .catch(function () {});
+                        });
+
+                    // Entries without remoteId → time-proximity fallback
+                    var aOrphan = aPast.filter(function (e) { return !e._remoteId && !e.runStatus; });
+                    var pFallback = Promise.resolve();
+                    if (aOrphan.length && sSpace && sChain) {
+                        pFallback = fetch("v1/dsp/taskchain-runs?spaceId=" + encodeURIComponent(sSpace)
+                            + "&taskchain=" + encodeURIComponent(sChain) + "&limit=200",
+                            { headers: { "Accept": "application/json" } })
+                            .then(function (res) { return res.json(); })
+                            .then(function (data) {
+                                var aDspRuns = (data && data.success && data.runs) || [];
+                                if (!aDspRuns.length) return;
+                                var WINDOW_MS = 90 * 60 * 1000;
+                                aOrphan.forEach(function (oEntry) {
+                                    var sT = oEntry.rawTime || "00:00";
+                                    var nEntry = new Date(oEntry.date + "T" + (sT.length === 5 ? sT + ":00" : sT)).getTime();
+                                    var oBest = null, nBestDiff = Infinity;
+                                    aDspRuns.forEach(function (r) {
+                                        if (!r.startTime) return;
+                                        var diff = Math.abs(new Date(r.startTime).getTime() - nEntry);
+                                        if (diff < WINDOW_MS && diff < nBestDiff) { nBestDiff = diff; oBest = r; }
+                                    });
+                                    if (oBest) { oEntry.runStatus = oBest.status || ""; oEntry.runAt = oBest.endTime || oBest.startTime; }
                                 });
-                                if (oBest) {
-                                    oEntry.runStatus = oBest.status || "";
-                                    oEntry.runAt = oBest.endTime || oBest.startTime;
-                                }
-                            });
-                            that._editModel.setProperty("/calendarEntries", aEntries);
-                            that._applyPastFilter();
-                        })
-                        .catch(function () { /* best-effort */ });
+                            })
+                            .catch(function () {});
+                    }
+
+                    Promise.all(aRemotePromises.concat([pFallback])).then(function () {
+                        that._editModel.setProperty("/calendarEntries", aEntries);
+                        that._applyPastFilter();
+                    });
                 }
             }).catch(function (err) {
                 that._editModel.setProperty("/busy", false);
@@ -865,7 +765,8 @@ sap.ui.define([
                     that._editModel.setProperty("/calendarEntries", []);
                     that._editModel.setProperty("/calendarFileStatus", "");
                     that._updateSummary();
-                    // Delete from server in background – errors are silently logged
+                    // Delete from server + cancel APScheduler jobs in background
+                    that._cancelSchedulerJobs(aEntries).catch(function () {});
                     that._deleteEntriesByIds(aIds).catch(function (err) {
                         console.warn("[Scheduler] delete all failed:", err && err.message);
                     });
@@ -887,6 +788,22 @@ sap.ui.define([
             return Promise.all(aPromises);
         },
 
+        _cancelSchedulerJobs: function (aEntries) {
+            var d = this._editModel.getData();
+            var sSpace = d.spaceId;
+            var sChain = d.taskchain;
+            if (!sSpace || !sChain) return Promise.resolve();
+            var aFuture = (aEntries || []).filter(function (e) { return !e.isPast; });
+            return Promise.all(aFuture.map(function (e) {
+                var sRunAt = e.date + "T" + (e.rawTime || "00:00") + ":00";
+                return fetch("v1/scheduler/schedule-once", {
+                    method: "DELETE",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ spaceId: sSpace, taskchain: sChain, runAt: sRunAt })
+                }).catch(function () {});
+            }));
+        },
+
         onRemoveCalendarEntry: function (oEvt) {
             var oCtx = oEvt.getSource().getBindingContext("edit");
             if (!oCtx) return;
@@ -900,6 +817,7 @@ sap.ui.define([
                     var oList = oModel.bindList("/ScheduleEntry", undefined, undefined, [
                         new Filter("ID", FilterOperator.EQ, o.ID)
                     ]);
+                    that._cancelSchedulerJobs([o]).catch(function () {});
                     oList.requestContexts(0, 1).then(function (aCtx) {
                         if (!aCtx.length) return;
                         return aCtx[0].delete();
@@ -1010,7 +928,7 @@ sap.ui.define([
         // ------------------------------------------------------------
         onConfirmCustomCalendar: function () {
             var d = this._editModel.getData();
-            var aEntries = (d.calendarEntries || []).filter(function (e) { return e.active; });
+            var aEntries = (d.calendarEntries || []).filter(function (e) { return e.active && !e.isPast; });
             if (!aEntries.length) {
                 this.error("No active entries to schedule");
                 return;

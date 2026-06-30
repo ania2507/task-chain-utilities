@@ -131,6 +131,57 @@ def schedule_once():
         return jsonify({"error": str(e)}), 500
 
 
+@bp.route("/schedule-once", methods=["DELETE"])
+def cancel_schedule_once():
+    """Remove a once-off APScheduler job by spaceId + taskchain + runAt."""
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        ZoneInfo = None
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        space_id = (body.get("spaceId") or "").strip()
+        taskchain = (body.get("taskchain") or "").strip()
+        run_at_iso = (body.get("runAt") or "").strip()
+        if not space_id or not taskchain or not run_at_iso:
+            return jsonify({"error": "spaceId, taskchain, runAt required"}), 400
+
+        svc = _svc()
+        sched = getattr(svc, "_scheduler", None)
+        if not sched:
+            return jsonify({"status": "no_scheduler", "removed": []}), 200
+
+        removed = []
+        try:
+            run_at = datetime.fromisoformat(run_at_iso)
+            if run_at.tzinfo is None and ZoneInfo:
+                run_at = run_at.replace(tzinfo=ZoneInfo("Europe/Rome"))
+            job_id = f"entry::once::{space_id}::{taskchain}::{run_at.isoformat()}"
+            sched.remove_job(job_id)
+            removed.append(job_id)
+        except Exception:
+            pass
+
+        if not removed:
+            # Fallback: scan for jobs matching space+chain+time prefix (handles tz format differences)
+            prefix = f"entry::once::{space_id}::{taskchain}::"
+            run_at_prefix = run_at_iso[:16]  # YYYY-MM-DDTHH:MM
+            for job in sched.get_jobs():
+                if job.id.startswith(prefix) and run_at_prefix in job.id:
+                    try:
+                        sched.remove_job(job.id)
+                        removed.append(job.id)
+                    except Exception:
+                        pass
+
+        logger.info("cancel_schedule_once: removed=%s", removed)
+        return jsonify({"status": "ok", "removed": removed})
+    except Exception as e:
+        logger.exception("cancel_schedule_once failed")
+        return jsonify({"error": str(e)}), 500
+
+
 @bp.route("/preview", methods=["GET"])
 def preview():
     cron_expr = (request.args.get("cron") or "").strip()

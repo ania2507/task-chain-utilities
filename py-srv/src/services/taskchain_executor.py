@@ -74,6 +74,8 @@ class TaskchainExecutor:
             for k in expired:
                 _PENDING_STEP_PARAMS.pop(k, None)
                 _PENDING_STEP_PARAMS_TTL.pop(k, None)
+        step_keys = list(params.keys()) if isinstance(params, dict) else []
+        logger.info("store_pending_step_params: taskchain=%r steps=%s", taskchain, step_keys)
 
     @staticmethod
     def consume_pending_step_params(taskchain: str) -> Optional[Dict[str, Any]]:
@@ -85,11 +87,17 @@ class TaskchainExecutor:
         with _PENDING_STEP_PARAMS_LOCK:
             entry = _PENDING_STEP_PARAMS.get(taskchain)
             if entry is None:
+                stored_keys = list(_PENDING_STEP_PARAMS.keys())
+                logger.warning(
+                    "consume_pending_step_params: no params for taskchain=%r — stored keys: %s",
+                    taskchain, stored_keys,
+                )
                 return None
             exp = _PENDING_STEP_PARAMS_TTL.get(taskchain, 0)
             if exp and time.time() > exp:
                 _PENDING_STEP_PARAMS.pop(taskchain, None)
                 _PENDING_STEP_PARAMS_TTL.pop(taskchain, None)
+                logger.warning("consume_pending_step_params: TTL expired for taskchain=%r", taskchain)
                 return None
             return entry
 
@@ -344,16 +352,24 @@ class TaskchainExecutor:
 
         return self.get_status_dsp(execution_id)
 
+    _dsp_client_cache = None
+
+    @staticmethod
+    def _get_dsp_client() -> "DSPDestinationClient":
+        from ..integrations.dsp import DSPDestinationClient
+        if TaskchainExecutor._dsp_client_cache is None:
+            client = DSPDestinationClient.from_env()
+            if not client:
+                raise RuntimeError(
+                    "DSP destination not configured. Set DSP_DESTINATION_NAME and bind Destination Service."
+                )
+            TaskchainExecutor._dsp_client_cache = client
+        return TaskchainExecutor._dsp_client_cache
+
     @staticmethod
     def _get_dsp_connection() -> Dict[str, str]:
         """Return DSP base URL and access token via BTP Destination Service."""
-        from ..integrations.dsp import DSPDestinationClient
-
-        client = DSPDestinationClient.from_env()
-        if not client:
-            raise RuntimeError(
-                "DSP destination not configured. Set DSP_DESTINATION_NAME and bind Destination Service."
-            )
+        client = TaskchainExecutor._get_dsp_client()
         conn = client.get_connection()
         base_url = (conn.get("host") or "").rstrip("/")
         access_token = conn.get("access_token") or ""

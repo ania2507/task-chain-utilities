@@ -94,20 +94,36 @@ class DSPDestinationClient:
         if self._service_token and time.time() < self._service_token_expiry:
             return self._service_token
 
-        resp = requests.post(
-            self._token_url,
-            data={"grant_type": "client_credentials"},
-            auth=(self._client_id, self._client_secret),
-            verify=self._verify,
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        self._service_token = data["access_token"]
-        self._service_token_expiry = (
-            time.time() + int(data.get("expires_in", 3600)) - 60
-        )
-        return self._service_token
+        last_exc: Exception | None = None
+        for attempt in range(2):
+            if attempt:
+                time.sleep(2)
+            try:
+                resp = requests.post(
+                    self._token_url,
+                    data={"grant_type": "client_credentials"},
+                    auth=(self._client_id, self._client_secret),
+                    verify=self._verify,
+                    timeout=30,
+                )
+                if not resp.ok:
+                    logger.warning(
+                        "Token fetch failed (attempt %d): HTTP %s — %s",
+                        attempt + 1, resp.status_code, resp.text[:500],
+                    )
+                resp.raise_for_status()
+                data = resp.json()
+                self._service_token = data["access_token"]
+                self._service_token_expiry = (
+                    time.time() + int(data.get("expires_in", 3600)) - 60
+                )
+                return self._service_token
+            except Exception as exc:
+                last_exc = exc
+                self._service_token = None
+                self._service_token_expiry = 0
+
+        raise last_exc  # type: ignore[misc]
 
     @classmethod
     def from_env(cls) -> Optional["DSPDestinationClient"]:

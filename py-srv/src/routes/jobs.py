@@ -368,7 +368,12 @@ def launch_job():
         from ..services.taskchain_executor import TaskchainExecutor
         step_params = TaskchainExecutor.consume_pending_step_params(taskchain_ctx)
         if step_params:
-            current_ma_id = (payload.get("multiActionId") or payload.get("sacMultiActionId") or "").strip()
+            current_ma_id = (
+                payload.get("multiActionId")
+                or payload.get("sacMultiActionId")
+                or payload.get("multiaction_id")
+                or ""
+            ).strip()
             sac_params: dict = {}
             # Pre-check: does any step carry a matching __sacMultiActionId sentinel?
             # If so, restrict to only those steps (handles chains with multiple SAC steps).
@@ -376,6 +381,10 @@ def launch_job():
                 any(p.get("key") == "__sacMultiActionId" and p.get("value") == current_ma_id
                     for p in (sparams if isinstance(sparams, list) else []))
                 for sparams in step_params.values()
+            )
+            logger.info(
+                "SAC consumer: current_ma_id=%r has_matched_sentinel=%s step_keys=%s",
+                current_ma_id, has_matched_sentinel, list(step_params.keys()),
             )
             for _step_name, sparams in step_params.items():
                 sparams_list = sparams if isinstance(sparams, list) else []
@@ -393,7 +402,8 @@ def launch_job():
                 for p in sparams_list:
                     if (p.get("active", True) and p.get("key")
                             and not p.get("key", "").startswith("__")
-                            and not p.get("step")):  # skip IBP params (always carry a "step" field)
+                            and not p.get("step")             # Excel IBP params carry a step (IBP template step name)
+                            and not p.get("ibpParamName")):   # UI IBP params carry ibpParamName
                         sac_params[p["key"]] = p.get("value", "")
             if sac_params:
                 payload = {**payload, "parameters": sac_params}
@@ -406,22 +416,23 @@ def launch_job():
         from ..services.taskchain_executor import TaskchainExecutor
         step_params = TaskchainExecutor.consume_pending_step_params(taskchain_ctx)
         if step_params:
-            # Build user-override map (keyed by IBP param name)
+            # Build user-override map (keyed by IBP param name).
+            # Excel params carry a "step" field but no ibpParamName — collected separately
+            # and resolved via template lookup below.
             user_overrides: dict = {}
+            unresolved: list = []  # Excel params: have step but no ibpParamName
             for _step_name, sparams in step_params.items():
-                for p in sparams if isinstance(sparams, list) else []:
+                sparams_list = sparams if isinstance(sparams, list) else []
+                # Skip non-IBP steps: IBP params always carry either ibpParamName (UI) or step (Excel).
+                if not any(p.get("ibpParamName") or p.get("step") for p in sparams_list):
+                    continue
+                for p in sparams_list:
                     if not (p.get("active", True) and p.get("key")):
                         continue
                     ibp_name = p.get("ibpParamName")
                     if not ibp_name:
-                        # No IBP param name → variable was entered manually without match code.
-                        # IBP does not accept $G_* variable names directly in JobParameterValues;
-                        # only P_VARVxx parameter names are valid. Skip with a warning.
-                        logger.warning(
-                            "Skipping param '%s' from step '%s': no ibpParamName — "
-                            "use the match code to select variables from the IBP template",
-                            p.get("key"), _step_name
-                        )
+                        if p.get("step"):  # Excel IBP param — resolve via template
+                            unresolved.append(p)
                         continue
                     ibp_value = str(p.get("value", ""))
                     # P_VARVxx values need ABAP string constant format ('value')
@@ -437,11 +448,9 @@ def launch_job():
                             "values": [{"low": p.get("key", "")}],
                         }
 
-            # IBP requires all non-empty mandatory template params across ALL sequences
-            # when JobParameterValues is non-empty (empty params are skipped by
-            # _extract_all_seq_params_as_map to keep the URL compact).
+            # Fetch template once for: (a) resolving Excel params, (b) extracting all defaults.
             merged: dict = {}
-            if user_overrides:
+            if user_overrides or unresolved:
                 try:
                     from ..integrations.ibp import IBPJobClient as _IBPCls
                     _ibp_cl = executor.get_client(IntegrationType.IBP)
@@ -453,8 +462,32 @@ def launch_job():
                             "Loaded %d non-empty defaults for '%s'",
                             len(merged), _tmpl_name,
                         )
+                        # Resolve Excel params ($G_VAR → P_VARVxx) via template lookup
+                        if unresolved:
+                            varmap = _build_varname_to_ibp_map(_tpl)
+                            for p in unresolved:
+                                var_name = p.get("key", "")
+                                ibp_info = varmap.get(var_name)
+                                if not ibp_info:
+                                    logger.warning(
+                                        "Excel IBP param '%s' not found in template — skipped", var_name
+                                    )
+                                    continue
+                                ibp_name = ibp_info["ibpParamName"]
+                                ibp_varn = ibp_info["ibpVarNameParam"]
+                                ibp_value = str(p.get("value", ""))
+                                if ibp_name.upper().startswith("P_VARV") and ibp_value:
+                                    if not (ibp_value.startswith("'") and ibp_value.endswith("'")):
+                                        ibp_value = f"'{ibp_value}'"
+                                user_overrides[ibp_name] = {"name": ibp_name, "values": [{"low": ibp_value}]}
+                                if ibp_varn and ibp_varn not in user_overrides:
+                                    user_overrides[ibp_varn] = {
+                                        "name": ibp_varn,
+                                        "values": [{"low": var_name}],
+                                    }
+                                logger.info("Resolved Excel IBP param '%s' → %s", var_name, ibp_name)
                 except Exception as _te:
-                    logger.warning("Could not load IBP template defaults: %s", _te)
+                    logger.warning("Could not load IBP template: %s", _te)
 
             # Collect user's active variable slots per sequence hash BEFORE merging
             # (P_VARVxx entries in user_overrides → slot nums per sequence)
@@ -1033,6 +1066,60 @@ def _find_global_selection_vars(template_data: dict) -> list:
             pass
 
     return sorted(found.values(), key=lambda x: x["name"])
+
+
+def _build_varname_to_ibp_map(template_data: dict) -> dict:
+    """Return {$G_VAR_NAME: {ibpParamName: P_VARVxx, ibpVarNameParam: P_VARNxx}} from template.
+
+    Used to resolve Excel IBP params (which carry the human-readable variable name like $G_SORG
+    but no ibpParamName) by looking up the paired P_VARNxx/P_VARVxx params in the template.
+    """
+    import re as _re2
+    import json as _jv
+
+    def _get_low(p):
+        vals = p.get("value") or []
+        if isinstance(vals, str):
+            try: vals = _jv.loads(vals)
+            except Exception: return ""
+        if isinstance(vals, dict) and "results" in vals:
+            vals = vals["results"]
+        return str(vals[0].get("low") or vals[0].get("LOW") or "").strip() if (isinstance(vals, list) and vals) else ""
+
+    result: dict = {}
+
+    def _process_seq(seq_params):
+        pmap: dict = {}
+        for p in (seq_params or []):
+            if isinstance(p, dict):
+                pname = str(p.get("name") or "").strip()
+                if pname:
+                    pmap[pname] = _get_low(p)
+        for pname, low in pmap.items():
+            m = _re2.match(r'^P_VARN(\d+)', pname, _re2.IGNORECASE)
+            if not m or not low or not low.upper().startswith("$G_"):
+                continue
+            idx = m.group(1)
+            for vpname in pmap:
+                if _re2.match(rf'^P_VARV{idx}', vpname, _re2.IGNORECASE):
+                    result[low] = {"ibpParamName": vpname, "ibpVarNameParam": pname}
+                    break
+
+    def _scan(obj, depth=0):
+        if depth > 10:
+            return
+        if isinstance(obj, list):
+            if obj and any(isinstance(x, dict) and "change_able" in x for x in obj[:5]):
+                _process_seq(obj)
+            for item in obj:
+                _scan(item, depth + 1)
+        elif isinstance(obj, dict):
+            for v in obj.values():
+                if isinstance(v, (dict, list)):
+                    _scan(v, depth + 1)
+
+    _scan(template_data)
+    return result
 
 
 def _extract_all_seq_params_as_map(template_data: dict) -> dict:

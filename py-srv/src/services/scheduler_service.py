@@ -524,6 +524,14 @@ class SchedulerService:
                 except Exception:
                     params = {"raw": entry["parameters"]}
 
+            logger.info(
+                "_fire: entry_id=%s taskchain=%s has_params=%s param_keys=%s",
+                entry_id,
+                entry.get("taskchain"),
+                bool(params),
+                list(params.keys()) if isinstance(params, dict) else "n/a",
+            )
+
             if target_type == "DSP":
                 if not self._tc_exec:
                     raise RuntimeError("TaskchainExecutor not available")
