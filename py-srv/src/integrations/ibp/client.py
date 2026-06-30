@@ -248,7 +248,14 @@ class IBPJobClient(BaseJobClient):
 
         steps = []
         for step in (data.get("JobStepSet", {}).get("results", [])):
-            step_status = self._map_status((step.get("StepStatus") or "").strip().upper())
+            raw_step_status = (step.get("StepStatus") or "").strip().upper()
+            step_status = self._map_status(raw_step_status)
+            logger.warning(
+                "[DIAG][ibp-status] job=%s:%s raw_job_status=%r step_number=%r raw_step_status=%r "
+                "mapped_step_status=%s app_rc=%r",
+                job_name, job_run_count, raw_status, step.get("StepNumber"),
+                raw_step_status, step_status.value, step.get("StepAppRC"),
+            )
             step_info: Dict[str, Any] = {
                 "step_number": step.get("StepNumber"),
                 "catalog_entry": step.get("JobCatalogEntryName"),
@@ -273,6 +280,17 @@ class IBPJobClient(BaseJobClient):
                 })
             step_info["logs"] = logs
             steps.append(step_info)
+            if logs:
+                logger.warning("[DIAG][ibp-status] job=%s:%s step_logs=%s", job_name, job_run_count, logs)
+
+        # The top-level JobStatus can lag behind (e.g. stay RUNNING/UNKNOWN) even
+        # after a step has aborted on a bad parameter value, since IBP doesn't
+        # always flip the job header to a terminal state right away. Treat any
+        # failed/cancelled step as authoritative so DSP doesn't poll forever.
+        if status not in (JobStatus.COMPLETED,) and any(
+            s["status"] in (JobStatus.FAILED.value, JobStatus.CANCELLED.value) for s in steps
+        ):
+            status = JobStatus.FAILED
 
         return {
             "status": status.value,

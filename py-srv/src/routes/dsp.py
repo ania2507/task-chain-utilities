@@ -49,6 +49,26 @@ _REDACT_KEYS = {
 }
 
 
+def _get_taskchain_section(parsed: dict, taskchain: str) -> dict | None:
+    """Return the taskchains.<name> manifest section from a deployment-metadata dict.
+
+    Newer DWC deployments wrap the manifest one level deeper as
+    csn.taskchains.<name> instead of the older top-level taskchains.<name>.
+    Check both locations so freshly redeployed chains are picked up.
+    """
+    if not isinstance(parsed, dict):
+        return None
+    sec = (parsed.get("taskchains") or {}).get(taskchain)
+    if isinstance(sec, dict):
+        return sec
+    csn = parsed.get("csn")
+    if isinstance(csn, dict):
+        sec = (csn.get("taskchains") or {}).get(taskchain)
+        if isinstance(sec, dict):
+            return sec
+    return None
+
+
 def _extract_ibp_template_from_metadata(md: dict) -> str | None:
     """Try to extract an IBP job template name from a DWC deployment-metadata dict.
 
@@ -374,7 +394,7 @@ def debug_businessnames():
                 parsed = _json.loads(raw)
                 out["taskchain_metadata_keys"] = list(parsed.keys()) if isinstance(parsed, dict) else str(type(parsed))
                 # Extract nodes and show first node raw
-                tc_section = (parsed.get("taskchains") or {}).get(taskchain)
+                tc_section = _get_taskchain_section(parsed, taskchain)
                 if isinstance(tc_section, dict):
                     nodes = tc_section.get("nodes") or []
                     out["node_count"] = len(nodes)
@@ -400,7 +420,7 @@ def debug_businessnames():
         if rows2:
             raw2 = rows2[0].get("JSON") or ""
             parsed2 = _json.loads(raw2) if raw2 else {}
-            tc_sec = (parsed2.get("taskchains") or {}).get(taskchain)
+            tc_sec = _get_taskchain_section(parsed2, taskchain)
             raw_nodes = (tc_sec.get("nodes") if isinstance(tc_sec, dict) else None) or []
             obj_ids = []
             for n in raw_nodes:
@@ -490,7 +510,7 @@ def debug_step_metadata():
             if rows2:
                 tc_raw = rows2[0].get("JSON") or ""
                 tc_meta = _json.loads(tc_raw) if tc_raw else {}
-                tc_sec = (tc_meta.get("taskchains") or {}).get(taskchain) or {}
+                tc_sec = _get_taskchain_section(tc_meta, taskchain) or {}
                 nodes = tc_sec.get("nodes") or []
                 matching = [
                     n for n in nodes
@@ -521,7 +541,7 @@ def debug_step_metadata():
             if run_rows:
                 run_raw = run_rows[0].get("JSON") or run_rows[0].get("json") or ""
                 run_dag = _json.loads(run_raw) if run_raw else {}
-                run_sec = (run_dag.get("taskchains") or {}).get(taskchain) or {}
+                run_sec = _get_taskchain_section(run_dag, taskchain) or {}
                 run_nodes = run_sec.get("nodes") or []
                 matching_run = [
                     n for n in run_nodes
@@ -836,7 +856,7 @@ def get_taskchain_dag():
                 tc_meta = {}
 
             raw_nodes, raw_links = [], []
-            tc_section = (tc_meta.get("taskchains") or {}).get(taskchain)
+            tc_section = _get_taskchain_section(tc_meta, taskchain)
             if isinstance(tc_section, dict):
                 raw_nodes = tc_section.get("nodes") or []
                 raw_links = tc_section.get("links") or []
@@ -913,13 +933,6 @@ def get_taskchain_dag():
                     or _extract_ibp_template_from_metadata(node)
                     or (ibp_template_map.get(obj_id) if obj_id else None)
                 )
-                if ibp_tpl or (obj_id and ibp_template_map.get(obj_id)):
-                    logger.warning(
-                        "[DIAG][dag] obj_id=%s from_task_id=%r from_node=%r from_map=%r -> chosen=%r",
-                        obj_id, _extract_ibp_template_from_metadata(task_id),
-                        _extract_ibp_template_from_metadata(node),
-                        ibp_template_map.get(obj_id) if obj_id else None, ibp_tpl,
-                    )
                 sac_ma_id = (
                     _extract_sac_multiaction_from_metadata(task_id)
                     or _extract_sac_multiaction_from_metadata(node)
@@ -1056,7 +1069,7 @@ def get_taskchain_dag():
                 raw_meta = (current_meta_rows[0].get("JSON") or current_meta_rows[0].get("json") or "")
                 try:
                     meta_obj = json.loads(raw_meta) if raw_meta else {}
-                    tc_section = (meta_obj.get("taskchains") or {}).get(taskchain)
+                    tc_section = _get_taskchain_section(meta_obj, taskchain)
                     if isinstance(tc_section, dict):
                         raw_nodes = tc_section.get("nodes") or []
                         raw_links = tc_section.get("links") or []
@@ -1220,14 +1233,6 @@ def get_taskchain_dag():
                     or (ibp_template_map.get(obj_id) if obj_id else None)
                     or ibp_template_from_logs.get(exec_info.get("taskLogId"))
                 )
-                if ibp_tpl or (obj_id and ibp_template_map.get(obj_id)):
-                    logger.warning(
-                        "[DIAG][run-nodes] obj_id=%s from_task_id=%r from_node=%r from_map=%r from_logs=%r -> chosen=%r",
-                        obj_id, _extract_ibp_template_from_metadata(task_id),
-                        _extract_ibp_template_from_metadata(node),
-                        ibp_template_map.get(obj_id) if obj_id else None,
-                        ibp_template_from_logs.get(exec_info.get("taskLogId")), ibp_tpl,
-                    )
                 sac_ma_id = (
                     _extract_sac_multiaction_from_metadata(task_id)
                     or _extract_sac_multiaction_from_metadata(node)
@@ -1587,7 +1592,7 @@ def get_taskchain_steps():
             try:
                 ph = ",".join(["?"] * len(object_ids))
                 rows = db_query_executor.query(
-                    f'SELECT "NAME", "REPOSITORY_OBJECT_TYPE", "JSON" FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" WHERE "NAME" IN ({ph})',
+                    f'SELECT "NAME", "REPOSITORY_OBJECT_TYPE", "JSON" FROM "ORCHESTRATION"."3VR_DEPL_METADATA_01" WHERE "NAME" IN ({ph}) ORDER BY "DEPLOYED_AT" ASC',
                     tuple(object_ids)
                 )
                 for mr in (rows or []):
@@ -1686,8 +1691,9 @@ def get_taskchain_steps():
         # Priority: well-known paths first, then exhaustive scan
         raw_nodes = []
 
-        # Pattern A: taskchains.<name>.nodes  (mirrors the runtime DAG format)
-        tc_section = (tc_data.get("taskchains") or {}).get(taskchain)
+        # Pattern A: taskchains.<name>.nodes  (mirrors the runtime DAG format),
+        # also checking the csn.taskchains.<name> wrapper used by newer deployments.
+        tc_section = _get_taskchain_section(tc_data, taskchain)
         if isinstance(tc_section, dict):
             raw_nodes = tc_section.get("nodes") or []
             if raw_nodes: debug_info["patternMatched"] = "taskchains.<name>.nodes"
@@ -1743,11 +1749,6 @@ def get_taskchain_steps():
             return jsonify({"success": True, "steps": [], "debug": debug_info}), 200
 
         bmap, ibp_tpl_map, sac_ma_map, otype_map = _build_metadata_maps([o for o, _ in object_ids_ordered])
-        import logging as _logging
-        _logging.getLogger(__name__).warning("[DIAG] raw nodes: %s", _json.dumps(object_ids_ordered, default=str))
-        _logging.getLogger(__name__).warning(
-            "[DIAG] ibp_tpl_map (from separate object metadata rows): %s", ibp_tpl_map
-        )
         steps = []
         for i, (obj_id, node) in enumerate(object_ids_ordered):
             task_id = node.get("taskIdentifier") or {}
@@ -1762,18 +1763,15 @@ def get_taskchain_steps():
             # every time the chain is redeployed — over the API task's own metadata row
             # in ibp_tpl_map/sac_ma_map, which only updates when that object itself is
             # redeployed and can therefore go stale after editing the step in-chain.
-            _ibp_from_task_id = _extract_ibp_template_from_metadata(task_id)
-            _ibp_from_node = _extract_ibp_template_from_metadata(node)
-            _ibp_from_map = ibp_tpl_map.get(obj_id)
-            ibp_tpl = _ibp_from_task_id or _ibp_from_node or _ibp_from_map
+            ibp_tpl = (
+                _extract_ibp_template_from_metadata(task_id)
+                or _extract_ibp_template_from_metadata(node)
+                or ibp_tpl_map.get(obj_id)
+            )
             sac_ma_id = (
                 _extract_sac_multiaction_from_metadata(task_id)
                 or _extract_sac_multiaction_from_metadata(node)
                 or sac_ma_map.get(obj_id)
-            )
-            _logging.getLogger(__name__).warning(
-                "[DIAG] obj_id=%s ibp_from_task_id=%r ibp_from_node=%r ibp_from_map=%r -> chosen=%r",
-                obj_id, _ibp_from_task_id, _ibp_from_node, _ibp_from_map, ibp_tpl,
             )
             steps.append({
                 "id":              node.get("id") or obj_id,

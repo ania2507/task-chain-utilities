@@ -290,9 +290,6 @@
             <OverflowToolbar>
                 <ToolbarSpacer/>
                 <Button text="{= ${edit>/viewOnly} ? 'Close' : ${i18n>common.cancel} }" press=".onNavBack"/>
-                <Button text="Validate" icon="sap-icon://simulate" press=".onValidateSac"
-                        visible="{= !${edit>/viewOnly} &amp;&amp; ${edit>/hasSacSteps} }"
-                        enabled="{= !${edit>/sacLoading} }"/>
                 <Button text="{i18n>common.save}" type="Emphasized" press=".onSave"
                         visible="{= !${edit>/viewOnly} }"/>
             </OverflowToolbar>

@@ -434,11 +434,10 @@ def launch_job():
                         if p.get("step"):  # Excel IBP param — resolve via template
                             unresolved.append(p)
                         continue
+                    # Quoting (ABAP string literal vs bare number) depends on the
+                    # variable's data type and is decided below once the template
+                    # is loaded — numeric variables like $G_PERIOD must stay bare.
                     ibp_value = str(p.get("value", ""))
-                    # P_VARVxx values need ABAP string constant format ('value')
-                    if ibp_name.upper().startswith("P_VARV") and ibp_value:
-                        if not (ibp_value.startswith("'") and ibp_value.endswith("'")):
-                            ibp_value = f"'{ibp_value}'"
                     user_overrides[ibp_name] = {"name": ibp_name, "values": [{"low": ibp_value}]}
                     # Include the corresponding P_VARNxx (variable name param)
                     var_name_param = p.get("ibpVarNameParam")
@@ -476,9 +475,6 @@ def launch_job():
                                 ibp_name = ibp_info["ibpParamName"]
                                 ibp_varn = ibp_info["ibpVarNameParam"]
                                 ibp_value = str(p.get("value", ""))
-                                if ibp_name.upper().startswith("P_VARV") and ibp_value:
-                                    if not (ibp_value.startswith("'") and ibp_value.endswith("'")):
-                                        ibp_value = f"'{ibp_value}'"
                                 user_overrides[ibp_name] = {"name": ibp_name, "values": [{"low": ibp_value}]}
                                 if ibp_varn and ibp_varn not in user_overrides:
                                     user_overrides[ibp_varn] = {
@@ -488,6 +484,30 @@ def launch_job():
                                 logger.info("Resolved Excel IBP param '%s' → %s", var_name, ibp_name)
                 except Exception as _te:
                     logger.warning("Could not load IBP template: %s", _te)
+
+            # Decide ABAP literal quoting for each P_VARVxx override by mirroring the
+            # template's own default value format for that param: if the template's
+            # default is wrapped in quotes the variable is character-type and the
+            # override must be quoted too; if the default is bare (e.g. "202606" for
+            # $G_PERIOD) the variable is numeric-type and must stay unquoted.
+            for _ov_name, _ov_entry in user_overrides.items():
+                if not _ov_name.upper().startswith("P_VARV"):
+                    continue
+                _vals = _ov_entry.get("values") or []
+                if not _vals:
+                    continue
+                _low = str(_vals[0].get("low", ""))
+                if not _low or (_low.startswith("'") and _low.endswith("'")):
+                    continue
+                _tmpl_default = merged.get(_ov_name)
+                _tmpl_low = ""
+                if _tmpl_default:
+                    _tmpl_vals = _tmpl_default.get("values") or []
+                    if _tmpl_vals:
+                        _tmpl_low = str(_tmpl_vals[0].get("low") or "")
+                if _tmpl_low and not (_tmpl_low.startswith("'") and _tmpl_low.endswith("'")):
+                    continue  # numeric-type variable — leave bare
+                _vals[0]["low"] = f"'{_low}'"  # character-type (or unknown) — quote
 
             # Collect user's active variable slots per sequence hash BEFORE merging
             # (P_VARVxx entries in user_overrides → slot nums per sequence)
