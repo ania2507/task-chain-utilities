@@ -769,9 +769,10 @@ sap.ui.define([
          */
         _updateChartData: function (sFilterMode, sTimePeriod) {
             var oDashboardModel = this.getView().getModel("dashboard");
-            var aAllExecutions = oDashboardModel.getProperty("/allExecutions") || [];
+            // Always use the currently filtered set so chain selection is respected
+            var aExecutions = oDashboardModel.getProperty("/filteredExecutions") || [];
             var oChart = this.byId("executionChart");
-            
+
             // Get current values if not provided
             if (!sFilterMode) {
                 sFilterMode = this.byId("chartFilter").getSelectedKey();
@@ -779,18 +780,14 @@ sap.ui.define([
             if (!sTimePeriod) {
                 sTimePeriod = this.byId("timePeriodSelect").getSelectedKey();
             }
-            
+
             // Switch chart type based on filter mode
             if (sFilterMode === "durationTrend") {
-                // Line chart for duration trend
                 this._configureChartForDuration(oChart);
-                var aDurationData = this._generateDurationChartData(aAllExecutions, sTimePeriod);
-                oDashboardModel.setProperty("/executionChartData", aDurationData);
+                oDashboardModel.setProperty("/executionChartData", this._generateDurationChartData(aExecutions, sTimePeriod));
             } else {
-                // Stacked column for successes/errors
                 this._configureChartForExecutions(oChart);
-                var aChartData = this._generateChartDataFromExecutions(aAllExecutions, sFilterMode, sTimePeriod);
-                oDashboardModel.setProperty("/executionChartData", aChartData);
+                oDashboardModel.setProperty("/executionChartData", this._generateChartDataFromExecutions(aExecutions, sFilterMode, sTimePeriod));
             }
         },
         
@@ -857,75 +854,112 @@ sap.ui.define([
         },
         
         /**
-         * Generate duration chart data for last runs
+         * Generate duration chart data for last runs.
+         * - 24h / 7d : individual run points (max 100)
+         * - 30d      : daily averages
+         * - 365d     : weekly averages
+         * - all      : monthly averages
          */
         _generateDurationChartData: function (aExecutions, sTimePeriod) {
             if (!aExecutions || aExecutions.length === 0) {
                 return [];
             }
-            
+
             sTimePeriod = sTimePeriod || "24h";
             var now = new Date();
             var cutoffTime;
-            
-            switch(sTimePeriod) {
-                case "7d": cutoffTime = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); break;
-                case "30d": cutoffTime = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); break;
+
+            switch (sTimePeriod) {
+                case "7d":   cutoffTime = new Date(now.getTime() - 7   * 24 * 60 * 60 * 1000); break;
+                case "30d":  cutoffTime = new Date(now.getTime() - 30  * 24 * 60 * 60 * 1000); break;
                 case "365d": cutoffTime = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000); break;
-                case "all": cutoffTime = new Date(0); break;
-                default: cutoffTime = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+                case "all":  cutoffTime = new Date(0); break;
+                default:     cutoffTime = new Date(now.getTime() - 24  * 60 * 60 * 1000);
             }
-            
-            // Filter by time and only completed runs with duration
-            var aFiltered = aExecutions.filter(function(exec) {
+
+            var aFiltered = aExecutions.filter(function (exec) {
                 var execTime = new Date(exec.startTime);
                 return execTime >= cutoffTime && exec.duration && exec.duration > 0;
             });
-            
-            // Sort by time ascending
-            aFiltered.sort(function(a, b) {
+
+            aFiltered.sort(function (a, b) {
                 return new Date(a.startTime) - new Date(b.startTime);
             });
-            
-            // Limit to last 50 runs for readability
-            if (aFiltered.length > 50) {
-                aFiltered = aFiltered.slice(-50);
-            }
-            
-            // Calculate average and standard deviation
-            var aDurations = aFiltered.map(function(e) { return e.duration; });
-            var fAvg = 0;
-            var fStdDev = 0;
-            
+
+            // Global average and stddev (across the entire filtered set)
+            var aDurations = aFiltered.map(function (e) { return e.duration; });
+            var fAvg = 0, fStdDev = 0;
             if (aDurations.length > 0) {
-                fAvg = aDurations.reduce(function(a, b) { return a + b; }, 0) / aDurations.length;
-                
+                fAvg = aDurations.reduce(function (a, b) { return a + b; }, 0) / aDurations.length;
                 if (aDurations.length > 1) {
-                    var fVariance = aDurations.reduce(function(sum, val) {
-                        return sum + Math.pow(val - fAvg, 2);
-                    }, 0) / aDurations.length;
-                    fStdDev = Math.sqrt(fVariance);
+                    var fVar = aDurations.reduce(function (s, v) { return s + Math.pow(v - fAvg, 2); }, 0) / aDurations.length;
+                    fStdDev = Math.sqrt(fVar);
                 }
             }
-            
-            var fStdHigh = fAvg + fStdDev;
-            var fStdLow = Math.max(0, fAvg - fStdDev);
-            
-            // Generate data points
-            return aFiltered.map(function(exec, idx) {
-                var execDate = new Date(exec.startTime);
-                var sLabel;
-                if (sTimePeriod === "24h") {
-                    sLabel = execDate.getHours() + ":" + (execDate.getMinutes() < 10 ? "0" : "") + execDate.getMinutes();
+            var fStdHigh = parseFloat((fAvg + fStdDev).toFixed(1));
+            var fStdLow  = parseFloat(Math.max(0, fAvg - fStdDev).toFixed(1));
+            fAvg = parseFloat(fAvg.toFixed(1));
+
+            // For short periods show individual runs (max 100); for longer periods aggregate
+            var useAggregate = (sTimePeriod === "30d" || sTimePeriod === "365d" || sTimePeriod === "all");
+
+            if (!useAggregate) {
+                // Individual run points
+                var aPoints = aFiltered.length > 100 ? aFiltered.slice(-100) : aFiltered;
+                return aPoints.map(function (exec) {
+                    var d = new Date(exec.startTime);
+                    var sLabel = sTimePeriod === "24h"
+                        ? d.getHours() + ":" + (d.getMinutes() < 10 ? "0" : "") + d.getMinutes()
+                        : (d.getMonth() + 1) + "/" + d.getDate() + " " + d.getHours() + ":" + (d.getMinutes() < 10 ? "0" : "") + d.getMinutes();
+                    return {
+                        time: sLabel,
+                        duration: parseFloat(exec.duration.toFixed(1)),
+                        avg: fAvg,
+                        stdHigh: fStdHigh,
+                        stdLow: fStdLow,
+                        successes: 0,
+                        errors: 0
+                    };
+                });
+            }
+
+            // Aggregate into buckets
+            var oBuckets = {};
+            aFiltered.forEach(function (exec) {
+                var d = new Date(exec.startTime);
+                var sKey;
+                if (sTimePeriod === "30d") {
+                    // Daily bucket: MM/DD
+                    sKey = (d.getMonth() + 1) + "/" + d.getDate();
+                } else if (sTimePeriod === "365d") {
+                    // Weekly bucket: ISO week label (Mon date of the week)
+                    var dayOfWeek = d.getDay(); // 0=Sun
+                    var monday = new Date(d.getTime() - ((dayOfWeek === 0 ? 6 : dayOfWeek - 1) * 86400000));
+                    sKey = (monday.getMonth() + 1) + "/" + monday.getDate();
                 } else {
-                    sLabel = (execDate.getMonth() + 1) + "/" + execDate.getDate() + " " + execDate.getHours() + ":" + (execDate.getMinutes() < 10 ? "0" : "") + execDate.getMinutes();
+                    // Monthly bucket: Jan 2026
+                    var months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+                    sKey = months[d.getMonth()] + " " + d.getFullYear();
                 }
+                if (!oBuckets[sKey]) {
+                    oBuckets[sKey] = { sum: 0, count: 0, sortKey: d.getTime() };
+                }
+                oBuckets[sKey].sum += exec.duration;
+                oBuckets[sKey].count++;
+            });
+
+            var aKeys = Object.keys(oBuckets).sort(function (a, b) {
+                return oBuckets[a].sortKey - oBuckets[b].sortKey;
+            });
+
+            return aKeys.map(function (key) {
+                var fBucketAvg = parseFloat((oBuckets[key].sum / oBuckets[key].count).toFixed(1));
                 return {
-                    time: sLabel,
-                    duration: parseFloat(exec.duration.toFixed(1)),
-                    avg: parseFloat(fAvg.toFixed(1)),
-                    stdHigh: parseFloat(fStdHigh.toFixed(1)),
-                    stdLow: parseFloat(fStdLow.toFixed(1)),
+                    time: key,
+                    duration: fBucketAvg,
+                    avg: fAvg,
+                    stdHigh: fStdHigh,
+                    stdLow: fStdLow,
                     successes: 0,
                     errors: 0
                 };
@@ -1025,11 +1059,9 @@ sap.ui.define([
             var aAllExecutions = oDashboardModel.getProperty("/allExecutions") || [];
             oDashboardModel.setProperty("/recentExecutions", aAllExecutions);
             oDashboardModel.setProperty("/filteredExecutions", aAllExecutions);
-            
-            // Update chart
-            var sFilterMode = this.byId("chartFilter").getSelectedKey() || "related";
-            var sTimePeriod = this.byId("timePeriodSelect").getSelectedKey() || "24h";
-            oDashboardModel.setProperty("/executionChartData", this._generateChartDataFromExecutions(aAllExecutions, sFilterMode, sTimePeriod));
+
+            // Update chart — _updateChartData reads from filteredExecutions automatically
+            this._updateChartData(null, null);
         },
 
         /**
@@ -1051,12 +1083,10 @@ sap.ui.define([
             
             oDashboardModel.setProperty("/recentExecutions", aFiltered);
             oDashboardModel.setProperty("/filteredExecutions", aFiltered);
-            
-            // Update chart with filtered data
-            var sFilterMode = this.byId("chartFilter").getSelectedKey() || "related";
-            var sTimePeriod = this.byId("timePeriodSelect").getSelectedKey() || "24h";
-            oDashboardModel.setProperty("/executionChartData", this._generateChartDataFromExecutions(aFiltered, sFilterMode, sTimePeriod));
-            
+
+            // Update chart — _updateChartData reads from filteredExecutions automatically
+            this._updateChartData(null, null);
+
             // Update KPIs for filtered data
             this._updateKPIsForFilteredData(aFiltered);
         },
