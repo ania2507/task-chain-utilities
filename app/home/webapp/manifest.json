@@ -24,6 +24,10 @@
             }
         }
     },
+    "sap.cloud": {
+        "public": true,
+        "service": "taskchainutilities.service"
+    },
     "sap.ui": {
         "technology": "UI5",
         "icons": {

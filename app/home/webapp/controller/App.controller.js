@@ -1,8 +1,9 @@
 sap.ui.define([
     "sap/ui/core/mvc/Controller",
     "sap/ui/core/ComponentContainer",
-    "sap/ui/core/Component"
-], function (Controller, ComponentContainer, Component) {
+    "sap/ui/core/Component",
+    "sap/ui/core/routing/HashChanger"
+], function (Controller, ComponentContainer, Component, HashChanger) {
     "use strict";
 
     var APP_CONFIG = {
@@ -131,6 +132,12 @@ sap.ui.define([
                     oComponent.destroy();
                 }
                 this._oCurrentContainer = null;
+
+                // Sub-apps share the browser's hash-based router. Leaving a deep
+                // link (e.g. "project/12/chain/3") in place makes the next app's
+                // router fail to match any of its own routes, rendering blank.
+                // Reset it so the next app always starts at its default route.
+                HashChanger.getInstance().setHash("");
             }
         },
 

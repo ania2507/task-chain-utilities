@@ -8,8 +8,9 @@ sap.ui.define([
     "sap/m/Label",
     "sap/m/VBox",
     "sap/ui/core/library",
-    "sap/ui/core/Fragment"
-], function (ControllerExtension, MessageBox, MessageToast, Dialog, Button, TextArea, Label, VBox, coreLibrary, Fragment) {
+    "sap/ui/core/Fragment",
+    "sap/ui/core/Component"
+], function (ControllerExtension, MessageBox, MessageToast, Dialog, Button, TextArea, Label, VBox, coreLibrary, Fragment, Component) {
     "use strict";
 
     var ValueState = coreLibrary.ValueState;
@@ -280,9 +281,23 @@ sap.ui.define([
                 return "http://localhost:8080";
             }
 
-            // Production (WorkZone / managed approuter): derive the app prefix from
-            // the current URL so /v1/... is routed through xs-app.json correctly.
-            // e.g. https://host/conditionalrules/index.html → /conditionalrules
+            // Production (WorkZone / managed approuter): derive the app root from
+            // the OData model's service URL, which is always resolved against this
+            // component's own URL space (set via Component.create). window.location
+            // instead reflects the host shell's URL when this app is embedded (e.g.
+            // inside the home app), which has no /v1 route in its xs-app.json and
+            // returns 403 for these calls.
+            var oComponent = Component.getOwnerComponentFor(this.base.getView());
+            var oModel = oComponent && oComponent.getModel();
+            if (oModel && typeof oModel.getServiceUrl === "function") {
+                var sServiceUrl = oModel.getServiceUrl();
+                var nIdx = sServiceUrl.indexOf("/odata/");
+                if (nIdx !== -1) {
+                    return sServiceUrl.slice(0, nIdx);
+                }
+            }
+
+            // Fallback: derive from current URL (works when not embedded)
             var sPathname = window.location.pathname;
             var sAppRoot = sPathname.substring(0, sPathname.lastIndexOf("/"));
             return window.location.origin + sAppRoot;
