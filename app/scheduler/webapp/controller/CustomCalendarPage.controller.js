@@ -79,7 +79,7 @@ sap.ui.define([
                 this._editModel.setProperty("/lastRunStatus", "");
                 return;
             }
-            var sUrl = "v1/dsp/taskchain-runs?spaceId=" + encodeURIComponent(spaceId)
+            var sUrl = this._getApiBase() + "dsp/taskchain-runs?spaceId=" + encodeURIComponent(spaceId)
                 + "&taskchain=" + encodeURIComponent(taskchain) + "&limit=1";
             fetch(sUrl, { headers: { "Accept": "application/json" } })
                 .then(function (res) { return res.json(); })
@@ -229,7 +229,7 @@ sap.ui.define([
                 var pStepMap = Promise.resolve({});
                 if (oParsed.sacFlatDspSteps && oParsed.sacFlatDspSteps.length) {
                     var sSpaceId = that._editModel.getProperty("/spaceId") || "";
-                    pStepMap = fetch("v1/dsp/taskchain-steps?spaceId=" + encodeURIComponent(sSpaceId)
+                    pStepMap = fetch(that._getApiBase() + "dsp/taskchain-steps?spaceId=" + encodeURIComponent(sSpaceId)
                         + "&taskchain=" + encodeURIComponent(sChain))
                         .then(function (r) { return r.json(); })
                         .then(function (d) {
@@ -545,7 +545,7 @@ sap.ui.define([
                         .map(function (oEntry) {
                             var sLogId = (oEntry._remoteId || "").split("__")[1] || "";
                             if (!sLogId) return Promise.resolve();
-                            return fetch("v1/dsp/taskchain-runs?runId=" + encodeURIComponent(sLogId),
+                            return fetch(that._getApiBase() + "dsp/taskchain-runs?runId=" + encodeURIComponent(sLogId),
                                 { headers: { "Accept": "application/json" } })
                                 .then(function (res) { return res.json(); })
                                 .then(function (data) {
@@ -562,7 +562,7 @@ sap.ui.define([
                     var aOrphan = aPast.filter(function (e) { return !e._remoteId && !e.runStatus; });
                     var pFallback = Promise.resolve();
                     if (aOrphan.length && sSpace && sChain) {
-                        pFallback = fetch("v1/dsp/taskchain-runs?spaceId=" + encodeURIComponent(sSpace)
+                        pFallback = fetch(that._getApiBase() + "dsp/taskchain-runs?spaceId=" + encodeURIComponent(sSpace)
                             + "&taskchain=" + encodeURIComponent(sChain) + "&limit=200",
                             { headers: { "Accept": "application/json" } })
                             .then(function (res) { return res.json(); })
@@ -796,7 +796,7 @@ sap.ui.define([
             var aFuture = (aEntries || []).filter(function (e) { return !e.isPast; });
             return Promise.all(aFuture.map(function (e) {
                 var sRunAt = e.date + "T" + (e.rawTime || "00:00") + ":00";
-                return fetch("v1/scheduler/schedule-once", {
+                return fetch(that._getApiBase() + "scheduler/schedule-once", {
                     method: "DELETE",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ spaceId: sSpace, taskchain: sChain, runAt: sRunAt })

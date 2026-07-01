@@ -32,13 +32,33 @@ sap.ui.define([
         },
 
         /**
+         * Returns the absolute base URL for v1/ API calls derived from the
+         * OData model's service URL (which is correctly resolved to this
+         * component's URL space). This ensures fetch calls go through the
+         * scheduler's own xs-app.json routing, not the host app's, even
+         * when this component is embedded inside another app (e.g. home shell).
+         */
+        _getApiBase: function () {
+            var oModel = this.getOwnerComponent().getModel();
+            if (oModel && typeof oModel.getServiceUrl === "function") {
+                var sServiceUrl = oModel.getServiceUrl();
+                // e.g. "https://.../{guid}.scheduler-0.0.1/odata/v4/services/"
+                var nIdx = sServiceUrl.lastIndexOf("/odata/");
+                if (nIdx !== -1) {
+                    return sServiceUrl.slice(0, nIdx + 1) + "v1/";
+                }
+            }
+            return "v1/";
+        },
+
+        /**
          * Call the py-srv scheduler API.
          * @param {string} sPath e.g. "/run-now/<id>"
          * @param {object} [oOpts] fetch-style options
          * @returns {Promise<any>}
          */
         callScheduler: function (sPath, oOpts) {
-            var sUrl = "v1/scheduler" + sPath;
+            var sUrl = this._getApiBase() + "scheduler" + sPath;
             var opts = Object.assign({
                 method: "GET",
                 headers: { "Content-Type": "application/json" }

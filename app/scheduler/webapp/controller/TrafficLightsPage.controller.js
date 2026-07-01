@@ -151,7 +151,7 @@ sap.ui.define([
                 this._editModel.setProperty("/lastRunStatus", "");
                 return;
             }
-            var sUrl = "v1/dsp/taskchain-runs?spaceId=" + encodeURIComponent(spaceId)
+            var sUrl = this._getApiBase() + "dsp/taskchain-runs?spaceId=" + encodeURIComponent(spaceId)
                 + "&taskchain=" + encodeURIComponent(taskchain) + "&limit=1";
             fetch(sUrl, { headers: { "Accept": "application/json" } })
                 .then(function (res) { return res.json(); })

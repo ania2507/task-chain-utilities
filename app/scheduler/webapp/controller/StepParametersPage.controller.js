@@ -114,7 +114,7 @@ sap.ui.define([
 
         _loadStepsFromIbpTemplate: function (sTemplateName) {
             var that = this;
-            fetch("v1/jobs/ibp/template-steps", {
+            fetch(that._getApiBase() + "jobs/ibp/template-steps", {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "Accept": "application/json" },
                 body: JSON.stringify({ template_name: sTemplateName })
@@ -157,7 +157,7 @@ sap.ui.define([
             }
 
             // 1. Try the DAG endpoint (uses last run's structure + business names).
-            var sDagUrl = "v1/dsp/taskchain-dag?spaceId=" + encodeURIComponent(sSpaceId)
+            var sDagUrl = that._getApiBase() + "dsp/taskchain-dag?spaceId=" + encodeURIComponent(sSpaceId)
                 + "&taskchain=" + encodeURIComponent(sTaskchain);
 
             fetch(sDagUrl, { headers: { "Accept": "application/json", "Cache-Control": "no-cache" } })
@@ -196,7 +196,7 @@ sap.ui.define([
                         return aSteps;
                     }
                     // 2. Fallback: query distinct steps from execution logs.
-                    var sStepsUrl = "v1/dsp/taskchain-steps?spaceId=" + encodeURIComponent(sSpaceId)
+                    var sStepsUrl = that._getApiBase() + "dsp/taskchain-steps?spaceId=" + encodeURIComponent(sSpaceId)
                         + "&taskchain=" + encodeURIComponent(sTaskchain);
                     return fetch(sStepsUrl, { headers: { "Accept": "application/json", "Cache-Control": "no-cache" } })
                         .then(function (res2) {
@@ -246,7 +246,7 @@ sap.ui.define([
 
         _preloadIbpStepsForDspStep: function (iDspIdx, sTemplate, sStepName) {
             var that = this;
-            fetch("v1/jobs/ibp/template-steps", {
+            fetch(that._getApiBase() + "jobs/ibp/template-steps", {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "Accept": "application/json" },
                 body: JSON.stringify({ template_name: sTemplate })
@@ -301,7 +301,7 @@ sap.ui.define([
             if (!nRetry) {
                 this._editModel.setProperty("/sacLoading", true);
             }
-            fetch("v1/jobs/sac/multiaction-parameters/" + encodeURIComponent(sSacId), {
+            fetch(that._getApiBase() + "jobs/sac/multiaction-parameters/" + encodeURIComponent(sSacId), {
                 headers: { "Accept": "application/json" }
             })
                 .then(function (res) { return res.json(); })
@@ -677,7 +677,7 @@ sap.ui.define([
                 });
                 delete this._restoredIbpParams[oCurForRestore.step.name];
             }
-            fetch("v1/jobs/ibp/template-steps", {
+            fetch(that._getApiBase() + "jobs/ibp/template-steps", {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "Accept": "application/json" },
                 body: JSON.stringify({ template_name: sTemplate })
@@ -757,7 +757,7 @@ sap.ui.define([
         _loadDspGlobalVars: function (iIbpIdx, sTaskName) {
             if (!sTaskName) return;
             var that = this;
-            fetch("v1/dsp/task-global-vars?taskName=" + encodeURIComponent(sTaskName), {
+            fetch(that._getApiBase() + "dsp/task-global-vars?taskName=" + encodeURIComponent(sTaskName), {
                 headers: { "Accept": "application/json" }
             })
                 .then(function (res) { return res.json(); })
@@ -1063,6 +1063,99 @@ sap.ui.define([
             var oReturnQuery = this._editModel.getProperty("/returnQuery") || {};
             MessageToast.show("Step parameters saved");
             this.getRouter().navTo(sReturnTo, { "?query": oReturnQuery }, true);
+        },
+
+        onValidateSac: function () {
+            var that = this;
+            var aSteps = this._editModel.getProperty("/steps") || [];
+            var built = this._buildSaveOutput(aSteps);
+            var aSacValidations = built.aSacValidations;
+
+            if (!aSacValidations.length) {
+                MessageToast.show("No SAC steps with parameters to validate.");
+                return;
+            }
+
+            this._editModel.setProperty("/sacLoading", true);
+            this._editModel.setProperty("/sacLoadingText", "Validating parameters…");
+
+            var aPromises = aSacValidations.map(function (v) {
+                return fetch(that._getApiBase() + "jobs/sac/validate-parameters", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                    body: JSON.stringify({ multiactionId: v.multiactionId, parameters: v.parameters })
+                }).then(function (r) {
+                    if (!r.ok) { return r.text().then(function (t) { throw new Error("HTTP " + r.status + ": " + t.slice(0, 200)); }); }
+                    return r.json();
+                }).then(function (res) {
+                    if (res.probing && res.validationKey) {
+                        return that._pollValidation(v.multiactionId, res.validationKey, 0);
+                    }
+                    return { multiactionId: v.multiactionId, result: res };
+                }).catch(function (err) {
+                    return { multiactionId: v.multiactionId, result: { valid: null, error: String(err && err.message || err) } };
+                });
+            });
+
+            Promise.all(aPromises).then(function (aResults) {
+                that._editModel.setProperty("/sacLoading", false);
+                that._editModel.setProperty("/sacLoadingText", "");
+
+                var aErrors = [];
+                var aWarnings = [];
+                aResults.forEach(function (item) {
+                    var r = item.result;
+                    if (r.valid === false && r.errors) {
+                        r.errors.forEach(function (e) {
+                            var sHint = e.needsHierarchyId ? " [fill HierarchyId]" : "";
+                            aErrors.push("• " + e.parameterId + sHint + ": " + e.message);
+                        });
+                    } else if (r.valid === null) {
+                        aWarnings.push("⚠ " + (r.message || r.error || "Validation unavailable"));
+                    }
+                });
+
+                if (aErrors.length) {
+                    MessageBox.error(
+                        "The following parameters have invalid or missing values:\n\n" + aErrors.join("\n"),
+                        { title: "SAC Validation Errors" }
+                    );
+                } else if (aWarnings.length) {
+                    MessageBox.warning(aWarnings.join("\n"), { title: "SAC Validation" });
+                } else {
+                    MessageToast.show("SAC validation OK — all parameters are valid");
+                }
+            });
+        },
+
+        _pollValidation: function (multiactionId, validationKey, nRetry) {
+            var that = this;
+            if (nRetry > 20) {
+                return Promise.resolve({
+                    multiactionId: multiactionId,
+                    result: { valid: null, error: "Validation timed out" }
+                });
+            }
+            return new Promise(function (resolve) {
+                setTimeout(function () {
+                    fetch(that._getApiBase() + "jobs/sac/validate-parameters", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                        body: JSON.stringify({ validationKey: validationKey })
+                    }).then(function (r) {
+                        if (!r.ok) { return r.text().then(function (t) { throw new Error("HTTP " + r.status + ": " + t.slice(0, 200)); }); }
+                        return r.json();
+                    }).then(function (res) {
+                        if (res.probing) {
+                            resolve(that._pollValidation(multiactionId, validationKey, nRetry + 1));
+                        } else {
+                            resolve({ multiactionId: multiactionId, result: res });
+                        }
+                    }).catch(function (err) {
+                        resolve({ multiactionId: multiactionId, result: { valid: null, error: String(err && err.message || err) } });
+                    });
+                }, 3000);
+            });
         }
     });
 });

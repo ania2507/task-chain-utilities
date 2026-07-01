@@ -16,6 +16,7 @@ sap.ui.define([
 
         _oCurrentContainer: null,
         _sLaunchpadPrefix: null,
+        _oPreloadedComponents: null,
 
         onInit: function () {
             // BTP Launchpad URL pattern: /{guid}.{service}.{appId}-{version}/index.html
@@ -26,7 +27,34 @@ sap.ui.define([
             if (oMatch) {
                 this._sLaunchpadPrefix = oMatch[1];
             }
+            this._oPreloadedComponents = {};
             this._selectNavItem("home");
+
+            // Start background preloading after the home page has rendered
+            setTimeout(this._preloadApps.bind(this), 1500);
+        },
+
+        _buildUrl: function (oCfg) {
+            if (this._sLaunchpadPrefix) {
+                return "/" + this._sLaunchpadPrefix + "." + oCfg.name + "-" + oCfg.version + "/";
+            }
+            return oCfg.localUrl;
+        },
+
+        _preloadApps: function () {
+            var that = this;
+            Object.keys(APP_CONFIG).forEach(function (sKey) {
+                var oCfg = APP_CONFIG[sKey];
+                Component.create({
+                    name: oCfg.name,
+                    url: that._buildUrl(oCfg),
+                    manifest: true
+                }).then(function (oComponent) {
+                    that._oPreloadedComponents[sKey] = oComponent;
+                }).catch(function () {
+                    // Silently ignore — _loadApp will retry on demand if needed
+                });
+            });
         },
 
         onToggleSidebar: function () {
@@ -61,7 +89,6 @@ sap.ui.define([
 
             this.byId("welcomeContainer").setVisible(false);
             this._destroyCurrentApp();
-            this.byId("toolPage").setBusy(true);
 
             var fnMount = function (oComponent) {
                 var oContainer = new ComponentContainer({
@@ -80,20 +107,19 @@ sap.ui.define([
                 that._showWelcome();
             };
 
-            var sUrl;
-            if (this._sLaunchpadPrefix) {
-                // BTP Launchpad: build URL from the guid+service prefix extracted in onInit
-                // e.g. /4ea149ad-...taskchainutilitiesservice.monitoring-0.0.1/
-                sUrl = "/" + this._sLaunchpadPrefix + "." + oCfg.name + "-" + oCfg.version + "/";
+            var oPreloaded = this._oPreloadedComponents[sKey];
+            if (oPreloaded) {
+                // Already loaded in background — mount immediately, no spinner needed
+                delete this._oPreloadedComponents[sKey];
+                fnMount(oPreloaded);
             } else {
-                // Local dev / standalone approuter
-                sUrl = oCfg.localUrl;
+                this.byId("toolPage").setBusy(true);
+                Component.create({
+                    name: oCfg.name,
+                    url: this._buildUrl(oCfg),
+                    manifest: true
+                }).then(fnMount).catch(fnError);
             }
-            Component.create({
-                name: oCfg.name,
-                url: sUrl,
-                manifest: true
-            }).then(fnMount).catch(fnError);
         },
 
         _destroyCurrentApp: function () {
@@ -120,6 +146,10 @@ sap.ui.define([
 
         onExit: function () {
             this._destroyCurrentApp();
+            var oCache = this._oPreloadedComponents || {};
+            Object.keys(oCache).forEach(function (sKey) {
+                oCache[sKey].destroy();
+            });
         }
     });
 });

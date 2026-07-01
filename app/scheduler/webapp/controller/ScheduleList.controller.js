@@ -288,7 +288,7 @@ sap.ui.define([
 
         _fetchDspSchedules: function () {
             return new Promise(function (resolve, reject) {
-                fetch("v1/dsp/taskchain-schedules", {
+                fetch(this._getApiBase() + "dsp/taskchain-schedules", {
                     method: "GET",
                     headers: { "Accept": "application/json" }
                 }).then(function (res) {

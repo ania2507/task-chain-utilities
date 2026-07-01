@@ -183,6 +183,7 @@ modules:
       - npm install -g @sap/datasphere-cli
     ignore:
     - .venv/
+    - node_modules/
     - __pycache__/
     - '*.pyc'
     - dsp_credentials.json
