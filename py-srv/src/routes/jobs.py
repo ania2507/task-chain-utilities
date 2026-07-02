@@ -360,6 +360,62 @@ def launch_job():
     # them into the IBP launch as the "parameters" list (key/value → name/values).
     taskchain_ctx = payload.get("taskchain")
 
+    # IBP: an app-configured template override (Step Parameters UI) must actually
+    # reach DSP's job launch, not just drive the UI. If DSP's own payload identifies
+    # which step fired (objectId — the same technical step name used as the key in
+    # our stored per-step params, e.g. "APITask_IBP"), match precisely. Otherwise,
+    # only apply the override when the taskchain has exactly one configured — with
+    # more than one and no way to disambiguate, guessing risks launching the wrong
+    # IBP job, so we leave DSP's own template_name untouched and log a warning.
+    if integration == "ibp" and taskchain_ctx:
+        from ..services.taskchain_executor import TaskchainExecutor
+
+        def _first_nonempty_str(*vals):
+            for v in vals:
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+            return ""
+
+        _step_params_for_tpl = TaskchainExecutor.consume_pending_step_params(taskchain_ctx)
+        if _step_params_for_tpl:
+            _dsp_step_id = _first_nonempty_str(
+                payload.get("objectId"), payload.get("object_id"),
+                payload.get("step_id"), payload.get("stepId"), payload.get("taskId"),
+            )
+
+            def _tpl_override_in(sparams):
+                for p in (sparams if isinstance(sparams, list) else []):
+                    if p.get("key") == "__ibpTemplateNameOverride" and p.get("value"):
+                        return p["value"]
+                return None
+
+            _tpl_override = None
+            if _dsp_step_id:
+                _tpl_override = _tpl_override_in(_step_params_for_tpl.get(_dsp_step_id))
+            else:
+                _tpl_overrides_by_step = {}
+                for _sname, _sparams in _step_params_for_tpl.items():
+                    _found = _tpl_override_in(_sparams)
+                    if _found:
+                        _tpl_overrides_by_step[_sname] = _found
+                if len(_tpl_overrides_by_step) == 1:
+                    _tpl_override = next(iter(_tpl_overrides_by_step.values()))
+                elif len(_tpl_overrides_by_step) > 1:
+                    logger.warning(
+                        "Multiple IBP template overrides found for taskchain '%s' (%s) and DSP "
+                        "did not send a step identifier — cannot disambiguate, leaving "
+                        "template_name as sent by DSP",
+                        taskchain_ctx, list(_tpl_overrides_by_step.keys()),
+                    )
+
+            if _tpl_override:
+                logger.info(
+                    "Overriding template_name with app-configured value '%s' for taskchain '%s'%s",
+                    _tpl_override, taskchain_ctx,
+                    f" (step '{_dsp_step_id}')" if _dsp_step_id else "",
+                )
+                payload = {**payload, "template_name": _tpl_override}
+
     # SAC: inject saved step params as a flat {parameterId: value} dict, which
     # SACJobClient.launch_job converts into the multi action's "parameterValues".
     # Filter by sacMultiActionId so each SAC step gets only its own params when

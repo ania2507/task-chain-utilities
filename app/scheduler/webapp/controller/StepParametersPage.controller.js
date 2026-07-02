@@ -32,10 +32,13 @@ sap.ui.define([
                 selectedStepId: null,
                 selectedStepName: "",
                 selectedStepIsBlocked: false,
+                selectedStepIntegrationType: "",
                 selectedStepParams: [],
                 newParam: _newParam(),
                 busy: false,
                 ibpTemplateName: "",
+                ibpTemplateNameInput: "",
+                ibpTemplateNameIsOverride: false,
                 ibpSteps: [],
                 ibpLoading: false,
                 ibpGlobalVars: [],
@@ -44,6 +47,8 @@ sap.ui.define([
                 selectedIbpStepParams: [],
                 newIbpParam: _newParam(),
                 sacMultiActionId: "",
+                sacMultiActionIdInput: "",
+                sacMultiActionIdIsOverride: false,
                 sacMultiActionName: "",
                 sacLoading: false,
                 sacLoadingText: "",
@@ -84,10 +89,13 @@ sap.ui.define([
                 selectedStepId: null,
                 selectedStepName: "",
                 selectedStepIsBlocked: false,
+                selectedStepIntegrationType: "",
                 selectedStepParams: [],
                 newParam: _newParam(),
                 busy: true,
                 ibpTemplateName: "",
+                ibpTemplateNameInput: "",
+                ibpTemplateNameIsOverride: false,
                 ibpSteps: [],
                 ibpLoading: false,
                 ibpGlobalVars: [],
@@ -96,6 +104,8 @@ sap.ui.define([
                 selectedIbpStepParams: [],
                 newIbpParam: _newParam(),
                 sacMultiActionId: "",
+                sacMultiActionIdInput: "",
+                sacMultiActionIdIsOverride: false,
                 sacMultiActionName: "",
                 sacLoading: false,
                 sacLoadingText: "",
@@ -186,6 +196,7 @@ sap.ui.define([
                                     applicationId: n.applicationId || "",
                                     ibpTemplateName: n.ibpTemplateName || "",
                                     sacMultiActionId: n.sacMultiActionId || "",
+                                    integrationType: n.integrationType || "",
                                     objectType: n.objectType || "",
                                     allowParams: true,
                                     params: []
@@ -217,6 +228,7 @@ sap.ui.define([
                                         applicationId: s.applicationId || "",
                                         ibpTemplateName: s.ibpTemplateName || "",
                                         sacMultiActionId: s.sacMultiActionId || "",
+                                        integrationType: s.integrationType || "",
                                         objectType: s.objectType || "",
                                         allowParams: true,
                                         params: []
@@ -227,12 +239,24 @@ sap.ui.define([
                         });
                 })
                 .then(function (aSteps) {
-                    that._editModel.setProperty("/steps", aSteps || []);
+                    // Freeze the DSP-auto-detected template name as each step's immutable
+                    // baseline before _applyParamsJsonToSteps can overlay a saved override —
+                    // this is what "Clear override" reverts to.
+                    var aBaselined = (aSteps || []).map(function (s) {
+                        return Object.assign({}, s, {
+                            dspDetectedIbpTemplateName: s.ibpTemplateName || "",
+                            dspDetectedSacMultiActionId: s.sacMultiActionId || ""
+                        });
+                    });
+                    that._editModel.setProperty("/steps", aBaselined);
                     that._applyParamsJsonToSteps();
-                    var bHasSac = (aSteps || []).some(function (s) { return !!s.sacMultiActionId; });
+                    // Read back from the model (not the stale aSteps closure) so a restored
+                    // override is honored by the preload loop below.
+                    var aMergedSteps = that._editModel.getProperty("/steps") || [];
+                    var bHasSac = aMergedSteps.some(function (s) { return !!s.sacMultiActionId; });
                     that._editModel.setProperty("/hasSacSteps", bHasSac);
                     // Pre-load IBP sub-steps in background so param count is visible immediately
-                    (aSteps || []).forEach(function (step, idx) {
+                    aMergedSteps.forEach(function (step, idx) {
                         if (step.ibpTemplateName) {
                             that._preloadIbpStepsForDspStep(idx, step.ibpTemplateName, step.name);
                         }
@@ -257,14 +281,16 @@ sap.ui.define([
                     // Consume _restoredIbpParams here (inside the .then) so that
                     // _doLoadIbpSteps triggered by the user clicking a step before
                     // this response arrives can still read and consume it first.
-                    var oExistingByName = {};
+                    // Keyed by "name::order" (not just name) — the same IBP operator
+                    // name can appear more than once in a template's sequence, at
+                    // different positions, each with its own distinct params.
                     var oRestored = that._restoredIbpParams && that._restoredIbpParams[sStepName];
                     if (oRestored) {
-                        Object.keys(oRestored).forEach(function (n) { oExistingByName[n] = oRestored[n]; });
                         delete that._restoredIbpParams[sStepName];
                     }
+                    var oExistingByKey = that._resolveRestoredParamsMap(oRestored, data.steps);
                     var aIbpSteps = (Array.isArray(data.steps) ? data.steps : []).map(function (s) {
-                        var aExisting = oExistingByName[s.name] || [];
+                        var aExisting = oExistingByKey[that._ibpStepKey(s)] || [];
                         var aParams = aExisting;
                         if (!aParams.length && Array.isArray(s.globalVars) && s.globalVars.length) {
                             aParams = s.globalVars
@@ -300,6 +326,11 @@ sap.ui.define([
             var nRetry = iRetry || 0;
             if (!nRetry) {
                 this._editModel.setProperty("/sacLoading", true);
+                // Set immediately (not just on success) so the probing-retry guard below,
+                // which compares against /sacMultiActionId, keeps tracking this same load
+                // even if the user switched from a different auto-detected/overridden ID.
+                this._editModel.setProperty("/sacMultiActionId", sSacId);
+                this._editModel.setProperty("/sacMultiActionIdInput", sSacId);
             }
             fetch(that._getApiBase() + "jobs/sac/multiaction-parameters/" + encodeURIComponent(sSacId), {
                 headers: { "Accept": "application/json" }
@@ -308,6 +339,7 @@ sap.ui.define([
                 .then(function (data) {
                     if (data.error) {
                         that._editModel.setProperty("/sacLoading", false);
+                        MessageToast.show("SAC error: " + data.error);
                         return;
                     }
                     if (data.name) {
@@ -367,11 +399,60 @@ sap.ui.define([
                             that._editModel.setProperty("/steps/" + oCur.idx + "/params", aParams);
                         }
                     }
+                    // Mirror the (possibly manually-entered) multiaction ID and override
+                    // status onto the persistent step object so they survive step-switching
+                    // and feed into _buildSaveOutput — mirrors the IBP template pattern.
+                    if (oCur) {
+                        var sDetected = oCur.step.dspDetectedSacMultiActionId || "";
+                        var bIsOverride = sSacId !== sDetected;
+                        that._editModel.setProperty("/steps/" + oCur.idx + "/sacMultiActionId", sSacId);
+                        that._editModel.setProperty("/steps/" + oCur.idx + "/sacMultiActionIdIsOverride", bIsOverride);
+                        that._editModel.setProperty("/sacMultiActionIdIsOverride", bIsOverride);
+                    }
                     that._editModel.setProperty("/sacLoading", false);
                 })
                 .catch(function () {
                     that._editModel.setProperty("/sacLoading", false);
                 });
+        },
+
+        onLoadSacMultiAction: function () {
+            if (this._editModel.getProperty("/viewOnly")) return;
+            var sId = (this._editModel.getProperty("/sacMultiActionIdInput")
+                || this._editModel.getProperty("/sacMultiActionId") || "").trim();
+            if (!sId) {
+                MessageToast.show("Enter a Multi Action ID first");
+                return;
+            }
+            var sCurrent = this._editModel.getProperty("/sacMultiActionId") || "";
+            if (sId !== sCurrent) {
+                // Switching to a different multi action: drop params tied to the old one so
+                // _loadSacParameters always (re-)derives them by launching the new ID and
+                // reading its validation error, rather than keeping stale values around.
+                var oCur = this._currentStep();
+                if (oCur) { this._editModel.setProperty("/steps/" + oCur.idx + "/params", []); }
+                this._editModel.setProperty("/selectedStepParams", []);
+            }
+            this._loadSacParameters(sId);
+        },
+
+        onClearSacMultiActionOverride: function () {
+            if (this._editModel.getProperty("/viewOnly")) return;
+            var oCur = this._currentStep();
+            if (!oCur) return;
+            var sDetected = oCur.step.dspDetectedSacMultiActionId || "";
+            this._editModel.setProperty("/steps/" + oCur.idx + "/sacMultiActionId", sDetected);
+            this._editModel.setProperty("/steps/" + oCur.idx + "/sacMultiActionIdIsOverride", false);
+            this._editModel.setProperty("/steps/" + oCur.idx + "/params", []);
+            this._editModel.setProperty("/sacMultiActionId", sDetected);
+            this._editModel.setProperty("/sacMultiActionIdInput", sDetected);
+            this._editModel.setProperty("/sacMultiActionIdIsOverride", false);
+            this._editModel.setProperty("/sacMultiActionName", "");
+            this._editModel.setProperty("/selectedStepParams", []);
+            this._editModel.setProperty("/sacParamSchema", []);
+            this._editModel.setProperty("/sacNoParameters", false);
+            this._editModel.setProperty("/sacParamSchemaUnavailable", false);
+            if (sDetected) { this._loadSacParameters(sDetected); }
         },
 
         onSacKeyValueHelp: function () {
@@ -497,14 +578,51 @@ sap.ui.define([
                     if (!allParams || !allParams.length) return;
                     bChanged = true;
 
-                    var dspParams = allParams.filter(function (p) { return !p.step; });
+                    // Restore manual IBP-template-name / SAC-multiaction overrides, if stashed,
+                    // giving them precedence over whatever DSP just auto-detected for this step.
+                    var oIbpOverrideRow = allParams.filter(function (p) {
+                        return p.key === "__ibpTemplateNameOverride";
+                    })[0];
+                    if (oIbpOverrideRow && oIbpOverrideRow.value) {
+                        step = Object.assign({}, step, {
+                            ibpTemplateName: oIbpOverrideRow.value,
+                            ibpTemplateNameIsOverride: true
+                        });
+                    }
+                    var oSacOverrideRow = allParams.filter(function (p) {
+                        return p.key === "__sacMultiActionIdOverride";
+                    })[0];
+                    if (oSacOverrideRow && oSacOverrideRow.value) {
+                        step = Object.assign({}, step, {
+                            sacMultiActionId: oSacOverrideRow.value,
+                            sacMultiActionIdIsOverride: true
+                        });
+                    }
+
+                    // Any "__"-prefixed key is internal bookkeeping (recomputed fresh at save
+                    // time, or restored above into dedicated step fields) — never show it as a
+                    // visible key/value row.
+                    var dspParams = allParams.filter(function (p) {
+                        return !p.step && !String(p.key || "").startsWith("__");
+                    });
                     // IBP sub-step params → stored in _restoredIbpParams, not in ibpSteps,
                     // so _doLoadIbpSteps still fetches all template steps from IBP.
+                    // Kept under two keys: "name::order" (precise — the same IBP operator
+                    // name can repeat at different positions in a template's sequence) and
+                    // a name-only bucket for older saves that predate stepOrder, used as a
+                    // fallback only when that name turns out to be unambiguous (see
+                    // _resolveRestoredParamsMap).
                     allParams.filter(function (p) { return p.step; }).forEach(function (p) {
-                        if (!that._restoredIbpParams[step.name]) that._restoredIbpParams[step.name] = {};
-                        var map = that._restoredIbpParams[step.name];
-                        if (!map[p.step]) map[p.step] = [];
-                        map[p.step].push({ key: p.key, value: p.value, active: p.active !== false, description: p.description || "", ibpParamName: p.ibpParamName || "", ibpVarNameParam: p.ibpVarNameParam || "", mandatory: !!p.mandatory });
+                        if (!that._restoredIbpParams[step.name]) {
+                            that._restoredIbpParams[step.name] = { byKey: {}, byNameOnly: {} };
+                        }
+                        var oBucket = that._restoredIbpParams[step.name];
+                        var oEntry = { key: p.key, value: p.value, active: p.active !== false, description: p.description || "", ibpParamName: p.ibpParamName || "", ibpVarNameParam: p.ibpVarNameParam || "", mandatory: !!p.mandatory };
+                        var sCompositeKey = p.step + "::" + (p.stepOrder != null ? p.stepOrder : "");
+                        if (!oBucket.byKey[sCompositeKey]) oBucket.byKey[sCompositeKey] = [];
+                        oBucket.byKey[sCompositeKey].push(oEntry);
+                        if (!oBucket.byNameOnly[p.step]) oBucket.byNameOnly[p.step] = [];
+                        oBucket.byNameOnly[p.step].push(oEntry);
                     });
                     aSteps[idx] = Object.assign({}, step, { params: dspParams });
                 });
@@ -538,14 +656,19 @@ sap.ui.define([
                 this._editModel.setProperty("/selectedStepId", oStep.id);
                 this._editModel.setProperty("/selectedStepName", oStep.order + ": " + sDisplayName);
                 this._editModel.setProperty("/selectedStepIsBlocked", true);
+                this._editModel.setProperty("/selectedStepIntegrationType", "");
                 this._editModel.setProperty("/selectedStepParams", []);
                 this._editModel.setProperty("/ibpTemplateName", "");
+                this._editModel.setProperty("/ibpTemplateNameInput", "");
+                this._editModel.setProperty("/ibpTemplateNameIsOverride", false);
                 this._editModel.setProperty("/ibpSteps", []);
                 this._editModel.setProperty("/ibpLoading", false);
                 this._editModel.setProperty("/selectedIbpStepIdx", null);
                 this._editModel.setProperty("/selectedIbpStepName", "");
                 this._editModel.setProperty("/selectedIbpStepParams", []);
                 this._editModel.setProperty("/sacMultiActionId", "");
+                this._editModel.setProperty("/sacMultiActionIdInput", "");
+                this._editModel.setProperty("/sacMultiActionIdIsOverride", false);
                 this._editModel.setProperty("/sacMultiActionName", "");
                 return;
             }
@@ -554,11 +677,14 @@ sap.ui.define([
             this._editModel.setProperty("/selectedStepId", oStep.id);
             this._editModel.setProperty("/selectedStepName", oStep.order + ": " + sDisplayName);
             this._editModel.setProperty("/selectedStepIsBlocked", false);
+            this._editModel.setProperty("/selectedStepIntegrationType", oStep.integrationType || "");
             this._editModel.setProperty("/selectedStepParams", (oStep.params || []).filter(function (p) {
                 return !String(p.key || "").startsWith("__");
             }));
             this._editModel.setProperty("/newParam", _newParam());
             this._editModel.setProperty("/ibpTemplateName", oStep.ibpTemplateName || "");
+            this._editModel.setProperty("/ibpTemplateNameInput", oStep.ibpTemplateName || "");
+            this._editModel.setProperty("/ibpTemplateNameIsOverride", !!oStep.ibpTemplateNameIsOverride);
             this._editModel.setProperty("/ibpSteps", aCachedIbpSteps);
             this._editModel.setProperty("/ibpLoading", false);
             this._editModel.setProperty("/selectedIbpStepIdx", null);
@@ -566,6 +692,8 @@ sap.ui.define([
             this._editModel.setProperty("/selectedIbpStepParams", []);
             this._editModel.setProperty("/newIbpParam", _newParam());
             this._editModel.setProperty("/sacMultiActionId", oStep.sacMultiActionId || "");
+            this._editModel.setProperty("/sacMultiActionIdInput", oStep.sacMultiActionId || "");
+            this._editModel.setProperty("/sacMultiActionIdIsOverride", !!oStep.sacMultiActionIdIsOverride);
             this._editModel.setProperty("/sacMultiActionName", oStep.sacMultiActionName || "");
 
             if (oStep.ibpTemplateName && !aCachedIbpSteps.length) {
@@ -647,9 +775,32 @@ sap.ui.define([
         },
 
         onLoadIbpSteps: function () {
-            var sTemplate = (this._editModel.getProperty("/ibpTemplateName") || "").trim();
-            if (!sTemplate) return;
+            if (this._editModel.getProperty("/viewOnly")) return;
+            var sTemplate = (this._editModel.getProperty("/ibpTemplateNameInput")
+                || this._editModel.getProperty("/ibpTemplateName") || "").trim();
+            if (!sTemplate) {
+                MessageToast.show("Enter an IBP template name first");
+                return;
+            }
             this._doLoadIbpSteps(sTemplate);
+        },
+
+        onClearIbpTemplateOverride: function () {
+            if (this._editModel.getProperty("/viewOnly")) return;
+            var oCur = this._currentStep();
+            if (!oCur) return;
+            var sDetected = oCur.step.dspDetectedIbpTemplateName || "";
+            this._editModel.setProperty("/steps/" + oCur.idx + "/ibpTemplateName", sDetected);
+            this._editModel.setProperty("/steps/" + oCur.idx + "/ibpTemplateNameIsOverride", false);
+            this._editModel.setProperty("/steps/" + oCur.idx + "/ibpSteps", []);
+            this._editModel.setProperty("/ibpTemplateName", sDetected);
+            this._editModel.setProperty("/ibpTemplateNameInput", sDetected);
+            this._editModel.setProperty("/ibpTemplateNameIsOverride", false);
+            this._editModel.setProperty("/ibpSteps", []);
+            this._editModel.setProperty("/selectedIbpStepIdx", null);
+            this._editModel.setProperty("/selectedIbpStepName", "");
+            this._editModel.setProperty("/selectedIbpStepParams", []);
+            if (sDetected) { this._doLoadIbpSteps(sDetected); }
         },
 
         _doLoadIbpSteps: function (sTemplate) {
@@ -660,21 +811,18 @@ sap.ui.define([
             var oCurPre = this._currentStep();
             var aPre = (oCurPre && this._editModel.getProperty("/steps/" + oCurPre.idx + "/ibpSteps"))
                 || this._editModel.getProperty("/ibpSteps") || [];
-            var oExistingByName = {};
-            aPre.forEach(function (s) { oExistingByName[s.name] = s.params || []; });
+            // Keyed by "name::order" — the same IBP operator name can appear more than
+            // once in a template's sequence, at different positions, each with its own
+            // distinct params (keying by name alone would merge them together).
+            var oExistingByKey = {};
+            aPre.forEach(function (s) { oExistingByKey[that._ibpStepKey(s)] = s.params || []; });
 
             this._editModel.setProperty("/ibpLoading", true);
             this._editModel.setProperty("/ibpSteps", []);
             var oCurForRestore = this._currentStep();
             var oRestoredForStep = oCurForRestore && this._restoredIbpParams
                 && this._restoredIbpParams[oCurForRestore.step.name];
-            if (oRestoredForStep) {
-                // Merge restored params into oExistingByName and consume the entry
-                Object.keys(oRestoredForStep).forEach(function (n) {
-                    if (!oExistingByName[n] || !oExistingByName[n].length) {
-                        oExistingByName[n] = oRestoredForStep[n];
-                    }
-                });
+            if (oRestoredForStep && oCurForRestore) {
                 delete this._restoredIbpParams[oCurForRestore.step.name];
             }
             fetch(that._getApiBase() + "jobs/ibp/template-steps", {
@@ -691,8 +839,19 @@ sap.ui.define([
                     // Store global vars ($G_*) at template level for the match code
                     var aTemplateGlobalVars = data.globalVars || [];
                     that._editModel.setProperty("/ibpGlobalVars", aTemplateGlobalVars);
+                    // Resolve restored (from saved parametersJson) params now that the
+                    // fetched steps' names/order are known, so the name-only legacy
+                    // fallback can safely apply only when unambiguous.
+                    if (oRestoredForStep) {
+                        var oResolved = that._resolveRestoredParamsMap(oRestoredForStep, data.steps);
+                        Object.keys(oResolved).forEach(function (k) {
+                            if (!oExistingByKey[k] || !oExistingByKey[k].length) {
+                                oExistingByKey[k] = oResolved[k];
+                            }
+                        });
+                    }
                     var aSteps = (Array.isArray(data.steps) ? data.steps : []).map(function (s) {
-                        var aExisting = oExistingByName[s.name] || [];
+                        var aExisting = oExistingByKey[that._ibpStepKey(s)] || [];
                         var aParams = aExisting;
                         // Pre-populate only from step-level globalVars (extracted per-step
                         // from IBP seq_param_val) — NOT from template-level to avoid adding
@@ -715,10 +874,22 @@ sap.ui.define([
                         return Object.assign({}, s, { params: aParams });
                     });
                     that._editModel.setProperty("/ibpSteps", aSteps);
+                    // Mirror the loaded template name so CASE 2 renders even when reached
+                    // via CASE 1's manual "Load" entry point (where /ibpTemplateName was empty).
+                    that._editModel.setProperty("/ibpTemplateName", sTemplate);
+                    that._editModel.setProperty("/ibpTemplateNameInput", sTemplate);
                     // Persist in the current DSP step so switching steps doesn't lose params
                     var oCur = that._currentStep();
                     if (oCur) {
                         that._editModel.setProperty("/steps/" + oCur.idx + "/ibpSteps", aSteps);
+                        // Diff against the DSP-detected baseline to determine override status,
+                        // and mirror both onto the persistent step object so they survive
+                        // step-switching and feed into _buildSaveOutput.
+                        var sDetected = oCur.step.dspDetectedIbpTemplateName || "";
+                        var bIsOverride = sTemplate !== sDetected;
+                        that._editModel.setProperty("/steps/" + oCur.idx + "/ibpTemplateName", sTemplate);
+                        that._editModel.setProperty("/steps/" + oCur.idx + "/ibpTemplateNameIsOverride", bIsOverride);
+                        that._editModel.setProperty("/ibpTemplateNameIsOverride", bIsOverride);
                     }
                 })
                 .catch(function (e) {
@@ -801,6 +972,35 @@ sap.ui.define([
                     }
                 })
                 .catch(function () {});
+        },
+
+        // The same IBP operator name (e.g. an /IBP/HCI_DI step reused twice) can appear
+        // more than once in a template's sequence — "order" (the step's 1-based position,
+        // stable across repeated fetches of the same unchanged template) disambiguates them.
+        _ibpStepKey: function (s) {
+            return (s && s.name || "") + "::" + (s && s.order != null ? s.order : "");
+        },
+
+        // Resolves a saved { byKey, byNameOnly } restore bucket (see
+        // _applyParamsJsonToSteps) into a flat "name::order" -> params map, given the
+        // freshly-fetched IBP template steps. Falls back to the name-only bucket (older
+        // saves made before stepOrder existed) only when that name is unambiguous in the
+        // current fetch — never guesses when duplicates are present.
+        _resolveRestoredParamsMap: function (oRestored, aFetchedSteps) {
+            if (!oRestored) return {};
+            var that = this;
+            var oNameCounts = {};
+            (aFetchedSteps || []).forEach(function (s) {
+                oNameCounts[s.name] = (oNameCounts[s.name] || 0) + 1;
+            });
+            var oOut = Object.assign({}, oRestored.byKey);
+            (aFetchedSteps || []).forEach(function (s) {
+                var sKey = that._ibpStepKey(s);
+                if ((!oOut[sKey] || !oOut[sKey].length) && oNameCounts[s.name] === 1 && oRestored.byNameOnly[s.name]) {
+                    oOut[sKey] = oRestored.byNameOnly[s.name];
+                }
+            });
+            return oOut;
         },
 
         _currentIbpStep: function () {
@@ -1017,7 +1217,9 @@ sap.ui.define([
                 var allParams = (s.params || []).filter(function (p) { return p.active !== false; });
                 (s.ibpSteps || []).forEach(function (is) {
                     (is.params || []).filter(function (p) { return p.active !== false; }).forEach(function (p) {
-                        allParams.push(Object.assign({}, p, { step: is.name }));
+                        // stepOrder disambiguates IBP operator names that repeat at
+                        // different positions in the same template's sequence.
+                        allParams.push(Object.assign({}, p, { step: is.name, stepOrder: is.order }));
                     });
                 });
                 allParams = allParams.map(function (p) {
@@ -1032,6 +1234,22 @@ sap.ui.define([
                     }
                     return p;
                 });
+                // Stash manual IBP-template-name / SAC-multiaction overrides so they survive
+                // reload — mirrors the existing __sacMultiActionId sentinel pattern.
+                if (s.ibpTemplateNameIsOverride && s.ibpTemplateName) {
+                    allParams = allParams.concat([{
+                        key: "__ibpTemplateNameOverride",
+                        value: s.ibpTemplateName,
+                        active: true
+                    }]);
+                }
+                if (s.sacMultiActionIdIsOverride && s.sacMultiActionId) {
+                    allParams = allParams.concat([{
+                        key: "__sacMultiActionIdOverride",
+                        value: s.sacMultiActionId,
+                        active: true
+                    }]);
+                }
                 if (allParams.length) {
                     var aToSave = s.sacMultiActionId
                         ? allParams.concat([{ key: "__sacMultiActionId", value: s.sacMultiActionId, active: true }])

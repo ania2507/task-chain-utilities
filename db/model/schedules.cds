@@ -38,6 +38,7 @@ entity ScheduleEntry : cuid, managed {
   timezone    : String(50)   default 'Europe/Rome' @title: 'Timezone';
   active      : Boolean      default true @title: 'Active';
   parameters  : LargeString  @title: 'Parameters JSON';
+  details     : LargeString  @title: 'Details'; // free-text notes, e.g. filters applied
   source      : String(20)   default 'calendar' @title: 'Source'; // 'calendar' | 'onDemand'
   runs        : Association to many ScheduleRun on runs.scheduleEntry = $self;
 }

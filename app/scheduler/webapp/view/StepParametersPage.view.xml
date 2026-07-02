@@ -66,10 +66,18 @@
                                        type="Warning" showIcon="true" class="sapUiSmallMargin"
                                        visible="{= !!${edit>/selectedStepId} &amp;&amp; !!${edit>/selectedStepIsBlocked} }"/>
 
-                        <!-- CASE 1: Regular DSP step — no IBP/SAC template detected -->
+                        <!-- CASE 1: API step not yet associated with an IBP template or SAC multi
+                             action — parameters cannot be added until one is loaded (that then
+                             switches the view to CASE 2 or CASE 3's rich param editor). Which
+                             panel(s) show is driven by the step's own "integration": "ibp"|"sac"
+                             field read from its DSP payload; both show if that couldn't be read.
+                             Any params saved before this rule existed are still shown/removable. -->
                         <VBox visible="{= !!${edit>/selectedStepId} &amp;&amp; !${edit>/selectedStepIsBlocked} &amp;&amp; !${edit>/ibpTemplateName} &amp;&amp; !${edit>/sacMultiActionId} }">
-                            <Title text="Configured parameters:" level="H5" class="sapUiSmallMarginBottom"/>
-                            <Table items="{edit>/selectedStepParams}" noDataText="No parameters yet">
+                            <Title text="Configured parameters:" level="H5" class="sapUiSmallMarginBottom"
+                                   visible="{= ${edit>/selectedStepParams}.length > 0 }"/>
+                            <Table items="{edit>/selectedStepParams}" noDataText="No parameters yet"
+                                   visible="{= ${edit>/selectedStepParams}.length > 0 }"
+                                   class="sapUiSmallMarginBottom">
                                 <columns>
                                     <Column><Text text="Param Key"/></Column>
                                     <Column><Text text="Param Value"/></Column>
@@ -89,27 +97,37 @@
                                     </cells>
                                 </ColumnListItem>
                             </Table>
-                            <Panel headerText="Add New Parameter" class="sapUiSmallMarginTop"
-                                   expandable="true" expanded="true"
-                                   visible="{= !${edit>/viewOnly} }">
+                            <MessageStrip text="{= ${edit>/selectedStepIntegrationType} === 'ibp' ? 'Associate this step with an IBP job template before parameters can be added.' : ${edit>/selectedStepIntegrationType} === 'sac' ? 'Associate this step with a SAC multi action before parameters can be added.' : 'Associate this step with an IBP job template or a SAC multi action before parameters can be added.' }"
+                                          type="Information" showIcon="true" class="sapUiSmallMarginBottom"
+                                          visible="{= !${edit>/viewOnly} }"/>
+                            <Panel headerText="IBP Job Template" class="sapUiSmallMarginBottom"
+                                   visible="{= !${edit>/viewOnly} &amp;&amp; ${edit>/selectedStepIntegrationType} !== 'sac' }">
                                 <content>
                                     <VBox class="sapUiSmallMargin">
-                                        <HBox alignItems="Center" class="sapUiTinyMarginBottom">
-                                            <Label text="Param Key:" width="9rem"/>
-                                            <Input value="{edit>/newParam/key}" width="20rem"/>
+                                        <HBox alignItems="Center">
+                                            <Input value="{edit>/ibpTemplateNameInput}" width="20rem"
+                                                   placeholder="IBP job template name"
+                                                   enabled="{= !${edit>/ibpLoading} }"
+                                                   class="sapUiTinyMarginEnd"/>
+                                            <Button text="{= ${edit>/ibpLoading} ? 'Loading…' : 'Load' }"
+                                                    type="Emphasized" press=".onLoadIbpSteps"
+                                                    busy="{edit>/ibpLoading}" enabled="{= !${edit>/ibpLoading} }"/>
                                         </HBox>
-                                        <HBox alignItems="Center" class="sapUiTinyMarginBottom">
-                                            <Label text="Param Value:" width="9rem"/>
-                                            <Input value="{edit>/newParam/value}" width="20rem"/>
-                                        </HBox>
-                                        <HBox alignItems="Center" class="sapUiTinyMarginBottom">
-                                            <Label text="Active:" width="9rem"/>
-                                            <CheckBox selected="{edit>/newParam/active}"/>
-                                        </HBox>
-                                        <HBox class="sapUiSmallMarginTop">
-                                            <Button text="Confirm" type="Accept" icon="sap-icon://accept"
-                                                    press=".onAddParam" class="sapUiTinyMarginEnd"/>
-                                            <Button text="Cancel" press=".onResetNewParam"/>
+                                    </VBox>
+                                </content>
+                            </Panel>
+                            <Panel headerText="SAC Multi Action" class="sapUiSmallMarginBottom"
+                                   visible="{= !${edit>/viewOnly} &amp;&amp; ${edit>/selectedStepIntegrationType} !== 'ibp' }">
+                                <content>
+                                    <VBox class="sapUiSmallMargin">
+                                        <HBox alignItems="Center">
+                                            <Input value="{edit>/sacMultiActionIdInput}" width="20rem"
+                                                   placeholder="SAC multi action ID"
+                                                   enabled="{= !${edit>/sacLoading} }"
+                                                   class="sapUiTinyMarginEnd"/>
+                                            <Button text="{= ${edit>/sacLoading} ? 'Loading…' : 'Load' }"
+                                                    type="Emphasized" press=".onLoadSacMultiAction"
+                                                    busy="{edit>/sacLoading}" enabled="{= !${edit>/sacLoading} }"/>
                                         </HBox>
                                     </VBox>
                                 </content>
@@ -121,9 +139,19 @@
                               busy="{edit>/ibpLoading}">
                             <HBox alignItems="Center" class="sapUiSmallMargin">
                                 <Label text="Template:" width="7rem"/>
-                                <Text text="{edit>/ibpTemplateName}" class="sapUiTinyMarginEnd"/>
+                                <Input value="{edit>/ibpTemplateNameInput}" width="18rem"
+                                       class="sapUiTinyMarginEnd"
+                                       visible="{= !${edit>/viewOnly} }"/>
+                                <Text text="{edit>/ibpTemplateName}" class="sapUiTinyMarginEnd"
+                                      visible="{= !!${edit>/viewOnly} }"/>
                                 <Button icon="sap-icon://refresh" type="Transparent"
-                                        press=".onLoadIbpSteps" tooltip="Reload steps"
+                                        press=".onLoadIbpSteps" tooltip="Reload steps with this template name"
+                                        visible="{= !${edit>/viewOnly} }"
+                                        busy="{edit>/ibpLoading}" enabled="{= !${edit>/ibpLoading} }"
+                                        class="sapUiTinyMarginBegin"/>
+                                <Button icon="sap-icon://clear-all" type="Transparent"
+                                        press=".onClearIbpTemplateOverride" tooltip="Clear override and use DSP auto-detection"
+                                        visible="{= !${edit>/viewOnly} &amp;&amp; !!${edit>/ibpTemplateNameIsOverride} }"
                                         class="sapUiTinyMarginBegin"/>
                             </HBox>
                             <l:Splitter height="480px">
@@ -198,12 +226,29 @@
                         </VBox>
 
                         <!-- CASE 3: API step → SAC multi action detected → configure multi action parameters -->
-                        <VBox visible="{= !!${edit>/selectedStepId} &amp;&amp; !${edit>/selectedStepIsBlocked} &amp;&amp; !!${edit>/sacMultiActionId} }">
+                        <VBox visible="{= !!${edit>/selectedStepId} &amp;&amp; !${edit>/selectedStepIsBlocked} &amp;&amp; !!${edit>/sacMultiActionId} }"
+                              busy="{edit>/sacLoading}">
                             <HBox alignItems="Center" class="sapUiSmallMargin">
                                 <Label text="Multi Action:" width="7rem"/>
+                                <Input value="{edit>/sacMultiActionIdInput}" width="18rem"
+                                       class="sapUiTinyMarginEnd"
+                                       visible="{= !${edit>/viewOnly} }"/>
                                 <Text text="{= ${edit>/sacMultiActionName} ? ${edit>/sacMultiActionName} + ' (' + ${edit>/sacMultiActionId} + ')' : ${edit>/sacMultiActionId} }"
-                                      class="sapUiTinyMarginEnd"/>
+                                      class="sapUiTinyMarginEnd"
+                                      visible="{= !!${edit>/viewOnly} }"/>
+                                <Button icon="sap-icon://refresh" type="Transparent"
+                                        press=".onLoadSacMultiAction" tooltip="Reload parameters for this Multi Action ID"
+                                        visible="{= !${edit>/viewOnly} }"
+                                        busy="{edit>/sacLoading}" enabled="{= !${edit>/sacLoading} }"
+                                        class="sapUiTinyMarginBegin"/>
+                                <Button icon="sap-icon://clear-all" type="Transparent"
+                                        press=".onClearSacMultiActionOverride" tooltip="Clear override and use DSP auto-detection"
+                                        visible="{= !${edit>/viewOnly} &amp;&amp; !!${edit>/sacMultiActionIdIsOverride} }"
+                                        class="sapUiTinyMarginBegin"/>
                             </HBox>
+                            <Text text="{= ${edit>/sacMultiActionName} ? 'Resolved name: ' + ${edit>/sacMultiActionName} : '' }"
+                                  visible="{= !${edit>/viewOnly} &amp;&amp; !!${edit>/sacMultiActionName} }"
+                                  class="sapUiTinyMarginBottom sapUiSmallMarginBegin sapUiSmallMarginBottom"/>
                             <HBox visible="{edit>/sacLoading}" alignItems="Center" class="sapUiSmallMarginBeginEnd sapUiSmallMarginBottom">
                                 <core:Icon src="sap-icon://synchronize" class="sapUiTinyMarginEnd"/>
                                 <Text text="Loading parameters from SAC…"/>

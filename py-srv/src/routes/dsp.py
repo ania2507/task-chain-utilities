@@ -69,6 +69,56 @@ def _get_taskchain_section(parsed: dict, taskchain: str) -> dict | None:
     return None
 
 
+_IBP_TEMPLATE_KEYS = {
+    "templateName", "template_name", "jobTemplateName", "job_template_name",
+    "ibpTemplateName", "ibpTemplate", "IBP_TEMPLATE", "JOB_TEMPLATE_NAME",
+    "jobTemplate", "templateId", "job_template", "IBP_JOB_TEMPLATE",
+    "ibpJobTemplateName", "procTemplateName", "applicationJobTemplate",
+    "JobTemplateName", "TEMPLATE_NAME", "TEMPLATE_ID", "JOB_TEMPLATE",
+}
+
+
+def _has_template_name_key(md: dict) -> bool:
+    """True if a template-name-like key exists anywhere in *md*, regardless of
+    whether its value is populated (DSP represents an unset field as an empty
+    list, e.g. ``"template_name": []``, not as a missing key).
+
+    Used to distinguish "this step's current DSP config explicitly has no
+    template configured" (authoritative — stop looking) from "this node
+    shape doesn't carry template info at all" (fall back to what a past
+    execution's logs recorded, as a last resort).
+    """
+    if not isinstance(md, dict):
+        return False
+
+    def _deep_search(obj, depth=0):
+        if depth > 8 or not isinstance(obj, dict):
+            return False
+        for k, v in obj.items():
+            if isinstance(k, str) and k in _IBP_TEMPLATE_KEYS:
+                return True
+            if isinstance(v, str):
+                stripped = v.strip()
+                if stripped.startswith("{"):
+                    try:
+                        parsed = json.loads(stripped)
+                        if isinstance(parsed, dict) and _deep_search(parsed, depth + 1):
+                            return True
+                    except Exception:
+                        pass
+        for k, v in obj.items():
+            if isinstance(v, dict):
+                if _deep_search(v, depth + 1):
+                    return True
+            elif isinstance(v, list):
+                for item in v:
+                    if isinstance(item, dict) and _deep_search(item, depth + 1):
+                        return True
+        return False
+
+    return _deep_search(md)
+
+
 def _extract_ibp_template_from_metadata(md: dict) -> str | None:
     """Try to extract an IBP job template name from a DWC deployment-metadata dict.
 
@@ -80,13 +130,7 @@ def _extract_ibp_template_from_metadata(md: dict) -> str | None:
     if not isinstance(md, dict):
         return None
 
-    _TEMPLATE_KEYS = {
-        "templateName", "template_name", "jobTemplateName", "job_template_name",
-        "ibpTemplateName", "ibpTemplate", "IBP_TEMPLATE", "JOB_TEMPLATE_NAME",
-        "jobTemplate", "templateId", "job_template", "IBP_JOB_TEMPLATE",
-        "ibpJobTemplateName", "procTemplateName", "applicationJobTemplate",
-        "JobTemplateName", "TEMPLATE_NAME", "TEMPLATE_ID", "JOB_TEMPLATE",
-    }
+    _TEMPLATE_KEYS = _IBP_TEMPLATE_KEYS
 
     # OData key predicate: JobTemplates('NAME') or JobTemplate(TemplateName='NAME')
     _URL_PATTERNS = [
@@ -169,6 +213,50 @@ def _extract_sac_multiaction_from_metadata(md: dict) -> str | None:
         for k, v in obj.items():
             if isinstance(k, str) and k in _KEYS and isinstance(v, str) and v.strip():
                 return v.strip()
+            if isinstance(v, str):
+                stripped = v.strip()
+                if stripped.startswith("{"):
+                    try:
+                        parsed = json.loads(stripped)
+                        if isinstance(parsed, dict):
+                            result = _deep_search(parsed, depth + 1)
+                            if result:
+                                return result
+                    except Exception:
+                        pass
+        for k, v in obj.items():
+            if isinstance(v, dict):
+                result = _deep_search(v, depth + 1)
+                if result:
+                    return result
+            elif isinstance(v, list):
+                for item in v:
+                    if isinstance(item, dict):
+                        result = _deep_search(item, depth + 1)
+                        if result:
+                            return result
+        return None
+
+    return _deep_search(md)
+
+
+def _extract_integration_type_from_metadata(md: dict) -> str | None:
+    """Find the explicit "integration": "ibp"|"sac" field an API-trigger step's own
+    request body declares (see the example docstrings above) — a reliable signal
+    for which association panel to show, instead of guessing from best-effort
+    template/multiaction detection.
+    """
+    if not isinstance(md, dict):
+        return None
+
+    def _deep_search(obj, depth=0):
+        if depth > 8 or not isinstance(obj, dict):
+            return None
+        for k, v in obj.items():
+            if isinstance(k, str) and k.lower() == "integration" and isinstance(v, str):
+                val = v.strip().lower()
+                if val in ("ibp", "sac"):
+                    return val
             if isinstance(v, str):
                 stripped = v.strip()
                 if stripped.startswith("{"):
@@ -554,6 +642,82 @@ def debug_step_metadata():
         except Exception as e:
             out["run_dag_nodes_error"] = str(e)
 
+        # 4. Trace exactly what the real taskchain-dag route would compute for
+        # ibpTemplateName on this node, including which source it came from.
+        try:
+            trace: dict = {}
+            dag_node = (out.get("dag_nodes") or [None])[0]
+            run_node = (out.get("run_dag_nodes") or [None])[0]
+
+            for label, n in (("dag", dag_node), ("run_dag", run_node)):
+                if not n:
+                    trace[label] = None
+                    continue
+                t_id = n.get("taskIdentifier") or {}
+                trace[label] = {
+                    "extract_from_task_id": _extract_ibp_template_from_metadata(t_id),
+                    "extract_from_node": _extract_ibp_template_from_metadata(n),
+                    "has_key_task_id": _has_template_name_key(t_id),
+                    "has_key_node": _has_template_name_key(n),
+                }
+
+            # Also resolve what the log-fallback would find for this object's
+            # taskLogId in the latest run (same query the real route runs).
+            space_id = request.args.get("spaceId")
+            log_trace: dict = {"taskLogId": None, "viewResponse_found": None, "resolved_template": None}
+            try:
+                if space_id:
+                    nl_rows = db.query(
+                        'SELECT n."TASK_LOG_ID" as "taskLogId" '
+                        'FROM "ORCHESTRATION"."3VR_DWC_TASK_CHAIN_RUN_NODES_01" n '
+                        'JOIN "ORCHESTRATION"."3VR_DWC_TASK_CHAIN_RUNS_01" r ON n."CHAIN_TASK_LOG_ID" = r."CHAIN_TASK_LOG_ID" '
+                        'WHERE r."SPACE_ID" = ? AND r."TECHNICAL_NAME" = ? AND n."OBJECT_ID" = ? '
+                        'ORDER BY r."CHAIN_TASK_LOG_ID" DESC LIMIT 1',
+                        (space_id, taskchain, object_id)
+                    )
+                else:
+                    nl_rows = db.query(
+                        'SELECT n."TASK_LOG_ID" as "taskLogId" '
+                        'FROM "ORCHESTRATION"."3VR_DWC_TASK_CHAIN_RUN_NODES_01" n '
+                        'JOIN "ORCHESTRATION"."3VR_DWC_TASK_CHAIN_RUNS_01" r ON n."CHAIN_TASK_LOG_ID" = r."CHAIN_TASK_LOG_ID" '
+                        'WHERE r."TECHNICAL_NAME" = ? AND n."OBJECT_ID" = ? '
+                        'ORDER BY r."CHAIN_TASK_LOG_ID" DESC LIMIT 1',
+                        (taskchain, object_id)
+                    )
+                if nl_rows:
+                    tid = nl_rows[0].get("taskLogId")
+                    log_trace["taskLogId"] = tid
+                    if tid:
+                        msg_rows = db.query(
+                            'SELECT "DETAILS" FROM "ORCHESTRATION"."3VR_DWC_TASK_LOG_MESSAGES_01" '
+                            'WHERE "TASK_LOG_ID" = ? AND "MESSAGE_BUNDLE_KEY" = \'viewResponse\'',
+                            (tid,)
+                        )
+                        log_trace["viewResponse_found"] = len(msg_rows or [])
+                        for mr in msg_rows or []:
+                            details_raw = mr.get("DETAILS") or mr.get("details")
+                            if not details_raw:
+                                continue
+                            try:
+                                details = _json.loads(details_raw) if isinstance(details_raw, str) else details_raw
+                                log_trace.setdefault("raw_details", []).append(details)
+                                payload_raw = details.get("payload")
+                                if payload_raw:
+                                    pl = _json.loads(payload_raw) if isinstance(payload_raw, str) else payload_raw
+                                    inner = pl.get("details") or {}
+                                    tpl = inner.get("template_name") or inner.get("job_text")
+                                    if tpl:
+                                        log_trace["resolved_template"] = tpl
+                            except Exception as _pe:
+                                log_trace.setdefault("parse_errors", []).append(str(_pe))
+            except Exception as e:
+                log_trace["error"] = str(e)
+
+            trace["logs"] = log_trace
+            out["ibp_template_trace"] = trace
+        except Exception as e:
+            out["ibp_template_trace_error"] = str(e)
+
     return jsonify(out), 200
 
 
@@ -902,14 +1066,15 @@ def get_taskchain_dag():
                                             lbl = obj.get("@EndUserText.label") or obj.get("label")
                                             if lbl:
                                                 break
-                        if lbl:
-                            business_name_map[nm] = lbl
+                        # Rows are ordered oldest→newest per object NAME; always overwrite
+                        # (even with a falsy/None value) so the most recent DSP redeploy wins
+                        # instead of a stale value from an older deployment leaking through
+                        # when the object's payload was changed to no longer match.
+                        business_name_map[nm] = lbl
                         tpl = _extract_ibp_template_from_metadata(md)
-                        if tpl:
-                            ibp_template_map[nm] = tpl
+                        ibp_template_map[nm] = tpl
                         sac_ma = _extract_sac_multiaction_from_metadata(md)
-                        if sac_ma:
-                            sac_multiaction_map[nm] = sac_ma
+                        sac_multiaction_map[nm] = sac_ma
                 except Exception:
                     pass
 
@@ -938,6 +1103,19 @@ def get_taskchain_dag():
                     or _extract_sac_multiaction_from_metadata(node)
                     or (sac_multiaction_map.get(obj_id) if obj_id else None)
                 )
+                # The step's own request body declares "integration": "ibp"|"sac"
+                # explicitly — trust that over the best-effort template/multiaction
+                # detectors (which can false-positive) whenever it's available.
+                integration_type = (
+                    _extract_integration_type_from_metadata(task_id)
+                    or _extract_integration_type_from_metadata(node)
+                )
+                if integration_type == "sac":
+                    ibp_tpl = None
+                elif integration_type == "ibp":
+                    sac_ma_id = None
+                elif sac_ma_id:
+                    ibp_tpl = None
                 nodes.append({
                     "id": node.get("id"),
                     "type": node.get("type", "TASK"),
@@ -952,6 +1130,7 @@ def get_taskchain_dag():
                     "taskLogId": None,
                     "ibpTemplateName": ibp_tpl,
                     "sacMultiActionId": sac_ma_id,
+                    "integrationType": integration_type,
                     "objectType": object_type_map.get(obj_id) if obj_id else None,
                 })
             for link in raw_links:
@@ -1112,10 +1291,20 @@ def get_taskchain_dag():
                 for n in raw_nodes
                 if (n.get("taskIdentifier") or {}).get("objectId")
             })
+            # Node (current deployment config) per objectId, used below to gate the
+            # historical-log-based fallback: if the current config explicitly carries
+            # a template-name concept (even empty), that's authoritative and no
+            # historical guess should be substituted for it.
+            node_by_obj_id = {
+                (n.get("taskIdentifier") or {}).get("objectId"): n
+                for n in raw_nodes
+                if (n.get("taskIdentifier") or {}).get("objectId")
+            }
             business_name_map = {}
             ibp_template_map = {}
             sac_multiaction_map = {}
             object_type_map = {}
+            has_current_template_key = {}
             if object_ids:
                 try:
                     placeholders = ",".join(["?"] * len(object_ids))
@@ -1151,22 +1340,40 @@ def get_taskchain_dag():
                                             lbl = obj.get("@EndUserText.label") or obj.get("label")
                                             if lbl:
                                                 break
-                        if lbl:
-                            business_name_map[nm] = lbl
+                        # Rows are ordered oldest→newest per object NAME; always overwrite
+                        # (even with a falsy/None value) so the most recent DSP redeploy wins
+                        # instead of a stale value from an older deployment leaking through
+                        # when the object's payload was changed to no longer match.
+                        business_name_map[nm] = lbl
                         tpl = _extract_ibp_template_from_metadata(md)
-                        if tpl:
-                            ibp_template_map[nm] = tpl
+                        ibp_template_map[nm] = tpl
+                        if _has_template_name_key(md):
+                            has_current_template_key[nm] = True
                         sac_ma = _extract_sac_multiaction_from_metadata(md)
-                        if sac_ma:
-                            sac_multiaction_map[nm] = sac_ma
+                        sac_multiaction_map[nm] = sac_ma
                 except Exception as _e:  # metadata view may be missing — fall back silently
                     business_name_map = {}
 
+            # A node's own current DAG definition (task_id/node) also carries an
+            # explicit template-name concept when present — same authority as the
+            # object's own metadata row above.
+            for _oid in object_ids:
+                _n = node_by_obj_id.get(_oid)
+                if _n and (
+                    _has_template_name_key(_n.get("taskIdentifier") or {})
+                    or _has_template_name_key(_n)
+                ):
+                    has_current_template_key[_oid] = True
+
             # Historical fallback: for objectIds still missing from ibp_template_map,
-            # search previous COMPLETED runs' viewResponse logs.
-            # This handles cases where the latest run failed and the error response
-            # didn't carry the template_name (so the current-run log scan missed it).
-            missing_obj_ids = [oid for oid in object_ids if oid and not ibp_template_map.get(oid)]
+            # search previous COMPLETED runs' viewResponse logs. Skipped for any
+            # objectId whose current config explicitly has a template-name field
+            # (even cleared to empty) — that's authoritative and must not be
+            # overridden by a stale value from an older, unrelated run.
+            missing_obj_ids = [
+                oid for oid in object_ids
+                if oid and not ibp_template_map.get(oid) and not has_current_template_key.get(oid)
+            ]
             if missing_obj_ids:
                 try:
                     ph_miss = ",".join(["?"] * len(missing_obj_ids))
@@ -1231,13 +1438,33 @@ def get_taskchain_dag():
                     _extract_ibp_template_from_metadata(task_id)
                     or _extract_ibp_template_from_metadata(node)
                     or (ibp_template_map.get(obj_id) if obj_id else None)
-                    or ibp_template_from_logs.get(exec_info.get("taskLogId"))
                 )
+                # Only fall back to what a past execution's logs recorded when the
+                # current config doesn't even carry a template-name concept for this
+                # node — if the field is explicitly present (even cleared to empty),
+                # that's authoritative and must not be overridden by stale run history.
+                if not ibp_tpl and not (
+                    _has_template_name_key(task_id) or _has_template_name_key(node)
+                ):
+                    ibp_tpl = ibp_template_from_logs.get(exec_info.get("taskLogId"))
                 sac_ma_id = (
                     _extract_sac_multiaction_from_metadata(task_id)
                     or _extract_sac_multiaction_from_metadata(node)
                     or (sac_multiaction_map.get(obj_id) if obj_id else None)
                 )
+                # The step's own request body declares "integration": "ibp"|"sac"
+                # explicitly — trust that over the best-effort template/multiaction
+                # detectors (which can false-positive) whenever it's available.
+                integration_type = (
+                    _extract_integration_type_from_metadata(task_id)
+                    or _extract_integration_type_from_metadata(node)
+                )
+                if integration_type == "sac":
+                    ibp_tpl = None
+                elif integration_type == "ibp":
+                    sac_ma_id = None
+                elif sac_ma_id:
+                    ibp_tpl = None
 
                 # Best-effort extraction of a human-readable label/description
                 label = (
@@ -1269,6 +1496,7 @@ def get_taskchain_dag():
                     "taskLogId": exec_info.get("taskLogId"),
                     "ibpTemplateName": ibp_tpl,
                     "sacMultiActionId": sac_ma_id,
+                    "integrationType": integration_type,
                     "objectType": object_type_map.get(obj_id) if obj_id else None,
                 })
             
@@ -1623,14 +1851,15 @@ def get_taskchain_steps():
                                             break
                     if not lbl:
                         logger.warning("[DIAG] businessName not found for '%s'. Top-level keys: %s", nm, list(md.keys())[:15])
-                    if lbl:
-                        bmap[nm] = lbl
+                    # Rows are ordered oldest→newest per object NAME; always overwrite
+                    # (even with a falsy/None value) so the most recent DSP redeploy wins
+                    # instead of a stale value from an older deployment leaking through
+                    # when the object's payload was changed to no longer match.
+                    bmap[nm] = lbl
                     tpl = _extract_ibp_template_from_metadata(md)
-                    if tpl:
-                        ibp_tpl_map[nm] = tpl
+                    ibp_tpl_map[nm] = tpl
                     sac_ma = _extract_sac_multiaction_from_metadata(md)
-                    if sac_ma:
-                        sac_ma_map[nm] = sac_ma
+                    sac_ma_map[nm] = sac_ma
             except Exception:
                 pass
             return bmap, ibp_tpl_map, sac_ma_map, otype_map
@@ -1773,6 +2002,19 @@ def get_taskchain_steps():
                 or _extract_sac_multiaction_from_metadata(node)
                 or sac_ma_map.get(obj_id)
             )
+            # The step's own request body declares "integration": "ibp"|"sac"
+            # explicitly — trust that over the best-effort template/multiaction
+            # detectors (which can false-positive) whenever it's available.
+            integration_type = (
+                _extract_integration_type_from_metadata(task_id)
+                or _extract_integration_type_from_metadata(node)
+            )
+            if integration_type == "sac":
+                ibp_tpl = None
+            elif integration_type == "ibp":
+                sac_ma_id = None
+            elif sac_ma_id:
+                ibp_tpl = None
             steps.append({
                 "id":              node.get("id") or obj_id,
                 "order":           i + 1,
@@ -1781,6 +2023,7 @@ def get_taskchain_steps():
                 "businessName":    bmap.get(obj_id) or node_label or "",
                 "ibpTemplateName": ibp_tpl or "",
                 "sacMultiActionId": sac_ma_id or "",
+                "integrationType": integration_type or "",
                 "objectType":      otype_map.get(obj_id) or "",
             })
 

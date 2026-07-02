@@ -152,44 +152,100 @@ sap.ui.define([
         // ------------------------------------------------------------
         // Template / upload
         // ------------------------------------------------------------
+        // The XLSX (SheetJS) library is vendored under this component's own
+        // "thirdparty" folder and normally loaded via a <script> tag in this
+        // app's own index.html. When the scheduler component is embedded inside
+        // a different shell (e.g. the "home" app), that shell's own index.html
+        // is what's bootstrapped instead, so window.XLSX is never loaded —
+        // fetch it dynamically here, resolved against this component's own
+        // resource root so it works regardless of which shell hosts it.
+        _ensureXlsxLoaded: function () {
+            if (window.XLSX && window.XLSX.utils) return Promise.resolve();
+            if (this._pXlsxLoad) return this._pXlsxLoad;
+            var sUrl = sap.ui.require.toUrl("scheduler/thirdparty/xlsx.full.min.js");
+            var that = this;
+            this._pXlsxLoad = new Promise(function (resolve, reject) {
+                // SheetJS's UMD wrapper checks for a global AMD-style `define` and,
+                // if found, registers itself as a lazy AMD module instead of
+                // populating window.XLSX — which leaves window.XLSX as an empty
+                // shell (no .utils) since nothing ever requires that module. UI5's
+                // core loader always exposes such a `define` once bootstrapped, so
+                // hide it while this script runs to force the plain "assign to
+                // window" fallback path in xlsx's UMD footer instead.
+                var savedDefine = window.define;
+                window.define = undefined;
+                var script = document.createElement("script");
+                script.src = sUrl;
+                script.onload = function () {
+                    window.define = savedDefine;
+                    if (window.XLSX && window.XLSX.utils) {
+                        resolve();
+                    } else {
+                        reject(new Error("XLSX script loaded but window.XLSX.utils is missing"));
+                    }
+                };
+                script.onerror = function () {
+                    window.define = savedDefine;
+                    reject(new Error("Failed to load XLSX library from " + sUrl));
+                };
+                document.head.appendChild(script);
+            }).catch(function (err) {
+                // Don't cache a failed attempt — let the next call retry.
+                that._pXlsxLoad = null;
+                throw err;
+            });
+            return this._pXlsxLoad;
+        },
+
         onDownloadCalendarTemplate: function () {
             var sChain = this._editModel.getProperty("/taskchain") || "TASK_CHAIN_NAME";
+            var that = this;
 
-            if (typeof window.XLSX === "undefined") {
+            function downloadCsvFallback() {
                 var sCsv = [
-                    ["ID", "Chain", "Date", "Time"].join(","),
-                    [1, sChain, "2026-09-19", "04:00"].join(",")
+                    ["ID", "Chain", "Date", "Time", "Details"].join(","),
+                    [1, sChain, "2026-09-19", "04:00", ""].join(",")
                 ].join("\n");
-                this._downloadBlob(new Blob([sCsv], { type: "text/csv" }), "calendar_template.csv");
-                return;
+                that._downloadBlob(new Blob([sCsv], { type: "text/csv" }), "calendar_template.csv");
             }
 
+            this._ensureXlsxLoaded().then(function () {
+                that._buildAndDownloadXlsxTemplate(sChain);
+            }).catch(function (err) {
+                console.error("[Scheduler] Could not load XLSX library:", err && err.message);
+                downloadCsvFallback();
+            });
+        },
+
+        _buildAndDownloadXlsxTemplate: function (sChain) {
             var XLSX = window.XLSX;
             var wb = XLSX.utils.book_new();
 
             // Calendar sheet
             XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-                ["ID", "Chain", "Date", "Time"],
-                [1, sChain, "2026-09-19", "04:00"],
-                [2, sChain, "2026-09-26", "04:00"],
-                [3, sChain, "2026-10-10", "04:00"]
+                ["ID", "Chain", "Date", "Time", "Details"],
+                [1, sChain, "2026-09-19", "04:00", ""],
+                [2, sChain, "2026-09-26", "04:00", ""],
+                [3, sChain, "2026-10-10", "04:00", ""]
             ]), "Calendar");
 
             // Parameters sheet — static example rows.
             // IBP Step filled → IBP param; IBP Step blank → SAC param.
+            // "Job Template / Multi Action" overrides what's auto-detected from DSP for
+            // that DSP step — leave blank to keep using DSP's auto-detected value.
             // Replace DSP Step names, IBP Step names and values with your actual configuration.
             var aIds = [1, 2, 3];
-            var aParamRows = [["Schedule ID", "DSP Step", "IBP Step", "Parameter", "Value", "HierarchyId"]];
+            var aParamRows = [["Schedule ID", "DSP Step", "Job Template / Multi Action", "IBP Step", "Parameter", "Value", "HierarchyId"]];
             aIds.forEach(function (id) {
                 // IBP examples
-                aParamRows.push([id, "APITask_IBP", "IBP_STEP_NAME_1", "$G_SORG",      "BE40", ""]);
-                aParamRows.push([id, "APITask_IBP", "IBP_STEP_NAME_2", "$G_FCSTTYPE",  "U",    ""]);
+                aParamRows.push([id, "APITask_IBP", "SAP_IBP_PROC_COPY_OPERATOR", "IBP_STEP_NAME_1", "$G_SORG",      "BE40", ""]);
+                aParamRows.push([id, "APITask_IBP", "SAP_IBP_PROC_COPY_OPERATOR", "IBP_STEP_NAME_2", "$G_FCSTTYPE",  "U",    ""]);
                 // SAC examples (IBP Step blank)
-                aParamRows.push([id, "APITask_SAC", "", "PlanningVersion", "public.Curr_FCST", ""]);
-                aParamRows.push([id, "APITask_SAC", "", "Legal_Entity",    "BE40",              ""]);
-                aParamRows.push([id, "APITask_SAC", "", "Product",         "*",                 "parentId"]);
-                aParamRows.push([id, "APITask_SAC", "", "Profit_Center",   "*",                 "parentId"]);
-                aParamRows.push([id, "APITask_SAC", "", "Date",            "202606",            ""]);
+                aParamRows.push([id, "APITask_SAC", "t.F:A8B06D852F1681322AE35493186B1970", "", "PlanningVersion", "public.Curr_FCST", ""]);
+                aParamRows.push([id, "APITask_SAC", "t.F:A8B06D852F1681322AE35493186B1970", "", "Legal_Entity",    "BE40",              ""]);
+                aParamRows.push([id, "APITask_SAC", "t.F:A8B06D852F1681322AE35493186B1970", "", "Product",         "*",                 "parentId"]);
+                aParamRows.push([id, "APITask_SAC", "t.F:A8B06D852F1681322AE35493186B1970", "", "Profit_Center",   "*",                 "parentId"]);
+                aParamRows.push([id, "APITask_SAC", "t.F:A8B06D852F1681322AE35493186B1970", "", "Date",            "202606",            ""]);
             });
             XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aParamRows), "Parameters");
 
@@ -209,6 +265,18 @@ sap.ui.define([
         onCalendarFileSelect: function (oEvt) {
             var oFile = oEvt.getParameter("files") && oEvt.getParameter("files")[0];
             if (!oFile) return;
+            var that = this;
+            var bIsCsv = /\.csv$/i.test(oFile.name);
+            var pReady = bIsCsv ? Promise.resolve() : this._ensureXlsxLoaded();
+            pReady.then(function () {
+                that._readCalendarFile(oFile, bIsCsv);
+            }).catch(function (err) {
+                console.error("[Scheduler] Could not load XLSX library:", err && err.message);
+                MessageBox.error("Could not load the XLSX library needed to read this file. Use a .csv file instead.");
+            });
+        },
+
+        _readCalendarFile: function (oFile, bIsCsv) {
             var that = this;
             var reader = new FileReader();
             reader.onload = function (e) {
@@ -338,7 +406,7 @@ sap.ui.define([
                 });
             };
             reader.onerror = function () { MessageBox.error("Could not read file"); };
-            if (/\.csv$/i.test(oFile.name)) {
+            if (bIsCsv) {
                 reader.readAsText(oFile);
             } else {
                 reader.readAsArrayBuffer(oFile);
@@ -367,20 +435,33 @@ sap.ui.define([
             // paramsByScheduleId: { scheduleId: { dspStepId: [{key, value, active, step?, hierarchyId?}] } }
             var oBySchId = {};
             var aSacFlatDspSteps = [];
+            // Job Template / Multi Action override, collected once per (scheduleId, dspStep)
+            // regardless of how many parameter rows reference that step.
+            var oOverrideByKey = {}; // "schId::dspStep" -> { value, isIbp }
 
-            // Parameters sheet: Schedule ID | DSP Step | IBP Step | Parameter | Value | HierarchyId
+            // Parameters sheet: Schedule ID | DSP Step | Job Template / Multi Action | IBP Step | Parameter | Value | HierarchyId
             // IBP Step filled → IBP param (with step field); IBP Step blank → SAC param.
+            // The "Job Template / Multi Action" column is optional (older template files
+            // won't have it) — when present, it overrides what DSP auto-detects for that step.
             if (wb.SheetNames.indexOf("Parameters") !== -1) {
                 var wsP = wb.Sheets["Parameters"];
                 var aPRows = XLSX.utils.sheet_to_json(wsP, { header: 1, raw: false });
+                var aHeader = (aPRows[0] || []).map(function (h) { return String(h || "").trim().toLowerCase(); });
+                var bHasOverrideCol = aHeader.indexOf("job template / multi action") !== -1;
+                var iOverrideCol = bHasOverrideCol ? 2 : -1;
+                var iIbpStepCol = bHasOverrideCol ? 3 : 2;
+                var iKeyCol = bHasOverrideCol ? 4 : 3;
+                var iValCol = bHasOverrideCol ? 5 : 4;
+                var iHIdCol = bHasOverrideCol ? 6 : 5;
                 for (var pi = 1; pi < aPRows.length; pi++) {
                     var rp = aPRows[pi] || [];
                     var sP_SchId   = String(rp[0] || "").trim();
                     var sP_DspStep = String(rp[1] || "").trim();
-                    var sP_IbpStep = String(rp[2] || "").trim();
-                    var sP_Key     = String(rp[3] || "").trim();
-                    var sP_Val     = String(rp[4] || "").trim();
-                    var sP_HId     = String(rp[5] || "").trim();
+                    var sP_Override = iOverrideCol !== -1 ? String(rp[iOverrideCol] || "").trim() : "";
+                    var sP_IbpStep = String(rp[iIbpStepCol] || "").trim();
+                    var sP_Key     = String(rp[iKeyCol] || "").trim();
+                    var sP_Val     = String(rp[iValCol] || "").trim();
+                    var sP_HId     = String(rp[iHIdCol] || "").trim();
                     if (!sP_SchId || !sP_DspStep || !sP_Key) continue;
                     if (!oBySchId[sP_SchId]) oBySchId[sP_SchId] = {};
                     if (!oBySchId[sP_SchId][sP_DspStep]) oBySchId[sP_SchId][sP_DspStep] = [];
@@ -392,7 +473,25 @@ sap.ui.define([
                         if (aSacFlatDspSteps.indexOf(sP_DspStep) === -1) aSacFlatDspSteps.push(sP_DspStep);
                     }
                     oBySchId[sP_SchId][sP_DspStep].push(oP);
+                    if (sP_Override) {
+                        oOverrideByKey[sP_SchId + "::" + sP_DspStep] = { value: sP_Override, isIbp: !!sP_IbpStep };
+                    }
                 }
+                Object.keys(oOverrideByKey).forEach(function (sKey) {
+                    var parts = sKey.split("::");
+                    var schId = parts[0], dspStep = parts[1];
+                    var ov = oOverrideByKey[sKey];
+                    var aList = oBySchId[schId][dspStep];
+                    if (ov.isIbp) {
+                        aList.push({ key: "__ibpTemplateNameOverride", value: ov.value, active: true });
+                    } else {
+                        aList.push({ key: "__sacMultiActionIdOverride", value: ov.value, active: true });
+                        aList.push({ key: "__sacMultiActionId", value: ov.value, active: true });
+                        // An explicit override makes auto-detection unnecessary for this step.
+                        var iIdx = aSacFlatDspSteps.indexOf(dspStep);
+                        if (iIdx !== -1) aSacFlatDspSteps.splice(iIdx, 1);
+                    }
+                });
             }
 
             return { rows: rows, paramsByScheduleId: oBySchId, sacFlatDspSteps: aSacFlatDspSteps };
@@ -406,6 +505,7 @@ sap.ui.define([
             var iChainCol = bHasId ? 1 : 0;
             var iDateCol  = bHasId ? 2 : 1;
             var iTimeCol  = bHasId ? 3 : 2;
+            var iDetailsCol = first.indexOf("details");
             var iStart    = (bHasId || first.indexOf("chain") !== -1 || first.indexOf("date") !== -1) ? 1 : 0;
             var aOut = [];
             var today = new Date(); today.setHours(0, 0, 0, 0);
@@ -429,7 +529,8 @@ sap.ui.define([
                     rawTime: time,
                     timezone: "Europe/Rome",
                     active: dt >= today,
-                    parameters: oEntryParams ? JSON.stringify(oEntryParams) : ""
+                    parameters: oEntryParams ? JSON.stringify(oEntryParams) : "",
+                    details: iDetailsCol !== -1 ? String(r[iDetailsCol] || "").trim() : ""
                 });
             }
             return aOut;
@@ -493,7 +594,7 @@ sap.ui.define([
                 new Filter("spaceId", FilterOperator.EQ, sSpace),
                 new Filter("taskchain", FilterOperator.EQ, sChain)
             ], {
-                $select: "ID,spaceId,taskchain,runDate,runTime,timezone,active,parameters,source",
+                $select: "ID,spaceId,taskchain,runDate,runTime,timezone,active,parameters,details,source",
                 $expand: "runs($select=status,triggeredAt,finishedAt,errorMessage,remoteId)"
             });
             var that = this;
@@ -521,6 +622,7 @@ sap.ui.define([
                         timezone: o.timezone || "Europe/Rome",
                         active: !!o.active,
                         parameters: o.parameters || "",
+                        details: o.details || "",
                         isPast: !isNaN(dt.getTime()) && dt < now,
                         runStatus: oLastRun ? (oLastRun.status || "") : "",
                         runAt: oLastRun ? (oLastRun.finishedAt || oLastRun.triggeredAt) : null,
@@ -646,6 +748,7 @@ sap.ui.define([
                     timezone: e.timezone || "Europe/Rome",
                     active: !!e.active,
                     parameters: e.parameters || "",
+                    details: e.details || "",
                     source: "calendar"
                 });
                 return oCtx.created();
@@ -665,6 +768,7 @@ sap.ui.define([
             this._editModel.setProperty("/entryTime", "04:00");
             this._editModel.setProperty("/entryActive", true);
             this._editModel.setProperty("/entryParameters", "");
+            this._editModel.setProperty("/entryDetails", "");
             this._openCalendarEntryDialog();
         },
 
@@ -677,6 +781,7 @@ sap.ui.define([
             this._editModel.setProperty("/entryTime", o.rawTime || (o.time || "").replace(/\s*CET.*$/i, ""));
             this._editModel.setProperty("/entryActive", !!o.active);
             this._editModel.setProperty("/entryParameters", o.parameters || "");
+            this._editModel.setProperty("/entryDetails", o.details || "");
             this._openCalendarEntryDialog();
         },
 
@@ -714,6 +819,12 @@ sap.ui.define([
                 this.error("Date and time are required");
                 return;
             }
+            var sEntryTime = d.entryTime.length === 5 ? d.entryTime + ":00" : d.entryTime;
+            var dtEntry = new Date(d.entryDate + "T" + sEntryTime);
+            if (dtEntry < new Date()) {
+                this.error("Date and time must be in the future");
+                return;
+            }
             if (d.entryParameters && String(d.entryParameters).trim()) {
                 try { JSON.parse(d.entryParameters); }
                 catch (e) { this.error("Parameters must be valid JSON: " + e.message); return; }
@@ -729,6 +840,7 @@ sap.ui.define([
                     oCtx.setProperty("runTime", d.entryTime);
                     oCtx.setProperty("active", !!d.entryActive);
                     oCtx.setProperty("parameters", d.entryParameters || "");
+                    oCtx.setProperty("details", d.entryDetails || "");
                     return oModel.submitBatch(oModel.getUpdateGroupId());
                 });
             } else {
@@ -740,7 +852,8 @@ sap.ui.define([
                     runTime: d.entryTime,
                     timezone: "Europe/Rome",
                     active: !!d.entryActive,
-                    parameters: d.entryParameters || ""
+                    parameters: d.entryParameters || "",
+                    details: d.entryDetails || ""
                 });
                 pSaved = oCtxNew.created();
             }
@@ -789,6 +902,7 @@ sap.ui.define([
         },
 
         _cancelSchedulerJobs: function (aEntries) {
+            var that = this;
             var d = this._editModel.getData();
             var sSpace = d.spaceId;
             var sChain = d.taskchain;

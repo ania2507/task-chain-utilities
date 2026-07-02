@@ -156,6 +156,7 @@
                                     <Column><Text text="{i18n>calendar.col.date}"/></Column>
                                     <Column><Text text="{i18n>calendar.col.time}"/></Column>
                                     <Column hAlign="Center"><Text text="{i18n>calendar.col.active}"/></Column>
+                                    <Column><Text text="{i18n>calendar.col.details}"/></Column>
                                     <Column><Text text="{i18n>calendar.col.runStatus}"/></Column>
                                     <Column hAlign="End" width="22rem"><Text text=""/></Column>
                                 </columns>
@@ -166,6 +167,7 @@
                                         <core:Icon src="sap-icon://accept"
                                                    color="{= ${edit>active} ? 'Positive' : 'Neutral' }"
                                                    visible="{edit>active}"/>
+                                        <Text text="{edit>details}" maxLines="2"/>
                                         <HBox alignItems="Center">
                                             <core:Icon
                                                 src="{= ${edit>runStatus} === 'success' ? 'sap-icon://sys-enter-2' : ${edit>runStatus} === 'error' ? 'sap-icon://sys-cancel-2' : ${edit>runStatus} === 'running' ? 'sap-icon://pending' : ${edit>runStatus} === 'skipped' ? 'sap-icon://step' : '' }"

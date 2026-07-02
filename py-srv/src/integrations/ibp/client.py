@@ -188,9 +188,14 @@ class IBPJobClient(BaseJobClient):
             • ``parameters``     – list of param dicts (see ``_build_param_values_json``)
             • ``test_mode``      – bool (default ``False``)
         """
-        template_name = params.get("template_name")
-        job_text = params.get("job_text", "Job")
-        job_user = params.get("job_user", "")
+        # DSP represents an unset payload field as an empty list (e.g. "job_text": []),
+        # not as a missing key or empty string — coerce any non-string value to "" so
+        # it's treated as absent rather than crashing quote() downstream.
+        def _as_str(v):
+            return v if isinstance(v, str) else ""
+
+        template_name = _as_str(params.get("template_name"))
+        job_user = _as_str(params.get("job_user"))
         test_mode = str(params.get("test_mode", False)).lower()
         job_parameters = params.get("parameters", [])
 
@@ -198,6 +203,11 @@ class IBPJobClient(BaseJobClient):
             raise ValueError("IBP: 'template_name' is required")
         if not job_user:
             raise ValueError("IBP: 'job_user' is required")
+
+        # JobText always mirrors the template being launched, so IBP's job history
+        # shows at a glance which template ran — regardless of what (if anything)
+        # was supplied for job_text.
+        job_text = template_name
 
         param_json = _build_param_values_json(job_parameters) if job_parameters else ""
 
