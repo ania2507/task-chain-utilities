@@ -130,10 +130,15 @@
                                                    placeholder="SAC multi action ID"
                                                    enabled="{= !${edit>/sacLoading} }"
                                                    class="sapUiTinyMarginEnd"/>
-                                            <Button text="{= ${edit>/sacLoading} ? 'Loading…' : 'Load' }"
-                                                    type="Emphasized" press=".onLoadSacMultiAction"
+                                            <Button text="Insert" type="Emphasized" press=".onInsertSacMultiAction"
+                                                    enabled="{= !${edit>/sacLoading} }"
+                                                    class="sapUiTinyMarginEnd"/>
+                                            <Button text="{= ${edit>/sacLoading} ? 'Loading…' : 'Load Parameters' }"
+                                                    press=".onLoadSacMultiAction"
                                                     busy="{edit>/sacLoading}" enabled="{= !${edit>/sacLoading} }"/>
                                         </HBox>
+                                        <Text text="Use &quot;Insert&quot; if this multi action has no mandatory parameters. Use &quot;Load Parameters&quot; to run a quick simulation and discover which parameters SAC requires."
+                                              class="sapUiTinyMarginTop sapUiSmallFontSize"/>
                                     </VBox>
                                 </content>
                             </Panel>
@@ -165,15 +170,16 @@
                                         visible="{= !${edit>/viewOnly} &amp;&amp; !!${edit>/ibpTemplateNameIsOverride} }"
                                         class="sapUiTinyMarginBegin"/>
                             </HBox>
+                            <Title text="{edit>/ibpTemplateDescription}" level="H5"
+                                   textAlign="Left" width="100%"
+                                   visible="{= !!${edit>/ibpTemplateDescription} }"
+                                   class="sapUiSmallMarginBegin sapUiTinyMarginBottom"/>
                             <l:Splitter height="480px">
                                 <!-- Left: job template steps list -->
                                 <Panel headerText="Job Template Steps" width="auto">
                                     <layoutData>
                                         <l:SplitterLayoutData size="340px"/>
                                     </layoutData>
-                                    <Text text="{edit>/ibpTemplateDescription}"
-                                          visible="{= !!${edit>/ibpTemplateDescription} }"
-                                          class="sapUiSmallFontSize sapUiTinyMarginBeginEnd sapUiTinyMarginBottom"/>
                                     <List items="{edit>/ibpSteps}" mode="None"
                                           noDataText="{= ${edit>/ibpLoading} ? 'Loading...' : 'No steps found in IBP template' }">
                                         <StandardListItem

@@ -26,6 +26,18 @@ _PENDING_STEP_PARAMS_LOCK = threading.Lock()
 _PENDING_STEP_PARAMS_TTL: Dict[str, float] = {}
 _STEP_PARAMS_TTL_SECONDS = 7200  # 2 hours — longer than any realistic task chain run
 
+# Guards against two concurrent DSP runs of the SAME task chain silently
+# clobbering each other's entry in _PENDING_STEP_PARAMS (keyed only by
+# taskchain name, with no per-run identity — DSP doesn't send one). Keyed by
+# taskchain name -> (execution_id holding the slot, expiry timestamp).
+# Cleared as soon as a background watcher detects that run has finished;
+# the expiry is only a safety net (e.g. py-srv restarted and lost the
+# watcher thread) so a stuck flag can't block that taskchain forever.
+_ACTIVE_TASKCHAINS: Dict[str, tuple] = {}
+_ACTIVE_TASKCHAINS_LOCK = threading.Lock()
+_ACTIVE_TASKCHAIN_MAX_SECONDS = 3 * 3600  # 3 hours
+_ACTIVE_TASKCHAIN_POLL_SECONDS = 30
+
 
 class TaskchainStatus(Enum):
     PENDING = "PENDING"
@@ -102,6 +114,30 @@ class TaskchainExecutor:
             return entry
 
     @staticmethod
+    def find_active_taskchain_for_multiaction(multiaction_id: str) -> Optional[str]:
+        """Return the name of a currently-active task chain that references
+        *multiaction_id* on one of its SAC steps, or None if none does.
+
+        Used to block SAC's "Load Parameters"/"Validate" actions from launching
+        a real test execution against a multi-action that a live, currently
+        running task chain is also using for real — two concurrent executions
+        of the same multi-action can interfere with each other on SAC's side.
+        """
+        now = time.time()
+        with _ACTIVE_TASKCHAINS_LOCK:
+            active_names = [name for name, (_eid, exp) in _ACTIVE_TASKCHAINS.items() if exp > now]
+        with _PENDING_STEP_PARAMS_LOCK:
+            for name in active_names:
+                entry = _PENDING_STEP_PARAMS.get(name)
+                if not isinstance(entry, dict):
+                    continue
+                for step_params in entry.values():
+                    for p in (step_params if isinstance(step_params, list) else []):
+                        if p.get("key") == "__sacMultiActionId" and p.get("value") == multiaction_id:
+                            return name
+        return None
+
+    @staticmethod
     def make_execution_id(space: str, logid: str) -> str:
         return f"{space}__{logid}"
 
@@ -144,14 +180,40 @@ class TaskchainExecutor:
             threading.Thread(target=_runner, daemon=True).start()
             return execution_id
 
+        # Refuse to launch a task chain that's already believed to be running:
+        # _PENDING_STEP_PARAMS is keyed only by taskchain name (DSP gives us no
+        # per-run identity in its step-launch calls), so a second concurrent run
+        # would silently overwrite the first run's still-in-use step params —
+        # exactly the kind of cross-run parameter corruption that must not happen.
+        now = time.time()
+        with _ACTIVE_TASKCHAINS_LOCK:
+            active = _ACTIVE_TASKCHAINS.get(taskchain_name)
+            if active and active[1] > now:
+                raise RuntimeError(
+                    f"Task chain '{taskchain_name}' is already running (started earlier and not "
+                    f"yet finished). Launching it again now would overwrite its in-flight step "
+                    f"parameters. Wait for the current run to finish before triggering another."
+                )
+            # Reserve the slot immediately (execution_id filled in once known) so a
+            # second call racing in right now still sees it as claimed.
+            _ACTIVE_TASKCHAINS[taskchain_name] = (None, now + _ACTIVE_TASKCHAIN_MAX_SECONDS)
+
         # Store step params so the API-task's /v1/jobs/launch call can pick them up.
         if payload:
             TaskchainExecutor.store_pending_step_params(taskchain_name, payload)
 
-        logid = self._dsp_run_task_chain(spaceid, taskchain_name)
-        if not logid or str(logid).strip().lower() == "none":
-            raise RuntimeError("DSP taskchain launch did not return a logId")
+        try:
+            logid = self._dsp_run_task_chain(spaceid, taskchain_name)
+            if not logid or str(logid).strip().lower() == "none":
+                raise RuntimeError("DSP taskchain launch did not return a logId")
+        except Exception:
+            with _ACTIVE_TASKCHAINS_LOCK:
+                _ACTIVE_TASKCHAINS.pop(taskchain_name, None)
+            raise
         execution_id = self.make_execution_id(spaceid, logid)
+
+        with _ACTIVE_TASKCHAINS_LOCK:
+            _ACTIVE_TASKCHAINS[taskchain_name] = (execution_id, now + _ACTIVE_TASKCHAIN_MAX_SECONDS)
 
         with self._lock:
             self._executions[execution_id] = TaskchainExecution(
@@ -162,7 +224,34 @@ class TaskchainExecutor:
                 created_at=datetime.utcnow(),
             )
 
+        self._watch_taskchain_active_flag(taskchain_name, execution_id)
+
         return execution_id
+
+    def _watch_taskchain_active_flag(self, taskchain_name: str, execution_id: str) -> None:
+        """Poll the task chain's own DSP run status in the background and release
+        the active-taskchain slot as soon as it reaches a terminal state, instead
+        of leaving it blocked for the full safety-net duration."""
+
+        def _poll():
+            while True:
+                time.sleep(_ACTIVE_TASKCHAIN_POLL_SECONDS)
+                try:
+                    info = self.get_status_dsp(execution_id)
+                    status = (info.get("status") or "").upper()
+                except Exception:
+                    continue
+                if status in (TaskchainStatus.COMPLETED.value, TaskchainStatus.FAILED.value):
+                    with _ACTIVE_TASKCHAINS_LOCK:
+                        current = _ACTIVE_TASKCHAINS.get(taskchain_name)
+                        # Only clear if still pointing at this run — a newer run may
+                        # have legitimately reclaimed the slot after this one's
+                        # safety-net expiry.
+                        if current and current[0] == execution_id:
+                            _ACTIVE_TASKCHAINS.pop(taskchain_name, None)
+                    return
+
+        threading.Thread(target=_poll, daemon=True).start()
 
     def wait_async(self, duration_seconds: float, payload: Optional[Dict[str, Any]] = None) -> str:
         execution_id = f"wait__{uuid.uuid4().hex}"

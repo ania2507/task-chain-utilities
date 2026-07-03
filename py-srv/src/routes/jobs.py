@@ -17,10 +17,6 @@ POST /v1/jobs/ibp/template    – read IBP template metadata (helper)
 from __future__ import annotations
 
 import logging
-import threading
-import time as _time
-import uuid
-from typing import Any, Dict, Optional
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -30,13 +26,6 @@ from ..integrations.base import IntegrationType
 logger = logging.getLogger(__name__)
 
 bp = Blueprint("jobs", __name__)
-
-# In-memory store for async SAC validation results.
-# Key → None while running, dict when done.
-_VALIDATION_RESULTS: Dict[str, Optional[Dict[str, Any]]] = {}
-_VALIDATION_LOCK_V = threading.Lock()
-_VALIDATION_TTL: Dict[str, float] = {}
-_VALIDATION_TTL_SECONDS = 600
 
 
 @bp.route("/ibp/debug-conn", methods=["GET"])
@@ -141,6 +130,19 @@ def sac_multiaction_parameters(multiaction_id):
             ]
         }
     """
+    from ..services.taskchain_executor import TaskchainExecutor
+    busy_taskchain = TaskchainExecutor.find_active_taskchain_for_multiaction(multiaction_id)
+    if busy_taskchain:
+        return jsonify({
+            "error": (
+                f"Multi action '{multiaction_id}' is currently in use by a running task chain "
+                f"('{busy_taskchain}') — discovering parameters would launch a real test execution "
+                f"against it, which could interfere with that run. Enter parameters manually until "
+                f"it finishes."
+            ),
+            "busyTaskchain": busy_taskchain,
+        }), 409
+
     try:
         client = _get_executor().get_client(IntegrationType.SAC)
         raw = client.get_multiaction_definition(multiaction_id)
@@ -158,72 +160,6 @@ def sac_multiaction_parameters(multiaction_id):
     except Exception as e:
         logger.exception("Error fetching SAC multi action parameters for %s", multiaction_id)
         return jsonify({"error": str(e)}), 500
-
-
-@bp.route("/sac/validate-parameters", methods=["POST"])
-@flask_access_validation(required_scope="admin")
-def sac_validate_parameters():
-    """Validate SAC multi action parameter values by running a test execution.
-
-    First call (start)::
-
-        POST {"multiactionId": "t.F:...", "parameters": [...]}
-        → {"probing": true, "validationKey": "<key>"}
-
-    Poll call (check result)::
-
-        POST {"validationKey": "<key>"}
-        → {"probing": true}          # still running
-        → {"valid": true}            # done — all params OK
-        → {"valid": false, "errors": [...]}
-        → {"valid": null, "error": "..."}
-    """
-    body = request.json or {}
-    validation_key = body.get("validationKey")
-
-    # Poll mode: return cached result
-    if validation_key:
-        with _VALIDATION_LOCK_V:
-            if validation_key not in _VALIDATION_RESULTS:
-                return jsonify({"valid": None, "error": "Unknown validation key"}), 404
-            result = _VALIDATION_RESULTS.get(validation_key)
-        if result is None:
-            return jsonify({"probing": True}), 200
-        return jsonify(result), 200
-
-    # Start mode
-    multiaction_id = body.get("multiactionId")
-    parameters = body.get("parameters", [])
-    if not multiaction_id:
-        return jsonify({"error": "multiactionId required"}), 400
-
-    key = uuid.uuid4().hex[:12]
-    with _VALIDATION_LOCK_V:
-        _VALIDATION_RESULTS[key] = None  # None = still running
-        _VALIDATION_TTL[key] = _time.time() + _VALIDATION_TTL_SECONDS
-        now = _time.time()
-        expired = [k for k, exp in _VALIDATION_TTL.items() if exp < now]
-        for k in expired:
-            _VALIDATION_RESULTS.pop(k, None)
-            _VALIDATION_TTL.pop(k, None)
-
-    logger.info("SAC validate-parameters: starting async validation for %s (key=%s)", multiaction_id, key)
-
-    app = current_app._get_current_object()
-
-    def _run():
-        with app.app_context():
-            try:
-                client = _get_executor().get_client(IntegrationType.SAC)
-                result = client.validate_parameters(multiaction_id, parameters)
-            except Exception as e:
-                logger.exception("Error validating SAC parameters for %s", multiaction_id)
-                result = {"valid": None, "error": str(e)}
-            with _VALIDATION_LOCK_V:
-                _VALIDATION_RESULTS[key] = result
-
-    threading.Thread(target=_run, daemon=True).start()
-    return jsonify({"probing": True, "validationKey": key}), 200
 
 
 def _parse_sac_parameters(raw: dict) -> list:
@@ -415,6 +351,71 @@ def launch_job():
                     f" (step '{_dsp_step_id}')" if _dsp_step_id else "",
                 )
                 payload = {**payload, "template_name": _tpl_override}
+
+    # SAC: an app-configured multi action ID (Step Parameters UI) must actually
+    # reach DSP's job launch, not just drive the UI — mirrors the IBP template_name
+    # override above. The app-configured value always wins over whatever DSP sends
+    # or omits (DSP's API-trigger step has no real notion of "SAC multi action" —
+    # any multiActionId/sacMultiActionId/multiaction_id it does send is not
+    # authoritative). Matches by objectId when DSP sends a step identifier,
+    # otherwise only when the taskchain has exactly one configured SAC step
+    # (ambiguous cases are left as DSP sent them and logged, since guessing risks
+    # launching the wrong multi action).
+    if integration == "sac" and taskchain_ctx:
+        from ..services.taskchain_executor import TaskchainExecutor
+
+        def _first_nonempty_str(*vals):
+            for v in vals:
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+            return ""
+
+        _step_params_for_ma = TaskchainExecutor.consume_pending_step_params(taskchain_ctx)
+        if _step_params_for_ma:
+            _dsp_step_id = _first_nonempty_str(
+                payload.get("objectId"), payload.get("object_id"),
+                payload.get("step_id"), payload.get("stepId"), payload.get("taskId"),
+            )
+
+            def _ma_id_in(sparams):
+                for p in (sparams if isinstance(sparams, list) else []):
+                    if p.get("key") == "__sacMultiActionId" and p.get("value"):
+                        return p["value"]
+                return None
+
+            _ma_override = None
+            if _dsp_step_id:
+                _ma_override = _ma_id_in(_step_params_for_ma.get(_dsp_step_id))
+            else:
+                _ma_overrides_by_step = {}
+                for _sname, _sparams in _step_params_for_ma.items():
+                    _found = _ma_id_in(_sparams)
+                    if _found:
+                        _ma_overrides_by_step[_sname] = _found
+                if len(_ma_overrides_by_step) == 1:
+                    _ma_override = next(iter(_ma_overrides_by_step.values()))
+                elif len(_ma_overrides_by_step) > 1:
+                    logger.warning(
+                        "Multiple SAC multi action IDs found for taskchain '%s' (%s) and DSP "
+                        "did not send a step identifier — cannot disambiguate, leaving "
+                        "multiaction_id as sent by DSP",
+                        taskchain_ctx, list(_ma_overrides_by_step.keys()),
+                    )
+
+            if _ma_override:
+                logger.info(
+                    "Overriding multiaction_id with app-configured value '%s' for taskchain '%s'%s",
+                    _ma_override, taskchain_ctx,
+                    f" (step '{_dsp_step_id}')" if _dsp_step_id else "",
+                )
+                # Overwrite every key variant the block below checks (in priority order),
+                # so it can't pick up DSP's original, non-authoritative value instead.
+                payload = {
+                    **payload,
+                    "multiaction_id": _ma_override,
+                    "multiActionId": _ma_override,
+                    "sacMultiActionId": _ma_override,
+                }
 
     # SAC: inject saved step params as a flat {parameterId: value} dict, which
     # SACJobClient.launch_job converts into the multi action's "parameterValues".

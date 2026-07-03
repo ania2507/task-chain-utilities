@@ -292,25 +292,57 @@ sap.ui.define([
 
                 var sChain = that._editModel.getProperty("/taskchain");
 
-                // If the file has the new flat SAC sheet, fetch step definitions to inject
-                // __sacMultiActionId sentinel for each DSP step referenced in the sheet.
-                var pStepMap = Promise.resolve({});
-                if (oParsed.sacFlatDspSteps && oParsed.sacFlatDspSteps.length) {
+                // If the file has the new flat SAC sheet and/or Job Template/Multi Action
+                // overrides, fetch step definitions — needed to (a) inject __sacMultiActionId
+                // for flat SAC steps and (b) tell IBP-vs-SAC overrides apart via each DSP
+                // step's own authoritative "integration": "ibp"|"sac" field.
+                var oOverridesByKey = oParsed.overridesByKey || {};
+                var pStepMap = Promise.resolve({ maById: {}, integrationById: {} });
+                if ((oParsed.sacFlatDspSteps && oParsed.sacFlatDspSteps.length) || Object.keys(oOverridesByKey).length) {
                     var sSpaceId = that._editModel.getProperty("/spaceId") || "";
                     pStepMap = fetch(that._getApiBase() + "dsp/taskchain-steps?spaceId=" + encodeURIComponent(sSpaceId)
                         + "&taskchain=" + encodeURIComponent(sChain))
                         .then(function (r) { return r.json(); })
                         .then(function (d) {
                             var oMap = {};
+                            var oIntegrationMap = {};
                             ((d && d.steps) || []).forEach(function (s) {
-                                if (s.objectId && s.sacMultiActionId) oMap[s.objectId] = s.sacMultiActionId;
+                                if (!s.objectId) return;
+                                if (s.sacMultiActionId) oMap[s.objectId] = s.sacMultiActionId;
+                                if (s.integrationType) oIntegrationMap[s.objectId] = s.integrationType;
                             });
-                            return oMap;
+                            return { maById: oMap, integrationById: oIntegrationMap };
                         })
-                        .catch(function () { return {}; });
+                        .catch(function () { return { maById: {}, integrationById: {} }; });
                 }
 
-                pStepMap.then(function (oStepMaMap) {
+                pStepMap.then(function (oStepMeta) {
+                    var oStepMaMap = oStepMeta.maById || {};
+                    var oIntegrationMap = oStepMeta.integrationById || {};
+
+                    // Resolve each Job Template / Multi Action override into the right
+                    // sentinel(s), using the DSP step's own integration type as the
+                    // authoritative signal (falls back to the row's IBP Step hint when
+                    // DSP didn't report an integration type for that step).
+                    Object.keys(oOverridesByKey).forEach(function (sKey) {
+                        var parts = sKey.split("::");
+                        var schId = parts[0], dspStep = parts[1];
+                        var ov = oOverridesByKey[sKey];
+                        var aList = oParsed.paramsByScheduleId[schId] && oParsed.paramsByScheduleId[schId][dspStep];
+                        if (!aList) return;
+                        var sIntegration = oIntegrationMap[dspStep] || "";
+                        var bIsIbp = sIntegration ? sIntegration === "ibp" : ov.hintIbp;
+                        if (bIsIbp) {
+                            aList.push({ key: "__ibpTemplateNameOverride", value: ov.value, active: true });
+                        } else {
+                            aList.push({ key: "__sacMultiActionIdOverride", value: ov.value, active: true });
+                            aList.push({ key: "__sacMultiActionId", value: ov.value, active: true });
+                            // An explicit override makes auto-detection unnecessary for this step.
+                            var iIdx = oParsed.sacFlatDspSteps.indexOf(dspStep);
+                            if (iIdx !== -1) oParsed.sacFlatDspSteps.splice(iIdx, 1);
+                        }
+                    });
+
                     // Inject __sacMultiActionId sentinel for flat SAC steps
                     (oParsed.sacFlatDspSteps || []).forEach(function (sDspStep) {
                         var sSacMaId = oStepMaMap[sDspStep] || "";
@@ -470,48 +502,47 @@ sap.ui.define([
                     var sP_Key     = String(rp[iKeyCol] || "").trim();
                     var sP_Val     = String(rp[iValCol] || "").trim();
                     var sP_HId     = String(rp[iHIdCol] || "").trim();
-                    if (!sP_SchId || !sP_DspStep || !sP_Key) continue;
+                    if (!sP_SchId || !sP_DspStep) continue;
+                    // A row is only meaningful with a param key OR a template/multiaction
+                    // override — a template-only row (no Parameter/Value) must still be
+                    // kept so the association itself gets saved.
+                    if (!sP_Key && !sP_Override) continue;
                     if (!oBySchId[sP_SchId]) oBySchId[sP_SchId] = {};
                     if (!oBySchId[sP_SchId][sP_DspStep]) oBySchId[sP_SchId][sP_DspStep] = [];
-                    var oP = { key: sP_Key, value: sP_Val, active: true };
-                    if (sP_IbpStep) {
-                        oP.step = sP_IbpStep;
-                        var sOccKey = sP_SchId + "::" + sP_DspStep;
-                        if (!oIbpOccState[sOccKey]) oIbpOccState[sOccKey] = { lastName: null, counts: {} };
-                        var oOccState = oIbpOccState[sOccKey];
-                        if (sP_IbpStep !== oOccState.lastName) {
-                            oOccState.counts[sP_IbpStep] = (oOccState.counts[sP_IbpStep] === undefined)
-                                ? 0 : oOccState.counts[sP_IbpStep] + 1;
-                            oOccState.lastName = sP_IbpStep;
+                    if (sP_Key) {
+                        var oP = { key: sP_Key, value: sP_Val, active: true };
+                        if (sP_IbpStep) {
+                            oP.step = sP_IbpStep;
+                            var sOccKey = sP_SchId + "::" + sP_DspStep;
+                            if (!oIbpOccState[sOccKey]) oIbpOccState[sOccKey] = { lastName: null, counts: {} };
+                            var oOccState = oIbpOccState[sOccKey];
+                            if (sP_IbpStep !== oOccState.lastName) {
+                                oOccState.counts[sP_IbpStep] = (oOccState.counts[sP_IbpStep] === undefined)
+                                    ? 0 : oOccState.counts[sP_IbpStep] + 1;
+                                oOccState.lastName = sP_IbpStep;
+                            }
+                            oP.stepOccurrence = oOccState.counts[sP_IbpStep];
+                        } else {
+                            if (sP_HId) oP.hierarchyId = sP_HId;
+                            if (aSacFlatDspSteps.indexOf(sP_DspStep) === -1) aSacFlatDspSteps.push(sP_DspStep);
                         }
-                        oP.stepOccurrence = oOccState.counts[sP_IbpStep];
-                    } else {
-                        if (sP_HId) oP.hierarchyId = sP_HId;
-                        if (aSacFlatDspSteps.indexOf(sP_DspStep) === -1) aSacFlatDspSteps.push(sP_DspStep);
+                        oBySchId[sP_SchId][sP_DspStep].push(oP);
                     }
-                    oBySchId[sP_SchId][sP_DspStep].push(oP);
                     if (sP_Override) {
-                        oOverrideByKey[sP_SchId + "::" + sP_DspStep] = { value: sP_Override, isIbp: !!sP_IbpStep };
+                        // Row-level IBP Step presence is only a hint here — the authoritative
+                        // signal is the DSP step's own "integration": "ibp"|"sac" field, applied
+                        // later in _readCalendarFile once that metadata has been fetched.
+                        oOverrideByKey[sP_SchId + "::" + sP_DspStep] = { value: sP_Override, hintIbp: !!sP_IbpStep };
                     }
                 }
-                Object.keys(oOverrideByKey).forEach(function (sKey) {
-                    var parts = sKey.split("::");
-                    var schId = parts[0], dspStep = parts[1];
-                    var ov = oOverrideByKey[sKey];
-                    var aList = oBySchId[schId][dspStep];
-                    if (ov.isIbp) {
-                        aList.push({ key: "__ibpTemplateNameOverride", value: ov.value, active: true });
-                    } else {
-                        aList.push({ key: "__sacMultiActionIdOverride", value: ov.value, active: true });
-                        aList.push({ key: "__sacMultiActionId", value: ov.value, active: true });
-                        // An explicit override makes auto-detection unnecessary for this step.
-                        var iIdx = aSacFlatDspSteps.indexOf(dspStep);
-                        if (iIdx !== -1) aSacFlatDspSteps.splice(iIdx, 1);
-                    }
-                });
             }
 
-            return { rows: rows, paramsByScheduleId: oBySchId, sacFlatDspSteps: aSacFlatDspSteps };
+            return {
+                rows: rows,
+                paramsByScheduleId: oBySchId,
+                sacFlatDspSteps: aSacFlatDspSteps,
+                overridesByKey: oOverrideByKey
+            };
         },
 
         _buildCalendarEntries: function (aRows, sChain, oParamsByScheduleId) {

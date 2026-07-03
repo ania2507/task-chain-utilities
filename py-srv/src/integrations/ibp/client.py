@@ -175,6 +175,21 @@ class IBPJobClient(BaseJobClient):
         templates.sort(key=lambda t: t["description"] or t["name"])
         return templates
 
+    def get_template_description(self, template_name: str) -> str:
+        """Return the human-readable description (JobTemplateText) for a template name,
+        or "" if it can't be resolved (unknown template, tenant doesn't expose it, …)."""
+        try:
+            path = (
+                f"JobTemplateSet(JobTemplateName='{quote(template_name, safe='')}',"
+                f"JobTemplateVersion='0')?$format=json"
+            )
+            resp = self._odata.get(path)
+            d = resp.json().get("d", {})
+            return d.get("JobTemplateText") or d.get("Text") or ""
+        except Exception:
+            logger.warning("Could not resolve description for IBP template '%s'", template_name)
+            return ""
+
     def read_template(self, template_name: str) -> Dict[str, Any]:
         """Return parsed template metadata (sequences, parameters, …)."""
         path = f"JobTemplateRead?JobTemplateName='{quote(template_name, safe='')}'"
@@ -225,8 +240,12 @@ class IBPJobClient(BaseJobClient):
 
         # JobText always mirrors the template being launched, so IBP's job history
         # shows at a glance which template ran — regardless of what (if anything)
-        # was supplied for job_text.
-        job_text = template_name
+        # was supplied for job_text. Prefer the template's own human-readable
+        # description over its technical name; fall back to the technical name
+        # if the description can't be resolved. JobText's MaxLength is 120
+        # (confirmed via the service $metadata), matching JobTemplateText's own limit.
+        job_text = self.get_template_description(template_name) or template_name
+        job_text = job_text[:120]
 
         param_json = _build_param_values_json(job_parameters) if job_parameters else ""
 
@@ -279,6 +298,15 @@ class IBPJobClient(BaseJobClient):
         for step in (data.get("JobStepSet", {}).get("results", [])):
             raw_step_status = (step.get("StepStatus") or "").strip().upper()
             step_status = self._map_status(raw_step_status)
+            step_app_rc = step.get("StepAppRC")
+            # IBP sometimes reports a step's status as 'U' (unknown/undefined) when the
+            # step never actually ran at all — e.g. "couldn't be triggered: Connection
+            # error to hci system" — instead of a clean F(inished)/A(borted) code, which
+            # _map_status falls through to UNKNOWN for. A non-zero StepAppRC is the
+            # reliable failure signal in that case; without this, the job is left
+            # neither COMPLETED nor FAILED and DSP polls it as "running" forever.
+            if step_status == JobStatus.UNKNOWN and step_app_rc not in (None, "", 0, "0"):
+                step_status = JobStatus.FAILED
             logger.warning(
                 "[DIAG][ibp-status] job=%s:%s raw_job_status=%r step_number=%r raw_step_status=%r "
                 "mapped_step_status=%s app_rc=%r",

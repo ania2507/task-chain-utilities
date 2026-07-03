@@ -50,98 +50,6 @@ logger = logging.getLogger(__name__)
 _TOKEN_PATH = "/api/v1/csrf"
 _MULTIACTION_PATH = "/api/v1/multiActions"
 
-# Patterns for step-level log error messages (SAC code 580000002)
-_RE_NO_HIERARCHY = re.compile(
-    r"No hierarchy was provided for parameter ['\"](.+?)['\"]", re.IGNORECASE
-)
-_RE_MEMBER_MISSING = re.compile(
-    r"Member .+? (?:does not exist|is hidden) for parameter ['\"](.+?)['\"]", re.IGNORECASE
-)
-
-
-def _parse_sac_execution_errors(detail: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Extract validation errors from a SAC execution result detail dict.
-
-    Handles two error structures that SAC uses:
-
-    1. ``messages[].details[].parameterId`` — parameter-level validation errors
-       (codes 501000509 "no input value", 501000516 "no members defined").
-       Appear when a required parameter is missing/empty.
-
-    2. ``messages[].details[].logs[].message`` — step-level execution errors
-       (code 580000002 "run failed with step errors").
-       Appear when a parameter *value* is provided but semantically wrong:
-       "No hierarchy was provided for parameter 'X'"
-       "Member 'X' does not exist or is hidden for parameter 'Y'"
-
-    Results are deduplicated by normalized parameter ID (case-insensitive,
-    ignoring spaces and underscores) — SAC sometimes emits the same error
-    multiple times with slightly different identifier formats across codes
-    501000509 / 502001002 / 580000002.
-    """
-
-    def _norm(s: str) -> str:
-        return re.sub(r"[\s_]", "", s).lower()
-
-    seen: Dict[str, bool] = {}  # normalised pid → already emitted
-    errors: List[Dict[str, Any]] = []
-
-    messages = (detail.get("executionResult") or {}).get("messages", [])
-    for msg in messages:
-        if not isinstance(msg, dict):
-            continue
-        code = str(msg.get("code") or "")
-        msg_text = msg.get("message") or ""
-        for d in (msg.get("details") or []):
-            if not isinstance(d, dict):
-                continue
-            # Type 1: parameterId directly in the detail object
-            pid = d.get("parameterId") or ""
-            if pid:
-                norm = _norm(pid)
-                if norm not in seen:
-                    seen[norm] = True
-                    errors.append({
-                        "parameterId": pid,
-                        "message": msg_text,
-                        "code": code,
-                        "needsHierarchyId": code == "501000516",
-                    })
-                continue
-            # Type 2: nested log messages with free-text error descriptions
-            for log_entry in (d.get("logs") or []):
-                if not isinstance(log_entry, dict):
-                    continue
-                log_msg = (log_entry.get("message") or "").strip()
-                if not log_msg:
-                    continue
-                # Remove step prefix "(StepName): " if present
-                clean_msg = re.sub(r"^\([^)]+\):\s*", "", log_msg)
-                m = _RE_NO_HIERARCHY.search(log_msg)
-                if m:
-                    norm = _norm(m.group(1))
-                    if norm not in seen:
-                        seen[norm] = True
-                        errors.append({
-                            "parameterId": m.group(1),
-                            "message": clean_msg,
-                            "code": code,
-                            "needsHierarchyId": True,
-                        })
-                    continue
-                m = _RE_MEMBER_MISSING.search(log_msg)
-                if m:
-                    norm = _norm(m.group(1))
-                    if norm not in seen:
-                        seen[norm] = True
-                        errors.append({
-                            "parameterId": m.group(1),
-                            "message": clean_msg,
-                            "code": code,
-                            "needsHierarchyId": False,
-                        })
-    return errors
-
 
 def _extract_params_from_error(body: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Try to infer parameter IDs from a SAC validation-error response body.
@@ -194,6 +102,16 @@ def _extract_params_from_error(body: Dict[str, Any]) -> List[Dict[str, Any]]:
     return list(found.values())
 
 
+def _split_member_ids(raw: str) -> List[str]:
+    """Split a plain-text value into individual dimension members.
+
+    Lets users enter multiple members for the same parameter (e.g. two legal
+    entities) as comma-separated text ("1000, 2000") instead of requiring
+    raw JSON (``{"memberIds": ["1000","2000"], "hierarchyId": null}``).
+    """
+    return [v.strip() for v in raw.split(",") if v.strip()]
+
+
 def _build_parameter_values(run_params: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Convert a flat ``{parameterId: value}`` dict into SAC's
     ``parameterValues`` array: ``[{"parameterId": ..., "value": ...}]``.
@@ -227,7 +145,7 @@ def _build_parameter_values(run_params: Dict[str, Any]) -> List[Dict[str, Any]]:
             elif stripped == "*":
                 value = {"memberIds": [{"memberType": "AllMember"}], "hierarchyId": "parentId"}
             else:
-                value = {"memberIds": [stripped], "hierarchyId": None}
+                value = {"memberIds": _split_member_ids(stripped), "hierarchyId": None}
 
         if not isinstance(value, dict):
             continue
@@ -477,6 +395,27 @@ class SACJobClient(BaseJobClient):
         multiaction_id = params.get("multiaction_id")
         if not multiaction_id:
             raise ValueError("SAC: 'multiaction_id' is required")
+
+        # If "Load Parameters" or "Validate" is currently running a test execution
+        # against this same multi action (see _probe_running), wait for it to
+        # finish rather than launching a second, real execution concurrently —
+        # two overlapping executions of the same multi action can interfere with
+        # each other on SAC's side. Bounded so a real task-chain launch can never
+        # be blocked indefinitely if the probe/validate flow gets stuck.
+        _max_wait_seconds = 90
+        _waited = 0
+        while multiaction_id in self._probe_running and _waited < _max_wait_seconds:
+            logger.info(
+                "SAC launch_job: multiaction '%s' is being probed/validated — waiting (%ds elapsed)",
+                multiaction_id, _waited,
+            )
+            time.sleep(3)
+            _waited += 3
+        if multiaction_id in self._probe_running:
+            logger.warning(
+                "SAC launch_job: multiaction '%s' still marked as probing after %ds — proceeding anyway",
+                multiaction_id, _waited,
+            )
 
         run_params = params.get("parameters", {})
 
@@ -739,125 +678,6 @@ class SACJobClient(BaseJobClient):
 
         logger.warning("SAC probe: execution reached '%s' but no parameterId found", detail.get("status"))
         return {}
-
-    def validate_parameters(self, multiaction_id: str, param_values: List[Dict]) -> Dict[str, Any]:
-        """POST a test execution with the provided values and return validation errors.
-
-        Polls for up to 20 s.  If SAC rejects the execution immediately
-        (status: failed) the validation errors are parsed and returned.
-        If the execution succeeds (all values are valid and the multi action
-        actually runs) we still return valid=True with a warning.
-        If the execution is still running after 20 s we cancel it and
-        return a timeout indicator.
-        """
-        import time as _time
-
-        exec_path = f"{_MULTIACTION_PATH}/{quote(multiaction_id, safe='.:')}/executions"
-
-        def _norm_pid(s: str) -> str:
-            return re.sub(r"[\s_]", "", s).lower()
-
-        sac_params: List[Dict] = []
-        intentionally_skipped: set = set()  # normalised pids the user left empty/*
-
-        for p in param_values:
-            pid = p.get("key") or p.get("parameterId") or ""
-            if not pid:
-                continue
-            raw_val = (p.get("value") or "").strip()
-            hierarchy_id: Optional[str] = (p.get("hierarchyId") or "").strip() or None
-
-            # Empty value or "*" → All Members
-            if not raw_val or raw_val == "*":
-                sac_params.append({
-                    "parameterId": pid,
-                    "value": {"memberIds": [{"memberType": "AllMember"}], "hierarchyId": hierarchy_id or "parentId"},
-                })
-                continue
-
-            member_ids: List[Any] = []
-            if raw_val.startswith("{"):
-                try:
-                    parsed = json.loads(raw_val)
-                    p_type = parsed.get("type")
-                    p_members = parsed.get("memberIds") or []
-                    p_hier = parsed.get("hierarchyId") or parsed.get("hierarchy") or hierarchy_id
-                    if p_type == "All" or p_members == ["*"]:
-                        sac_params.append({
-                            "parameterId": pid,
-                            "value": {"memberIds": [{"memberType": "AllMember"}], "hierarchyId": p_hier or "parentId"},
-                        })
-                        continue
-                    member_ids = p_members
-                    hierarchy_id = p_hier
-                except Exception:
-                    member_ids = [raw_val]
-            else:
-                member_ids = [raw_val]
-
-            sac_params.append({
-                "parameterId": pid,
-                "value": {"memberIds": member_ids, "hierarchyId": hierarchy_id},
-            })
-
-        body = {"parameterValues": sac_params}
-        logger.info("SAC validate: POST %d params to %s — body: %s", len(sac_params), exec_path, json.dumps(body))
-        try:
-            resp = self._sac.post(exec_path, json=body)
-        except Exception as e:
-            return {"valid": None, "error": str(e)}
-
-        if resp.status_code not in (200, 202):
-            return {"valid": None, "error": f"SAC returned {resp.status_code}"}
-
-        exec_data = resp.json() if resp.content else {}
-        exec_id = (
-            exec_data.get("executionId") or exec_data.get("runId") or exec_data.get("id") or ""
-        )
-        if not exec_id:
-            return {"valid": None, "error": "No executionId returned by SAC"}
-
-        status_path = f"{exec_path}/{exec_id}"
-        detail: Dict[str, Any] = {}
-        status = "running"
-
-        # Poll for ~15 s only.  SAC rejects invalid parameters within 2-3 s
-        # (same behaviour as the empty-param probe).  If the execution is still
-        # running after 15 s the values were accepted by SAC → cancel immediately
-        # so we don't trigger a real data-writing execution.
-        _schedule = [3, 3, 3, 3, 3]
-        for _wait in _schedule:
-            _time.sleep(_wait)
-            try:
-                sr = self._sac.get(status_path)
-                detail = sr.json() if sr.content else {}
-            except Exception as e:
-                logger.warning("SAC validate: poll error: %s", e)
-                break
-            status = (detail.get("status") or "").strip().lower()
-            if status not in ("running", "pending", "queued", ""):
-                break
-
-        try:
-            self._sac.delete(status_path)
-            logger.info("SAC validate: cancelled execution %s (status=%s)", exec_id, status)
-        except Exception:
-            pass
-
-        if status in ("running", "pending", "queued", ""):
-            # Still running after 15 s → SAC accepted all parameter values
-            return {"valid": True, "warning": "Parameters accepted by SAC"}
-
-        if status in ("successful", "completed", "done"):
-            return {"valid": True, "status": status,
-                    "warning": "Test execution ran successfully — all parameters are valid"}
-
-        logger.info("SAC validate: execution result raw: %s", json.dumps(detail)[:2000])
-        errors = _parse_sac_execution_errors(detail)
-        if errors:
-            logger.info("SAC validate: %d error(s): %s", len(errors), [e["parameterId"] for e in errors])
-            return {"valid": False, "errors": errors}
-        return {"valid": True, "status": status}
 
     def get_dimension_members(self, model_id: str, dimension_id: str) -> Dict[str, Any]:
         """Fetch members of a SAC planning model dimension via the Data Export API.

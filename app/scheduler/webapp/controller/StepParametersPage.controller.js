@@ -441,6 +441,38 @@ sap.ui.define([
             this._loadSacParameters(sId);
         },
 
+        // "Insert" — associate the step with this multi action ID without running
+        // SAC's parameter-discovery simulation (onLoadSacMultiAction/_loadSacParameters).
+        // For multi actions with no mandatory parameters, this avoids an unnecessary
+        // wait: the user can just insert the ID and save.
+        onInsertSacMultiAction: function () {
+            if (this._editModel.getProperty("/viewOnly")) return;
+            var sId = (this._editModel.getProperty("/sacMultiActionIdInput") || "").trim();
+            if (!sId) {
+                MessageToast.show("Enter a Multi Action ID first");
+                return;
+            }
+            var sCurrent = this._editModel.getProperty("/sacMultiActionId") || "";
+            var oCur = this._currentStep();
+            if (sId !== sCurrent) {
+                if (oCur) { this._editModel.setProperty("/steps/" + oCur.idx + "/params", []); }
+                this._editModel.setProperty("/selectedStepParams", []);
+            }
+            this._editModel.setProperty("/sacMultiActionId", sId);
+            this._editModel.setProperty("/sacMultiActionIdInput", sId);
+            this._editModel.setProperty("/sacMultiActionName", "");
+            this._editModel.setProperty("/sacParamSchema", []);
+            this._editModel.setProperty("/sacNoParameters", false);
+            this._editModel.setProperty("/sacParamSchemaUnavailable", false);
+            if (oCur) {
+                var sDetected = oCur.step.dspDetectedSacMultiActionId || "";
+                var bIsOverride = sId !== sDetected;
+                this._editModel.setProperty("/steps/" + oCur.idx + "/sacMultiActionId", sId);
+                this._editModel.setProperty("/steps/" + oCur.idx + "/sacMultiActionIdIsOverride", bIsOverride);
+                this._editModel.setProperty("/sacMultiActionIdIsOverride", bIsOverride);
+            }
+        },
+
         onClearSacMultiActionOverride: function () {
             if (this._editModel.getProperty("/viewOnly")) return;
             var oCur = this._currentStep();
@@ -1328,8 +1360,9 @@ sap.ui.define([
                         if (sVal === "*" || sVal === "") {
                             return Object.assign({}, p, { value: "*" });
                         }
-                        var aDatePath = _expandDateYYYYMM(sVal);
-                        var memberIds = aDatePath ? [aDatePath] : [sVal];
+                        var memberIds = sVal.split(",").map(function (s) { return s.trim(); })
+                            .filter(function (s) { return s; })
+                            .map(function (sOne) { return _expandDateYYYYMM(sOne) || sOne; });
                         return Object.assign({}, p, { value: JSON.stringify({ memberIds: memberIds, hierarchyId: p.hierarchyId }) });
                     }
                     return p;
@@ -1350,11 +1383,15 @@ sap.ui.define([
                         active: true
                     }]);
                 }
+                // Stash the resolved multiaction ID itself unconditionally (not just when
+                // there happen to be other params) — the backend needs this sentinel at
+                // launch time to inject "multiaction_id" into DSP's payload, which
+                // otherwise never carries it (DSP's API step has no notion of SAC).
+                if (s.sacMultiActionId) {
+                    allParams = allParams.concat([{ key: "__sacMultiActionId", value: s.sacMultiActionId, active: true }]);
+                }
                 if (allParams.length) {
-                    var aToSave = s.sacMultiActionId
-                        ? allParams.concat([{ key: "__sacMultiActionId", value: s.sacMultiActionId, active: true }])
-                        : allParams;
-                    oOut[s.name] = aToSave;
+                    oOut[s.name] = allParams;
                 }
             });
             return { oOut: oOut };
@@ -1383,97 +1420,5 @@ sap.ui.define([
             this.getRouter().navTo(sReturnTo, { "?query": oReturnQuery }, true);
         },
 
-        onValidateSac: function () {
-            var that = this;
-            var aSteps = this._editModel.getProperty("/steps") || [];
-            var built = this._buildSaveOutput(aSteps);
-            var aSacValidations = built.aSacValidations;
-
-            if (!aSacValidations.length) {
-                MessageToast.show("No SAC steps with parameters to validate.");
-                return;
-            }
-
-            this._editModel.setProperty("/sacLoading", true);
-            this._editModel.setProperty("/sacLoadingText", "Validating parameters…");
-
-            var aPromises = aSacValidations.map(function (v) {
-                return fetch(that._getApiBase() + "jobs/sac/validate-parameters", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json", "Accept": "application/json" },
-                    body: JSON.stringify({ multiactionId: v.multiactionId, parameters: v.parameters })
-                }).then(function (r) {
-                    if (!r.ok) { return r.text().then(function (t) { throw new Error("HTTP " + r.status + ": " + t.slice(0, 200)); }); }
-                    return r.json();
-                }).then(function (res) {
-                    if (res.probing && res.validationKey) {
-                        return that._pollValidation(v.multiactionId, res.validationKey, 0);
-                    }
-                    return { multiactionId: v.multiactionId, result: res };
-                }).catch(function (err) {
-                    return { multiactionId: v.multiactionId, result: { valid: null, error: String(err && err.message || err) } };
-                });
-            });
-
-            Promise.all(aPromises).then(function (aResults) {
-                that._editModel.setProperty("/sacLoading", false);
-                that._editModel.setProperty("/sacLoadingText", "");
-
-                var aErrors = [];
-                var aWarnings = [];
-                aResults.forEach(function (item) {
-                    var r = item.result;
-                    if (r.valid === false && r.errors) {
-                        r.errors.forEach(function (e) {
-                            var sHint = e.needsHierarchyId ? " [fill HierarchyId]" : "";
-                            aErrors.push("• " + e.parameterId + sHint + ": " + e.message);
-                        });
-                    } else if (r.valid === null) {
-                        aWarnings.push("⚠ " + (r.message || r.error || "Validation unavailable"));
-                    }
-                });
-
-                if (aErrors.length) {
-                    MessageBox.error(
-                        "The following parameters have invalid or missing values:\n\n" + aErrors.join("\n"),
-                        { title: "SAC Validation Errors" }
-                    );
-                } else if (aWarnings.length) {
-                    MessageBox.warning(aWarnings.join("\n"), { title: "SAC Validation" });
-                } else {
-                    MessageToast.show("SAC validation OK — all parameters are valid");
-                }
-            });
-        },
-
-        _pollValidation: function (multiactionId, validationKey, nRetry) {
-            var that = this;
-            if (nRetry > 20) {
-                return Promise.resolve({
-                    multiactionId: multiactionId,
-                    result: { valid: null, error: "Validation timed out" }
-                });
-            }
-            return new Promise(function (resolve) {
-                setTimeout(function () {
-                    fetch(that._getApiBase() + "jobs/sac/validate-parameters", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json", "Accept": "application/json" },
-                        body: JSON.stringify({ validationKey: validationKey })
-                    }).then(function (r) {
-                        if (!r.ok) { return r.text().then(function (t) { throw new Error("HTTP " + r.status + ": " + t.slice(0, 200)); }); }
-                        return r.json();
-                    }).then(function (res) {
-                        if (res.probing) {
-                            resolve(that._pollValidation(multiactionId, validationKey, nRetry + 1));
-                        } else {
-                            resolve({ multiactionId: multiactionId, result: res });
-                        }
-                    }).catch(function (err) {
-                        resolve({ multiactionId: multiactionId, result: { valid: null, error: String(err && err.message || err) } });
-                    });
-                }, 3000);
-            });
-        }
     });
 });
