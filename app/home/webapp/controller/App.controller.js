@@ -20,13 +20,24 @@ sap.ui.define([
         _oPreloadedComponents: null,
 
         onInit: function () {
-            // BTP Launchpad URL pattern: /{guid}.{service}.{appId}-{version}/index.html
-            // Extract the prefix (guid + service) from the current page URL so we
-            // can build sibling-app URLs dynamically — works after every redeploy.
+            // Standalone approuter: URL is /{prefix}.home-{version}/index.html
             var sSegment = window.location.pathname.split('/')[1] || "";
             var oMatch = sSegment.match(/^(.+)\.home-[\d.]+$/);
             if (oMatch) {
                 this._sLaunchpadPrefix = oMatch[1];
+                this._bWorkZoneMode = false;
+            } else {
+                // Work Zone managed approuter: window.location is the shell URL (/site/...),
+                // so derive the prefix from the registered SAPUI5 module path for "home".
+                // Work Zone format: /{guid}.{serviceNoDots}.home/~{cachebuster}~
+                try {
+                    var sHomePath = sap.ui.require.toUrl("home");
+                    var oFallback = sHomePath.match(/\/(.+?)\.home(?:-[\d.]+)?(?:\/|$)/);
+                    if (oFallback) {
+                        this._sLaunchpadPrefix = oFallback[1];
+                        this._bWorkZoneMode = true;
+                    }
+                } catch (e) { /* falls back to localUrl */ }
             }
             this._oPreloadedComponents = {};
             this._selectNavItem("home");
@@ -37,6 +48,10 @@ sap.ui.define([
 
         _buildUrl: function (oCfg) {
             if (this._sLaunchpadPrefix) {
+                if (this._bWorkZoneMode) {
+                    // Work Zone: no version, no cache-buster (cache-buster is per-app and unknown)
+                    return "/" + this._sLaunchpadPrefix + "." + oCfg.name + "/";
+                }
                 return "/" + this._sLaunchpadPrefix + "." + oCfg.name + "-" + oCfg.version + "/";
             }
             return oCfg.localUrl;
