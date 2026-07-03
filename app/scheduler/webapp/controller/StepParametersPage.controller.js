@@ -39,8 +39,10 @@ sap.ui.define([
                 ibpTemplateName: "",
                 ibpTemplateNameInput: "",
                 ibpTemplateNameIsOverride: false,
+                ibpTemplateDescription: "",
                 ibpSteps: [],
                 ibpLoading: false,
+                ibpTemplatesLoading: false,
                 ibpGlobalVars: [],
                 selectedIbpStepIdx: null,
                 selectedIbpStepName: "",
@@ -96,8 +98,10 @@ sap.ui.define([
                 ibpTemplateName: "",
                 ibpTemplateNameInput: "",
                 ibpTemplateNameIsOverride: false,
+                ibpTemplateDescription: "",
                 ibpSteps: [],
                 ibpLoading: false,
+                ibpTemplatesLoading: false,
                 ibpGlobalVars: [],
                 selectedIbpStepIdx: null,
                 selectedIbpStepName: "",
@@ -281,16 +285,17 @@ sap.ui.define([
                     // Consume _restoredIbpParams here (inside the .then) so that
                     // _doLoadIbpSteps triggered by the user clicking a step before
                     // this response arrives can still read and consume it first.
-                    // Keyed by "name::order" (not just name) — the same IBP operator
-                    // name can appear more than once in a template's sequence, at
-                    // different positions, each with its own distinct params.
+                    // Keyed by "name::occurrenceIndex" (not just name) — the same IBP
+                    // operator name can appear more than once in a template's sequence,
+                    // at different positions, each with its own distinct params.
                     var oRestored = that._restoredIbpParams && that._restoredIbpParams[sStepName];
                     if (oRestored) {
                         delete that._restoredIbpParams[sStepName];
                     }
                     var oExistingByKey = that._resolveRestoredParamsMap(oRestored, data.steps);
-                    var aIbpSteps = (Array.isArray(data.steps) ? data.steps : []).map(function (s) {
-                        var aExisting = oExistingByKey[that._ibpStepKey(s)] || [];
+                    var aStepKeys = that._buildIbpStepKeys(data.steps);
+                    var aIbpSteps = (Array.isArray(data.steps) ? data.steps : []).map(function (s, i) {
+                        var aExisting = oExistingByKey[aStepKeys[i]] || [];
                         var aParams = aExisting;
                         if (!aParams.length && Array.isArray(s.globalVars) && s.globalVars.length) {
                             aParams = s.globalVars
@@ -607,18 +612,19 @@ sap.ui.define([
                     });
                     // IBP sub-step params → stored in _restoredIbpParams, not in ibpSteps,
                     // so _doLoadIbpSteps still fetches all template steps from IBP.
-                    // Kept under two keys: "name::order" (precise — the same IBP operator
-                    // name can repeat at different positions in a template's sequence) and
-                    // a name-only bucket for older saves that predate stepOrder, used as a
-                    // fallback only when that name turns out to be unambiguous (see
-                    // _resolveRestoredParamsMap).
+                    // Kept under two keys: "name::occurrenceIndex" (precise — the same IBP
+                    // operator name can repeat at different positions in a template's
+                    // sequence, and the Nth occurrence in the file/save maps to the Nth
+                    // occurrence in the template) and a name-only bucket for older saves
+                    // that predate stepOccurrence, used as a fallback only when that name
+                    // turns out to be unambiguous (see _resolveRestoredParamsMap).
                     allParams.filter(function (p) { return p.step; }).forEach(function (p) {
                         if (!that._restoredIbpParams[step.name]) {
                             that._restoredIbpParams[step.name] = { byKey: {}, byNameOnly: {} };
                         }
                         var oBucket = that._restoredIbpParams[step.name];
                         var oEntry = { key: p.key, value: p.value, active: p.active !== false, description: p.description || "", ibpParamName: p.ibpParamName || "", ibpVarNameParam: p.ibpVarNameParam || "", mandatory: !!p.mandatory };
-                        var sCompositeKey = p.step + "::" + (p.stepOrder != null ? p.stepOrder : "");
+                        var sCompositeKey = that._ibpStepKeyFor(p.step, p.stepOccurrence);
                         if (!oBucket.byKey[sCompositeKey]) oBucket.byKey[sCompositeKey] = [];
                         oBucket.byKey[sCompositeKey].push(oEntry);
                         if (!oBucket.byNameOnly[p.step]) oBucket.byNameOnly[p.step] = [];
@@ -661,6 +667,7 @@ sap.ui.define([
                 this._editModel.setProperty("/ibpTemplateName", "");
                 this._editModel.setProperty("/ibpTemplateNameInput", "");
                 this._editModel.setProperty("/ibpTemplateNameIsOverride", false);
+                this._editModel.setProperty("/ibpTemplateDescription", "");
                 this._editModel.setProperty("/ibpSteps", []);
                 this._editModel.setProperty("/ibpLoading", false);
                 this._editModel.setProperty("/selectedIbpStepIdx", null);
@@ -685,6 +692,7 @@ sap.ui.define([
             this._editModel.setProperty("/ibpTemplateName", oStep.ibpTemplateName || "");
             this._editModel.setProperty("/ibpTemplateNameInput", oStep.ibpTemplateName || "");
             this._editModel.setProperty("/ibpTemplateNameIsOverride", !!oStep.ibpTemplateNameIsOverride);
+            this._editModel.setProperty("/ibpTemplateDescription", oStep.ibpTemplateDescription || "");
             this._editModel.setProperty("/ibpSteps", aCachedIbpSteps);
             this._editModel.setProperty("/ibpLoading", false);
             this._editModel.setProperty("/selectedIbpStepIdx", null);
@@ -796,6 +804,8 @@ sap.ui.define([
             this._editModel.setProperty("/ibpTemplateName", sDetected);
             this._editModel.setProperty("/ibpTemplateNameInput", sDetected);
             this._editModel.setProperty("/ibpTemplateNameIsOverride", false);
+            this._editModel.setProperty("/ibpTemplateDescription", "");
+            this._editModel.setProperty("/steps/" + oCur.idx + "/ibpTemplateDescription", "");
             this._editModel.setProperty("/ibpSteps", []);
             this._editModel.setProperty("/selectedIbpStepIdx", null);
             this._editModel.setProperty("/selectedIbpStepName", "");
@@ -805,17 +815,25 @@ sap.ui.define([
 
         _doLoadIbpSteps: function (sTemplate) {
             var that = this;
+            // Resolve the description from the (lazily fetched) template catalog cache,
+            // if available — cleared when unknown (e.g. a manually typed name) rather
+            // than showing a stale description from a previously loaded template.
+            var oCacheMatch = (this._aIbpTemplatesCache || []).filter(function (t) {
+                return t.name === sTemplate;
+            })[0];
+            this._editModel.setProperty("/ibpTemplateDescription", oCacheMatch ? (oCacheMatch.description || "") : "");
             // Capture existing params BEFORE clearing /ibpSteps.
             // Priority: cached ibpSteps on the current DSP step (survive step-switching),
             // falling back to the current /ibpSteps working list.
             var oCurPre = this._currentStep();
             var aPre = (oCurPre && this._editModel.getProperty("/steps/" + oCurPre.idx + "/ibpSteps"))
                 || this._editModel.getProperty("/ibpSteps") || [];
-            // Keyed by "name::order" — the same IBP operator name can appear more than
-            // once in a template's sequence, at different positions, each with its own
-            // distinct params (keying by name alone would merge them together).
+            // Keyed by "name::occurrenceIndex" — the same IBP operator name can appear
+            // more than once in a template's sequence, at different positions, each
+            // with its own distinct params (keying by name alone would merge them).
             var oExistingByKey = {};
-            aPre.forEach(function (s) { oExistingByKey[that._ibpStepKey(s)] = s.params || []; });
+            var aPreKeys = this._buildIbpStepKeys(aPre);
+            aPre.forEach(function (s, i) { oExistingByKey[aPreKeys[i]] = s.params || []; });
 
             this._editModel.setProperty("/ibpLoading", true);
             this._editModel.setProperty("/ibpSteps", []);
@@ -850,8 +868,9 @@ sap.ui.define([
                             }
                         });
                     }
-                    var aSteps = (Array.isArray(data.steps) ? data.steps : []).map(function (s) {
-                        var aExisting = oExistingByKey[that._ibpStepKey(s)] || [];
+                    var aFreshKeys = that._buildIbpStepKeys(data.steps);
+                    var aSteps = (Array.isArray(data.steps) ? data.steps : []).map(function (s, i) {
+                        var aExisting = oExistingByKey[aFreshKeys[i]] || [];
                         var aParams = aExisting;
                         // Pre-populate only from step-level globalVars (extracted per-step
                         // from IBP seq_param_val) — NOT from template-level to avoid adding
@@ -890,6 +909,8 @@ sap.ui.define([
                         that._editModel.setProperty("/steps/" + oCur.idx + "/ibpTemplateName", sTemplate);
                         that._editModel.setProperty("/steps/" + oCur.idx + "/ibpTemplateNameIsOverride", bIsOverride);
                         that._editModel.setProperty("/ibpTemplateNameIsOverride", bIsOverride);
+                        that._editModel.setProperty("/steps/" + oCur.idx + "/ibpTemplateDescription",
+                            that._editModel.getProperty("/ibpTemplateDescription") || "");
                     }
                 })
                 .catch(function (e) {
@@ -977,25 +998,52 @@ sap.ui.define([
         // The same IBP operator name (e.g. an /IBP/HCI_DI step reused twice) can appear
         // more than once in a template's sequence — "order" (the step's 1-based position,
         // stable across repeated fetches of the same unchanged template) disambiguates them.
-        _ibpStepKey: function (s) {
-            return (s && s.name || "") + "::" + (s && s.order != null ? s.order : "");
+        // The same IBP operator name can repeat at different positions in a template's
+        // sequence. Disambiguate by "occurrence index" — how many earlier entries in
+        // the list already had this same name (0-based) — rather than absolute
+        // position, so this lines up exactly with the row order used in the Excel
+        // bulk-import format (see CustomCalendarPage's Parameters-sheet parsing): the
+        // Nth time a name appears in the file corresponds to the Nth time it appears
+        // in the template's own step list.
+        _buildIbpStepOccurrences: function (aSteps) {
+            var oCounts = {};
+            return (aSteps || []).map(function (s) {
+                var sName = (s && s.name) || "";
+                var n = oCounts[sName] || 0;
+                oCounts[sName] = n + 1;
+                return n;
+            });
+        },
+
+        _ibpStepKeyFor: function (sName, nOccurrence) {
+            return (sName || "") + "::" + (nOccurrence != null ? nOccurrence : "");
+        },
+
+        // Returns an array of "name::occurrenceIndex" keys, one per entry in aSteps,
+        // in the same order.
+        _buildIbpStepKeys: function (aSteps) {
+            var that = this;
+            var aOcc = this._buildIbpStepOccurrences(aSteps);
+            return (aSteps || []).map(function (s, i) {
+                return that._ibpStepKeyFor(s && s.name, aOcc[i]);
+            });
         },
 
         // Resolves a saved { byKey, byNameOnly } restore bucket (see
-        // _applyParamsJsonToSteps) into a flat "name::order" -> params map, given the
-        // freshly-fetched IBP template steps. Falls back to the name-only bucket (older
-        // saves made before stepOrder existed) only when that name is unambiguous in the
-        // current fetch — never guesses when duplicates are present.
+        // _applyParamsJsonToSteps) into a flat "name::occurrenceIndex" -> params map,
+        // given the freshly-fetched IBP template steps. Falls back to the name-only
+        // bucket (older saves made before stepOccurrence existed) only when that name
+        // is unambiguous in the current fetch — never guesses when duplicates are present.
         _resolveRestoredParamsMap: function (oRestored, aFetchedSteps) {
             if (!oRestored) return {};
-            var that = this;
             var oNameCounts = {};
             (aFetchedSteps || []).forEach(function (s) {
                 oNameCounts[s.name] = (oNameCounts[s.name] || 0) + 1;
             });
+            var aKeys = this._buildIbpStepKeys(aFetchedSteps);
             var oOut = Object.assign({}, oRestored.byKey);
-            (aFetchedSteps || []).forEach(function (s) {
-                var sKey = that._ibpStepKey(s);
+            (aFetchedSteps || []).forEach(function (s, i) {
+                var sKey = aKeys[i];
                 if ((!oOut[sKey] || !oOut[sKey].length) && oNameCounts[s.name] === 1 && oRestored.byNameOnly[s.name]) {
                     oOut[sKey] = oRestored.byNameOnly[s.name];
                 }
@@ -1022,31 +1070,10 @@ sap.ui.define([
             var oCurIbp = this._currentIbpStep();
             if (!oCurIbp) { MessageToast.show("Select an IBP step first"); return; }
             var aParams = (oCurIbp.step.params || []).slice();
-            aParams.push({ key: String(oNew.key).trim(), value: oNew.value == null ? "" : String(oNew.value), active: !!oNew.active, description: oNew.description || "", ibpParamName: oNew.ibpParamName || "", ibpVarNameParam: oNew.ibpVarNameParam || "" });
+            aParams.push({ key: String(oNew.key).trim(), value: oNew.value == null ? "" : String(oNew.value), active: true, description: oNew.description || "", ibpParamName: oNew.ibpParamName || "", ibpVarNameParam: oNew.ibpVarNameParam || "" });
             this._replaceIbpStepParams(oCurIbp.idx, aParams);
             this._editModel.setProperty("/selectedIbpStepParams", aParams);
             this._editModel.setProperty("/newIbpParam", _newParam());
-        },
-
-        onEditIbpStepParam: function (oEvt) {
-            var oCtx = oEvt.getSource().getBindingContext("edit");
-            if (!oCtx) return;
-            var oRow = oCtx.getObject();
-            var iIdx = parseInt(oCtx.getPath().split("/").pop(), 10);
-            var oCurIbp = this._currentIbpStep();
-            if (!oCurIbp || isNaN(iIdx)) return;
-
-            this._editModel.setProperty("/newIbpParam", {
-                key: oRow.key, value: oRow.value, active: !!oRow.active, description: oRow.description || "", ibpParamName: oRow.ibpParamName || "", ibpVarNameParam: oRow.ibpVarNameParam || ""
-            });
-
-            // Move the row into the "new param" fields for editing, without the
-            // delete-confirmation popup (that's only for the standalone Delete
-            // action on global-variable params).
-            var aParams = (this._editModel.getProperty("/selectedIbpStepParams") || []).slice();
-            aParams.splice(iIdx, 1);
-            this._replaceIbpStepParams(oCurIbp.idx, aParams);
-            this._editModel.setProperty("/selectedIbpStepParams", aParams);
         },
 
         onDeleteIbpStepParam: function (oEvt) {
@@ -1105,19 +1132,6 @@ sap.ui.define([
                 });
                 this._editModel.setProperty("/steps/" + oCurDsp.idx + "/ibpSteps", aDspIbp);
             }
-        },
-
-        onToggleIbpParam: function (oEvt) {
-            var oCtx = oEvt.getSource().getBindingContext("edit");
-            if (!oCtx) return;
-            var sPath = oCtx.getPath();
-            var iIdx = parseInt(sPath.split("/").pop(), 10);
-            var oCurIbp = this._currentIbpStep();
-            if (!oCurIbp || isNaN(iIdx)) return;
-            var aParams = (oCurIbp.step.params || []).slice();
-            aParams[iIdx] = Object.assign({}, aParams[iIdx], { active: !aParams[iIdx].active });
-            this._replaceIbpStepParams(oCurIbp.idx, aParams);
-            this._editModel.setProperty("/selectedIbpStepParams", aParams);
         },
 
         onResetIbpNewParam: function () {
@@ -1203,6 +1217,89 @@ sap.ui.define([
             });
         },
 
+        onIbpTemplateValueHelp: function () {
+            if (this._editModel.getProperty("/viewOnly")) return;
+            var that = this;
+
+            function openWith(aTemplates) {
+                var oVhModel = new JSONModel({ templates: aTemplates });
+                if (that._oIbpTemplateVHD) {
+                    that._oIbpTemplateVHD.setModel(oVhModel, "vh");
+                    that._oIbpTemplateVHD.open();
+                    return;
+                }
+                sap.ui.require([
+                    "sap/m/SelectDialog",
+                    "sap/m/StandardListItem",
+                    "sap/ui/model/Filter",
+                    "sap/ui/model/FilterOperator"
+                ], function (SelectDialog, StandardListItem, Filter, FilterOperator) {
+                    that._oIbpTemplateVHD = new SelectDialog({
+                        title: "IBP Job Templates",
+                        rememberSelections: false,
+                        confirm: function (oEvt) {
+                            var oItem = oEvt.getParameter("selectedItem");
+                            if (!oItem) return;
+                            var oCtx = oItem.getBindingContext("vh");
+                            if (!oCtx) return;
+                            var sName = oCtx.getProperty("name");
+                            that._editModel.setProperty("/ibpTemplateNameInput", sName);
+                            that._editModel.setProperty("/ibpTemplateDescription", oCtx.getProperty("description") || "");
+                            that._doLoadIbpSteps(sName);
+                        },
+                        liveChange: function (oEvt) {
+                            var sVal = oEvt.getParameter("value");
+                            var oBinding = that._oIbpTemplateVHD.getBinding("items");
+                            if (oBinding) {
+                                oBinding.filter(sVal ? [new Filter({
+                                    filters: [
+                                        new Filter("name", FilterOperator.Contains, sVal),
+                                        new Filter("description", FilterOperator.Contains, sVal)
+                                    ],
+                                    and: false
+                                })] : []);
+                            }
+                        }
+                    });
+                    that.getView().addDependent(that._oIbpTemplateVHD);
+                    that._oIbpTemplateVHD.setModel(oVhModel, "vh");
+                    that._oIbpTemplateVHD.bindAggregation("items", {
+                        path: "vh>/templates",
+                        template: new StandardListItem({
+                            title: "{vh>name}",
+                            description: "{vh>description}"
+                        })
+                    });
+                    that._oIbpTemplateVHD.open();
+                });
+            }
+
+            if (this._aIbpTemplatesCache) {
+                openWith(this._aIbpTemplatesCache);
+                return;
+            }
+
+            this._editModel.setProperty("/ibpTemplatesLoading", true);
+            fetch(that._getApiBase() + "jobs/ibp/templates", {
+                headers: { "Accept": "application/json" }
+            })
+                .then(function (res) { return res.json(); })
+                .then(function (data) {
+                    if (data.error) {
+                        MessageToast.show("IBP error: " + data.error);
+                        return;
+                    }
+                    that._aIbpTemplatesCache = data.templates || [];
+                    openWith(that._aIbpTemplatesCache);
+                })
+                .catch(function (e) {
+                    MessageToast.show("Failed to load IBP templates: " + e.message);
+                })
+                .finally(function () {
+                    that._editModel.setProperty("/ibpTemplatesLoading", false);
+                });
+        },
+
         formatStepParamCount: function (aParams, aIbpSteps) {
             var n = (aParams || []).length;
             (aIbpSteps || []).forEach(function (is) {
@@ -1213,13 +1310,16 @@ sap.ui.define([
 
         _buildSaveOutput: function (aSteps) {
             var oOut = {};
+            var that = this;
             aSteps.forEach(function (s) {
                 var allParams = (s.params || []).filter(function (p) { return p.active !== false; });
-                (s.ibpSteps || []).forEach(function (is) {
+                // stepOccurrence disambiguates IBP operator names that repeat within the
+                // same template's sequence — "the Nth step named X", not an absolute
+                // position — so it lines up with the Excel bulk-import row ordering.
+                var aOcc = that._buildIbpStepOccurrences(s.ibpSteps);
+                (s.ibpSteps || []).forEach(function (is, j) {
                     (is.params || []).filter(function (p) { return p.active !== false; }).forEach(function (p) {
-                        // stepOrder disambiguates IBP operator names that repeat at
-                        // different positions in the same template's sequence.
-                        allParams.push(Object.assign({}, p, { step: is.name, stepOrder: is.order }));
+                        allParams.push(Object.assign({}, p, { step: is.name, stepOccurrence: aOcc[j] }));
                     });
                 });
                 allParams = allParams.map(function (p) {

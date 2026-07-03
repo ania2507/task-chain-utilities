@@ -156,6 +156,25 @@ class IBPJobClient(BaseJobClient):
     # Template helpers
     # ------------------------------------------------------------------
 
+    def list_templates(self) -> list[Dict[str, Any]]:
+        """Return all IBP job templates as [{"name": ..., "description": ...}, …].
+
+        Used to populate a match-code / value-help picker so users don't need
+        to already know the exact technical template name.
+        """
+        resp = self._odata.get("JobTemplateSet?$format=json")
+        results = resp.json().get("d", {}).get("results", [])
+        templates = [
+            {
+                "name": r.get("JobTemplateName", ""),
+                "description": r.get("JobTemplateText") or r.get("Text") or "",
+            }
+            for r in results
+            if r.get("JobTemplateName")
+        ]
+        templates.sort(key=lambda t: t["description"] or t["name"])
+        return templates
+
     def read_template(self, template_name: str) -> Dict[str, Any]:
         """Return parsed template metadata (sequences, parameters, …)."""
         path = f"JobTemplateRead?JobTemplateName='{quote(template_name, safe='')}'"

@@ -438,6 +438,14 @@ sap.ui.define([
             // Job Template / Multi Action override, collected once per (scheduleId, dspStep)
             // regardless of how many parameter rows reference that step.
             var oOverrideByKey = {}; // "schId::dspStep" -> { value, isIbp }
+            // The same IBP Step name can repeat within one (scheduleId, dspStep) block
+            // when a job template calls the same operator more than once — rows for the
+            // same occurrence are consecutive (e.g. two parameter rows for one step),
+            // and a later, non-consecutive repeat of the same name starts a new
+            // occurrence. This mirrors exactly how the template's own step order is
+            // walked when restoring, so "the Nth time this name appears in the file"
+            // lines up with "the Nth time it appears in the template".
+            var oIbpOccState = {}; // "schId::dspStep" -> { lastName, counts: {name: n} }
 
             // Parameters sheet: Schedule ID | DSP Step | Job Template / Multi Action | IBP Step | Parameter | Value | HierarchyId
             // IBP Step filled → IBP param (with step field); IBP Step blank → SAC param.
@@ -468,6 +476,15 @@ sap.ui.define([
                     var oP = { key: sP_Key, value: sP_Val, active: true };
                     if (sP_IbpStep) {
                         oP.step = sP_IbpStep;
+                        var sOccKey = sP_SchId + "::" + sP_DspStep;
+                        if (!oIbpOccState[sOccKey]) oIbpOccState[sOccKey] = { lastName: null, counts: {} };
+                        var oOccState = oIbpOccState[sOccKey];
+                        if (sP_IbpStep !== oOccState.lastName) {
+                            oOccState.counts[sP_IbpStep] = (oOccState.counts[sP_IbpStep] === undefined)
+                                ? 0 : oOccState.counts[sP_IbpStep] + 1;
+                            oOccState.lastName = sP_IbpStep;
+                        }
+                        oP.stepOccurrence = oOccState.counts[sP_IbpStep];
                     } else {
                         if (sP_HId) oP.hierarchyId = sP_HId;
                         if (aSacFlatDspSteps.indexOf(sP_DspStep) === -1) aSacFlatDspSteps.push(sP_DspStep);

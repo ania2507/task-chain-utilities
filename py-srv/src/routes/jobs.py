@@ -763,7 +763,7 @@ def ibp_service_metadata():
         return jsonify({"error": "IBP client misconfigured"}), 500
 
     try:
-        resp = client._odata.get("/$metadata")
+        resp = client._odata.get("/$metadata", headers={"Accept": "application/xml"})
         raw_xml = resp.text
 
         # Parse EDMX to extract entity sets and function imports
@@ -772,12 +772,29 @@ def ibp_service_metadata():
         func_imports = _re.findall(r'<FunctionImport\s+Name="([^"]+)"', raw_xml)
         entity_types = _re.findall(r'<EntityType\s+Name="([^"]+)"', raw_xml)
 
-        return jsonify({
+        result = {
             "entitySets": sorted(entity_sets),
             "functionImports": sorted(func_imports),
             "entityTypes": sorted(entity_types),
             "_rawPreview": raw_xml[:2000],
-        }), 200
+        }
+
+        # Full definition of the JobTemplate entity type (properties), if present —
+        # used to discover the name/description fields for a template-catalog picker.
+        m = _re.search(r'<EntityType\s+Name="JobTemplate"[^>]*>.*?</EntityType>', raw_xml, _re.S)
+        if m:
+            result["jobTemplateEntityType"] = m.group(0)
+
+        # Live sample of JobTemplateSet so we can see actual field values (not just schema).
+        probe = request.args.get("probe")
+        if probe:
+            try:
+                presp = client._odata.get(f"/{probe}?$top=5&$format=json")
+                result["probe"] = {"path": probe, "data": presp.json()}
+            except Exception as pex:
+                result["probe"] = {"path": probe, "error": str(pex)[:500]}
+
+        return jsonify(result), 200
     except Exception as e:
         logger.exception("Error fetching IBP service metadata")
         return jsonify({"error": str(e)}), 500
@@ -827,6 +844,27 @@ def ibp_global_var_descriptions():
             attempts.append({"path": path, "status": "error", "error": str(ex)[:200]})
 
     return jsonify({"attempts": attempts, "results": results}), 200
+
+
+@bp.route("/ibp/templates", methods=["GET"])
+@flask_access_validation(required_scope="admin")
+def list_ibp_templates():
+    """List all IBP job templates (name + description) for a match-code picker."""
+    executor = _get_executor()
+    if not executor.has_client(IntegrationType.IBP):
+        return jsonify({"error": "IBP integration not configured"}), 503
+
+    from ..integrations.ibp import IBPJobClient
+    client = executor.get_client(IntegrationType.IBP)
+    if not isinstance(client, IBPJobClient):
+        return jsonify({"error": "IBP client misconfigured"}), 500
+
+    try:
+        templates = client.list_templates()
+        return jsonify({"templates": templates}), 200
+    except Exception as e:
+        logger.exception("Error listing IBP job templates")
+        return jsonify({"error": str(e)}), 500
 
 
 @bp.route("/ibp/template", methods=["POST"])

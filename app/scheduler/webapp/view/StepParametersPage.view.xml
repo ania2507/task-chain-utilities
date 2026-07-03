@@ -109,6 +109,11 @@
                                                    placeholder="IBP job template name"
                                                    enabled="{= !${edit>/ibpLoading} }"
                                                    class="sapUiTinyMarginEnd"/>
+                                            <Button icon="sap-icon://value-help" type="Transparent"
+                                                    press=".onIbpTemplateValueHelp" tooltip="Search IBP job templates"
+                                                    busy="{edit>/ibpTemplatesLoading}"
+                                                    enabled="{= !${edit>/ibpLoading} &amp;&amp; !${edit>/ibpTemplatesLoading} }"
+                                                    class="sapUiTinyMarginEnd"/>
                                             <Button text="{= ${edit>/ibpLoading} ? 'Loading…' : 'Load' }"
                                                     type="Emphasized" press=".onLoadIbpSteps"
                                                     busy="{edit>/ibpLoading}" enabled="{= !${edit>/ibpLoading} }"/>
@@ -144,6 +149,12 @@
                                        visible="{= !${edit>/viewOnly} }"/>
                                 <Text text="{edit>/ibpTemplateName}" class="sapUiTinyMarginEnd"
                                       visible="{= !!${edit>/viewOnly} }"/>
+                                <Button icon="sap-icon://value-help" type="Transparent"
+                                        press=".onIbpTemplateValueHelp" tooltip="Search IBP job templates"
+                                        visible="{= !${edit>/viewOnly} }"
+                                        busy="{edit>/ibpTemplatesLoading}"
+                                        enabled="{= !${edit>/ibpLoading} &amp;&amp; !${edit>/ibpTemplatesLoading} }"
+                                        class="sapUiTinyMarginBegin"/>
                                 <Button icon="sap-icon://refresh" type="Transparent"
                                         press=".onLoadIbpSteps" tooltip="Reload steps with this template name"
                                         visible="{= !${edit>/viewOnly} }"
@@ -160,6 +171,9 @@
                                     <layoutData>
                                         <l:SplitterLayoutData size="340px"/>
                                     </layoutData>
+                                    <Text text="{edit>/ibpTemplateDescription}"
+                                          visible="{= !!${edit>/ibpTemplateDescription} }"
+                                          class="sapUiSmallFontSize sapUiTinyMarginBeginEnd sapUiTinyMarginBottom"/>
                                     <List items="{edit>/ibpSteps}" mode="None"
                                           noDataText="{= ${edit>/ibpLoading} ? 'Loading...' : 'No steps found in IBP template' }">
                                         <StandardListItem
@@ -181,20 +195,17 @@
                                                 <Column><Text text="Key"/></Column>
                                                 <Column><Text text="Description"/></Column>
                                                 <Column><Text text="Value"/></Column>
-                                                <Column hAlign="Center" width="5rem"><Text text="Active"/></Column>
-                                                <Column hAlign="End" width="6rem"><Text text=""/></Column>
+                                                <Column hAlign="End" width="3.5rem"><Text text=""/></Column>
                                             </columns>
                                             <ColumnListItem>
                                                 <cells>
                                                     <Text text="{edit>key}"/>
                                                     <Text text="{edit>description}" class="sapUiSmallFontSize"/>
-                                                    <Text text="{edit>value}"/>
-                                                    <core:Icon src="{= ${edit>active} ? 'sap-icon://accept' : 'sap-icon://decline' }"
-                                                               color="{= ${edit>active} ? '#2ecc71' : '#bdc3c7' }"/>
-                                                    <HBox justifyContent="End" visible="{= !${edit>/viewOnly} }">
-                                                        <Button icon="sap-icon://edit" type="Transparent" press=".onEditIbpStepParam" tooltip="Edit"/>
-                                                        <Button icon="sap-icon://delete" type="Reject" press=".onDeleteIbpStepParam" tooltip="Delete"/>
-                                                    </HBox>
+                                                    <Input value="{edit>value}" width="100%"
+                                                           editable="{= !${edit>/viewOnly} }"/>
+                                                    <Button icon="sap-icon://delete" type="Transparent"
+                                                            press=".onDeleteIbpStepParam" tooltip="Delete"
+                                                            visible="{= !${edit>/viewOnly} }"/>
                                                 </cells>
                                             </ColumnListItem>
                                         </Table>
@@ -209,10 +220,6 @@
                                             <HBox alignItems="Center" class="sapUiTinyMarginBottom">
                                                 <Label text="Value:" width="9rem"/>
                                                 <Input value="{edit>/newIbpParam/value}" width="20rem" placeholder="param value"/>
-                                            </HBox>
-                                            <HBox alignItems="Center" class="sapUiTinyMarginBottom">
-                                                <Label text="Active:" width="9rem"/>
-                                                <CheckBox selected="{edit>/newIbpParam/active}"/>
                                             </HBox>
                                             <HBox class="sapUiSmallMarginTop">
                                                 <Button text="Add" type="Accept" icon="sap-icon://add"
