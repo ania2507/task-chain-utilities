@@ -25,7 +25,7 @@
           "semanticObject": "ConditionalRules",
           "action": "manage",
           "title": "{{appTitle}}",
-          "icon": "sap-icon://settings"
+          "icon": "sap-icon://filter"
         }
       }
     },

@@ -29,7 +29,7 @@
           "semanticObject": "SkipOverrides",
           "action": "manage",
           "title": "{{appTitle}}",
-          "icon": "sap-icon://wrench"
+          "icon": "sap-icon://step"
         }
       }
     }

@@ -20,7 +20,7 @@
           "semanticObject": "TaskChainMonitoring",
           "action": "display",
           "title": "{{appTitle}}",
-          "icon": "sap-icon://monitor-payments"
+          "icon": "sap-icon://bar-chart"
         }
       }
     },
@@ -47,7 +47,7 @@
   "sap.ui": {
     "technology": "UI5",
     "icons": {
-      "icon": "sap-icon://monitor-payments",
+      "icon": "sap-icon://bar-chart",
       "favIcon": "",
       "phone": "",
       "phone@2": "",
