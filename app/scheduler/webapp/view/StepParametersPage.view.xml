@@ -249,8 +249,13 @@
                                 <Text text="{= ${edit>/sacMultiActionName} ? ${edit>/sacMultiActionName} + ' (' + ${edit>/sacMultiActionId} + ')' : ${edit>/sacMultiActionId} }"
                                       class="sapUiTinyMarginEnd"
                                       visible="{= !!${edit>/viewOnly} }"/>
+                                <Button icon="sap-icon://accept" type="Transparent"
+                                        press=".onInsertSacMultiAction" tooltip="Insert (associate this Multi Action ID without running a simulation)"
+                                        visible="{= !${edit>/viewOnly} }"
+                                        enabled="{= !${edit>/sacLoading} }"
+                                        class="sapUiTinyMarginBegin"/>
                                 <Button icon="sap-icon://refresh" type="Transparent"
-                                        press=".onLoadSacMultiAction" tooltip="Reload parameters for this Multi Action ID"
+                                        press=".onLoadSacMultiAction" tooltip="Load Parameters (run a simulation to discover mandatory parameters)"
                                         visible="{= !${edit>/viewOnly} }"
                                         busy="{edit>/sacLoading}" enabled="{= !${edit>/sacLoading} }"
                                         class="sapUiTinyMarginBegin"/>

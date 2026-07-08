@@ -437,6 +437,13 @@ sap.ui.define([
         },
 
         /**
+         * Refresh chain detail data
+         */
+        onRefresh: function () {
+            this._loadChainData();
+        },
+
+        /**
          * Navigate back
          */
         onNavBack: function () {

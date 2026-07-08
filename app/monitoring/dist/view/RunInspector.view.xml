@@ -22,7 +22,6 @@
                 </contentMiddle>
                 <contentRight>
                     <Button id="btnRefreshRun" icon="sap-icon://refresh" tooltip="{i18n>common.refresh}" press=".onRefresh"/>
-                    <Button id="btnLogs" icon="sap-icon://sys-monitor" text="View Logs" press=".onViewLogs"/>
                 </contentRight>
             </Bar>
         </customHeader>
@@ -197,21 +196,6 @@
                             </ColumnListItem>
                         </items>
                     </Table>
-                </content>
-            </Panel>
-
-            <!-- Logs Link Section -->
-            <Panel id="logsPanel" headerText="{i18n>runInspector.logs}" class="sapUiSmallMargin" expandable="true">
-                <content>
-                    <VBox id="logsLinksBox" class="sapUiSmallMargin">
-                        <Link id="linkCorrelation" 
-                            text="View Correlated Logs (Correlation ID: {runDetail>/correlationId})"
-                            press=".onViewCorrelatedLogs"
-                            class="sapUiSmallMarginBottom"/>
-                        <Link id="linkFullLogs" 
-                            text="View Full Execution Logs"
-                            press=".onViewFullLogs"/>
-                    </VBox>
                 </content>
             </Panel>
         </content>

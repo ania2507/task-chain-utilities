@@ -362,32 +362,6 @@ sap.ui.define([
         },
 
         /**
-         * View logs in external system
-         */
-        onViewLogs: function () {
-            var sCorrelationId = this.getView().getModel("runDetail").getProperty("/correlationId");
-            MessageToast.show("Opening logs for correlation ID: " + sCorrelationId);
-            // TODO: Implement actual log viewer integration
-        },
-
-        /**
-         * View correlated logs
-         */
-        onViewCorrelatedLogs: function () {
-            var sCorrelationId = this.getView().getModel("runDetail").getProperty("/correlationId");
-            MessageToast.show("Opening correlated logs: " + sCorrelationId);
-            // TODO: Implement actual log correlation feature
-        },
-
-        /**
-         * View full execution logs
-         */
-        onViewFullLogs: function () {
-            MessageToast.show("Opening full execution logs...");
-            // TODO: Implement full logs viewer
-        },
-
-        /**
          * Handle click on failed step - show error detail dialog
          */
         onFailedStepPress: function (oEvent) {

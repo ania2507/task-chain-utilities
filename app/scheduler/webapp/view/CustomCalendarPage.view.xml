@@ -237,7 +237,7 @@
                 <Button text="{i18n>calendar.deleteAll}"
                         icon="sap-icon://delete"
                         type="Reject"
-                        enabled="{= ${edit>/calendarEntries}.length > 0 }"
+                        enabled="{= ${edit>/visibleEntriesCount} > 0 }"
                         press=".onDeleteAllEntries"/>
                 <ToolbarSpacer/>
                 <Button text="{i18n>common.cancel}" press=".onNavBack"/>

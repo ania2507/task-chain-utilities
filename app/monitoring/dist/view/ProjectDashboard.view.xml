@@ -15,14 +15,16 @@
 
         <f:title>
             <f:DynamicPageTitle>
-                <f:navigationActions>
-                    <Button icon="sap-icon://nav-back" type="Transparent" press=".onNavBack"/>
-                </f:navigationActions>
                 <f:heading>
-                    <VBox>
-                        <Title id="dashboardTitle" text="{dashboard>/projectName}" level="H2"/>
-                        <Text text="{dashboard>/projectDescription}" class="sapUiTinyFont" visible="{= !!${dashboard>/projectDescription}}"/>
-                    </VBox>
+                    <HBox alignItems="Center">
+                        <Button icon="sap-icon://nav-back" type="Transparent"
+                                tooltip="{i18n>common.back}" press=".onNavBack"
+                                class="sapUiSmallMarginEnd"/>
+                        <VBox>
+                            <Title id="dashboardTitle" text="{dashboard>/projectName}" level="H2"/>
+                            <Text text="{dashboard>/projectDescription}" class="sapUiTinyFont" visible="{= !!${dashboard>/projectDescription}}"/>
+                        </VBox>
+                    </HBox>
                 </f:heading>
                 <f:snappedHeading>
                     <VBox>
@@ -32,9 +34,6 @@
                 </f:snappedHeading>
                 <f:actions>
                     <Button id="btnDashboardRefresh" icon="sap-icon://refresh" tooltip="Refresh" press=".onRefresh"/>
-                    <Button id="btnExport" icon="sap-icon://download" tooltip="{i18n>common.export}"/>
-                    <Button id="btnSettings" icon="sap-icon://action-settings" tooltip="Settings"/>
-                    <Button id="btnNotifications" icon="sap-icon://bell" tooltip="Notifications"/>
                 </f:actions>
             </f:DynamicPageTitle>
         </f:title>

@@ -22,8 +22,7 @@
                     <Title id="chainDetailTitle" text="{chainDetail>/chainName}" level="H4"/>
                 </contentMiddle>
                 <contentRight>
-                    <Button id="btnDownload" icon="sap-icon://download" tooltip="Download"/>
-                    <Button id="btnMore" icon="sap-icon://overflow" tooltip="More options"/>
+                    <Button id="btnRefreshChain" icon="sap-icon://refresh" tooltip="{i18n>common.refresh}" press=".onRefresh"/>
                 </contentRight>
             </Bar>
         </customHeader>
@@ -107,7 +106,6 @@
                     <Toolbar id="execTableToolbar">
                         <Title id="execTableTitle" text="{i18n>chainDetail.executionDetails}" level="H5"/>
                         <ToolbarSpacer/>
-                        <Button id="btnTableSettings" icon="sap-icon://action-settings" tooltip="Table Settings"/>
                     </Toolbar>
                 </headerToolbar>
                 <Table id="executionDetailsTable" 

@@ -27,6 +27,7 @@ sap.ui.define([
                 parameters: "",
                 activeCount: 0,
                 totalCount: 0,
+                visibleEntriesCount: 0,
                 nextRunLabel: "",
                 lastRunAt: null,
                 lastRunStatus: "",
@@ -56,6 +57,7 @@ sap.ui.define([
                 parameters: "",
                 activeCount: 0,
                 totalCount: 0,
+                visibleEntriesCount: 0,
                 nextRunLabel: "",
                 lastRunAt: null,
                 lastRunStatus: "",
@@ -679,8 +681,11 @@ sap.ui.define([
                 });
                 that._editModel.setProperty("/calendarEntries", aEntries);
                 if (aEntries.length && !that._editModel.getProperty("/calendarFileStatus")) {
+                    // Active entries still to run (future date/time) — not the raw total,
+                    // since past/error/success entries aren't "upcoming" for the user.
+                    var nUpcoming = aEntries.filter(function (e) { return e.active && !e.isPast; }).length;
                     that._editModel.setProperty("/calendarFileStatus",
-                        aEntries.length + " entries loaded from server");
+                        nUpcoming + " active entries scheduled to run");
                 }
                 that._updateSummary();
                 that._applyPastFilter();
@@ -779,6 +784,25 @@ sap.ui.define([
             }
 
             oBinding.filter(aFilters);
+            this._editModel.setProperty("/visibleEntriesCount", this._getVisibleCalendarEntries().length);
+        },
+
+        // Same criteria as _applyPastFilter's table filter (Show past entries toggle +
+        // From/To date range), but returns the actual plain-JS entry objects so callers
+        // like "Delete All" can act only on what the user currently sees.
+        _getVisibleCalendarEntries: function () {
+            var aEntries = this._editModel.getProperty("/calendarEntries") || [];
+            var bShowPast = this._editModel.getProperty("/showPastEntries");
+            var oFrom = this._editModel.getProperty("/filterDateFrom");
+            var oTo = this._editModel.getProperty("/filterDateTo");
+            var sFrom = oFrom ? this._toIsoDate(oFrom) : null;
+            var sTo = oTo ? this._toIsoDate(oTo) : null;
+            return aEntries.filter(function (e) {
+                if (!bShowPast && e.isPast) return false;
+                if (sFrom && e.date < sFrom) return false;
+                if (sTo && e.date > sTo) return false;
+                return true;
+            });
         },
 
         _persistCalendarEntries: function (aEntries) {
@@ -914,20 +938,30 @@ sap.ui.define([
         },
 
         onDeleteAllEntries: function () {
-            var aEntries = this._editModel.getProperty("/calendarEntries") || [];
-            if (!aEntries.length) return;
+            // Only act on entries the user currently sees — respects the "Show past
+            // entries" toggle and the From/To date range, same as the table itself.
+            var aVisible = this._getVisibleCalendarEntries();
+            if (!aVisible.length) return;
             var that = this;
             var oRb = this.getResourceBundle();
-            MessageBox.confirm(oRb.getText("calendar.confirmDeleteAll", [aEntries.length]), {
+            MessageBox.confirm(oRb.getText("calendar.confirmDeleteAll", [aVisible.length]), {
                 onClose: function (sAction) {
                     if (sAction !== MessageBox.Action.OK) return;
-                    // Clear UI immediately so back button / upload remain usable
-                    var aIds = aEntries.map(function (e) { return e.ID; }).filter(Boolean);
-                    that._editModel.setProperty("/calendarEntries", []);
-                    that._editModel.setProperty("/calendarFileStatus", "");
+                    var aIds = aVisible.map(function (e) { return e.ID; }).filter(Boolean);
+                    var oIdSet = {};
+                    aIds.forEach(function (sId) { oIdSet[sId] = true; });
+                    // Clear only the visible entries from the UI immediately; entries
+                    // hidden by the current filter are left untouched.
+                    var aRemaining = (that._editModel.getProperty("/calendarEntries") || [])
+                        .filter(function (e) { return !oIdSet[e.ID]; });
+                    that._editModel.setProperty("/calendarEntries", aRemaining);
+                    if (!aRemaining.length) {
+                        that._editModel.setProperty("/calendarFileStatus", "");
+                    }
                     that._updateSummary();
+                    that._applyPastFilter();
                     // Delete from server + cancel APScheduler jobs in background
-                    that._cancelSchedulerJobs(aEntries).catch(function () {});
+                    that._cancelSchedulerJobs(aVisible).catch(function () {});
                     that._deleteEntriesByIds(aIds).catch(function (err) {
                         console.warn("[Scheduler] delete all failed:", err && err.message);
                     });
