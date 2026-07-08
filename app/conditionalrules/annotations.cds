@@ -71,15 +71,11 @@ annotate service.RuleTable with @(
 );
 
 // Annotations per RuleTaskchainLink
+// NB: la colonna "Business Name" è una custom column nel manifest
+// (ext/fragment/TaskchainLink.fragment.xml): naviga via router FE perché un
+// DataFieldWithUrl con hash diretto rompe la shell di Work Zone.
 annotate service.RuleTaskchainLink with @(
     UI.LineItem #Taskchains : [
-        {
-            $Type : 'UI.DataFieldWithUrl',
-            Label : 'Business Name',
-            Value : businessName,
-            Url : taskchainUrl,
-            IconUrl : '',
-        },
         {
             $Type : 'UI.DataField',
             Label : 'Technical Name',

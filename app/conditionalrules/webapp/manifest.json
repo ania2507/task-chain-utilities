@@ -179,7 +179,27 @@
                   }
                 }
               },
-              "controlConfiguration": {}
+              "controlConfiguration": {
+                "taskchains/@com.sap.vocabularies.UI.v1.LineItem#Taskchains": {
+                  "columns": {
+                    "BusinessNameLinkColumn": {
+                      "header": "Business Name",
+                      "template": "conditionalrules.ext.fragment.TaskchainLink",
+                      "position": {
+                        "placement": "Before",
+                        "anchor": "DataField::taskchain"
+                      },
+                      "properties": [
+                        "businessName",
+                        "taskchain",
+                        "spaceId",
+                        "taskchainUrl"
+                      ],
+                      "availability": "Default"
+                    }
+                  }
+                }
+              }
             }
           }
         },
