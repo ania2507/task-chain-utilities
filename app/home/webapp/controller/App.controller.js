@@ -42,8 +42,12 @@ sap.ui.define([
             this._oPreloadedComponents = {};
             this._selectNavItem("home");
 
-            // Start background preloading after the home page has rendered
-            setTimeout(this._preloadApps.bind(this), 1500);
+            // Background preload only in standalone approuter mode.
+            // In Work Zone the managed approuter already caches resources,
+            // and preloading causes duplicate-ID errors with Fiori Elements apps.
+            if (!this._bWorkZoneMode) {
+                setTimeout(this._preloadApps.bind(this), 1500);
+            }
         },
 
         _buildUrl: function (oCfg) {
