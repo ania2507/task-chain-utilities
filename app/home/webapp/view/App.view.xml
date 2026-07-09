@@ -36,13 +36,13 @@
                         <core:Icon src="sap-icon://task" size="4rem" class="homeHeroIcon"/>
                         <Title text="Task Chain Utilities" level="H1" class="homeHeroTitle"/>
                         <Text
-                            text="Seleziona un'applicazione dal menu laterale o clicca su una delle card qui sotto."
+                            text="Select an application from the side menu or click one of the cards below."
                             class="homeHeroSubtitle"
                             wrapping="true"
                             textAlign="Center"/>
                     </VBox>
                     <FlexBox wrap="Wrap" justifyContent="Center" class="homeTileBox">
-                        <GenericTile header="Monitoring" subheader="Monitoraggio Task Chain"
+                        <GenericTile header="Monitoring" subheader="Live status of task chain runs"
                             press=".onTilePress" class="homeTile" frameType="OneByOne">
                             <customData><core:CustomData key="appKey" value="monitoring"/></customData>
                             <tileContent>
@@ -51,7 +51,7 @@
                                 </TileContent>
                             </tileContent>
                         </GenericTile>
-                        <GenericTile header="Scheduler" subheader="Pianificazione Task Chain"
+                        <GenericTile header="Scheduler" subheader="Schedule and manage task chain runs"
                             press=".onTilePress" class="homeTile" frameType="OneByOne">
                             <customData><core:CustomData key="appKey" value="scheduler"/></customData>
                             <tileContent>
@@ -60,7 +60,7 @@
                                 </TileContent>
                             </tileContent>
                         </GenericTile>
-                        <GenericTile header="Skip Overrides" subheader="Gestione Skip Override"
+                        <GenericTile header="Skip Overrides" subheader="Per-step skip logic, override management"
                             press=".onTilePress" class="homeTile" frameType="OneByOne">
                             <customData><core:CustomData key="appKey" value="skipoverrides"/></customData>
                             <tileContent>
@@ -69,7 +69,7 @@
                                 </TileContent>
                             </tileContent>
                         </GenericTile>
-                        <GenericTile header="Conditional Rules" subheader="Regole Condizionali"
+                        <GenericTile header="Conditional Rules" subheader="Python-Based Routing"
                             press=".onTilePress" class="homeTile" frameType="OneByOne">
                             <customData><core:CustomData key="appKey" value="conditionalrules"/></customData>
                             <tileContent>

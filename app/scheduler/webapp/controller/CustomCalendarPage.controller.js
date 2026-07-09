@@ -26,15 +26,19 @@ sap.ui.define([
                 entryParameters: "",
                 parameters: "",
                 activeCount: 0,
+                activeFutureCount: 0,
                 totalCount: 0,
                 visibleEntriesCount: 0,
+                unsavedCount: 0,
+                pendingDeleteIds: [],
                 nextRunLabel: "",
                 lastRunAt: null,
                 lastRunStatus: "",
                 showPastEntries: false,
                 filterDateFrom: null,
                 filterDateTo: null,
-                busy: false
+                busy: false,
+                calendarUploadBusy: false
             });
             this.getView().setModel(oModel, "edit");
             this._editModel = oModel;
@@ -56,15 +60,19 @@ sap.ui.define([
                 entryParameters: "",
                 parameters: "",
                 activeCount: 0,
+                activeFutureCount: 0,
                 totalCount: 0,
                 visibleEntriesCount: 0,
+                unsavedCount: 0,
+                pendingDeleteIds: [],
                 nextRunLabel: "",
                 lastRunAt: null,
                 lastRunStatus: "",
                 showPastEntries: false,
                 filterDateFrom: null,
                 filterDateTo: null,
-                busy: false
+                busy: false,
+                calendarUploadBusy: false
             });
             var that = this;
             this._consumeStepParametersResult().then(function () {
@@ -103,6 +111,12 @@ sap.ui.define([
             var aActive = aEntries.filter(function (e) { return e.active; });
             this._editModel.setProperty("/totalCount", aEntries.length);
             this._editModel.setProperty("/activeCount", aActive.length);
+            this._editModel.setProperty("/activeFutureCount",
+                aActive.filter(function (e) { return !e.isPast; }).length);
+
+            var nUnsaved = aEntries.filter(function (e) { return e._unsaved; }).length;
+            var nPendingDelete = (this._editModel.getProperty("/pendingDeleteIds") || []).length;
+            this._editModel.setProperty("/unsavedCount", nUnsaved + nPendingDelete);
 
             var now = new Date();
             var oNext = null;
@@ -139,6 +153,12 @@ sap.ui.define([
             try {
                 return this.getResourceBundle().getText("calendar.entries", [sTaskchain || ""]);
             } catch (e) { return "Active entries for " + (sTaskchain || ""); }
+        },
+
+        formatCalendarFileStatusState: function (sStatus, nUnsavedCount) {
+            if (!sStatus) return "None";
+            if (nUnsavedCount > 0) return "Error";
+            return "Success";
         },
 
         onNavBack: function () {
@@ -268,11 +288,13 @@ sap.ui.define([
             var oFile = oEvt.getParameter("files") && oEvt.getParameter("files")[0];
             if (!oFile) return;
             var that = this;
+            this._editModel.setProperty("/calendarUploadBusy", true);
             var bIsCsv = /\.csv$/i.test(oFile.name);
             var pReady = bIsCsv ? Promise.resolve() : this._ensureXlsxLoaded();
             pReady.then(function () {
                 that._readCalendarFile(oFile, bIsCsv);
             }).catch(function (err) {
+                that._editModel.setProperty("/calendarUploadBusy", false);
                 console.error("[Scheduler] Could not load XLSX library:", err && err.message);
                 MessageBox.error("Could not load the XLSX library needed to read this file. Use a .csv file instead.");
             });
@@ -286,6 +308,7 @@ sap.ui.define([
                 try {
                     oParsed = that._parseCalendarBuffer(e.target.result, oFile.name);
                 } catch (err) {
+                    that._editModel.setProperty("/calendarUploadBusy", false);
                     console.error("[Scheduler] calendar parse error", err);
                     var oRb = that.getResourceBundle();
                     MessageBox.error(oRb.getText("calendar.parseError", [err.message || String(err)]));
@@ -378,6 +401,7 @@ sap.ui.define([
                         oFileSeen[sKey] = true;
                     });
                     if (aFileDups.length) {
+                        that._editModel.setProperty("/calendarUploadBusy", false);
                         MessageBox.error(
                             "The file contains duplicate date/time combinations:\n" +
                             aFileDups.slice(0, 5).join("\n") +
@@ -398,19 +422,43 @@ sap.ui.define([
                     });
 
                     function doUpload() {
-                        that._editModel.setProperty("/calendarFileStatus",
-                            oFile.name + " — " + aEntries.length + " entries");
-                        // Delete only future entries that collide with the new file (same date+time)
+                        // Nothing is persisted to the server here — the file's entries are
+                        // only staged locally (in /calendarEntries) until the user clicks
+                        // "Save Calendar". Entries already saved that collide with a row in
+                        // the file are removed from view now, but the actual server-side
+                        // delete + rescheduling only happens on Save too.
                         var aCollidingExisting = aCollisions.map(function (entry) {
                             return oAppByKey[entry.date + "T" + entry.rawTime];
                         }).filter(Boolean);
                         var aOverwriteIds = aCollidingExisting.map(function (e) { return e.ID; }).filter(Boolean);
-                        that._cancelSchedulerJobs(aCollidingExisting).catch(function () {});
-                        that._deleteEntriesByIds(aOverwriteIds)
-                            .catch(function () {})
-                            .then(function () { return that._persistCalendarEntries(aEntries); })
-                            .then(function () { that._loadCalendarEntries(); });
+                        if (aOverwriteIds.length) {
+                            var aPending = (that._editModel.getProperty("/pendingDeleteIds") || []).concat(aOverwriteIds);
+                            that._editModel.setProperty("/pendingDeleteIds", aPending);
+                        }
+
+                        var aStaged = aEntries.map(function (e) {
+                            return Object.assign({}, e, {
+                                ID: null,
+                                isPast: false,
+                                runStatus: "",
+                                runAt: null,
+                                _remoteId: "",
+                                _unsaved: true
+                            });
+                        });
+                        var oOverwriteIdSet = {};
+                        aOverwriteIds.forEach(function (id) { oOverwriteIdSet[id] = true; });
+                        var aRemaining = (that._editModel.getProperty("/calendarEntries") || [])
+                            .filter(function (e) { return !e.ID || !oOverwriteIdSet[e.ID]; });
+                        that._editModel.setProperty("/calendarEntries", aRemaining.concat(aStaged));
+                        that._editModel.setProperty("/calendarFileStatus",
+                            oFile.name + " — " + aEntries.length + " entries loaded (not yet saved). "
+                            + "Click \"Save Calendar\" to save and schedule them.");
+                        that._updateSummary();
+                        that._applyPastFilter();
                     }
+
+                    that._editModel.setProperty("/calendarUploadBusy", false);
 
                     if (aCollisions.length) {
                         var aLabels = aCollisions.slice(0, 5).map(function (e) {
@@ -774,13 +822,21 @@ sap.ui.define([
                 aFilters.push(new Filter("isPast", FilterOperator.EQ, false));
             }
 
+            // Two filters on the SAME path ("date") are OR-combined by UI5 by default
+            // (it treats them as a multi-value "IN" style filter) — "date >= from OR
+            // date <= to" is true for virtually every date, which is why the range only
+            // "worked" when just one bound was set. Combine them explicitly with AND.
+            var aDateFilters = [];
             var oFrom = this._editModel.getProperty("/filterDateFrom");
             if (oFrom) {
-                aFilters.push(new Filter("date", FilterOperator.GE, this._toIsoDate(oFrom)));
+                aDateFilters.push(new Filter("date", FilterOperator.GE, this._toIsoDate(oFrom)));
             }
             var oTo = this._editModel.getProperty("/filterDateTo");
             if (oTo) {
-                aFilters.push(new Filter("date", FilterOperator.LE, this._toIsoDate(oTo)));
+                aDateFilters.push(new Filter("date", FilterOperator.LE, this._toIsoDate(oTo)));
+            }
+            if (aDateFilters.length) {
+                aFilters.push(new Filter({ filters: aDateFilters, and: true }));
             }
 
             oBinding.filter(aFilters);
@@ -901,12 +957,15 @@ sap.ui.define([
                 try { JSON.parse(d.entryParameters); }
                 catch (e) { this.error("Parameters must be valid JSON: " + e.message); return; }
             }
-            var oModel = this.getModel();
             var that = this;
-            var pSaved;
+
+            // Editing an existing (already-saved, already-scheduled) entry still
+            // applies immediately — there's no "unsaved" concept for it, and the
+            // user expects the live schedule to reflect the change right away.
             if (this._editingEntryId) {
+                var oModel = this.getModel();
                 var oCtxBind = oModel.bindContext("/ScheduleEntry(" + this._editingEntryId + ")");
-                pSaved = oCtxBind.requestObject().then(function () {
+                oCtxBind.requestObject().then(function () {
                     var oCtx = oCtxBind.getBoundContext();
                     oCtx.setProperty("runDate", d.entryDate);
                     oCtx.setProperty("runTime", d.entryTime);
@@ -914,27 +973,42 @@ sap.ui.define([
                     oCtx.setProperty("parameters", d.entryParameters || "");
                     oCtx.setProperty("details", d.entryDetails || "");
                     return oModel.submitBatch(oModel.getUpdateGroupId());
+                }).then(function () {
+                    that.onCloseCalendarEntryDialog();
+                    that._loadCalendarEntries();
+                }).catch(function (err) {
+                    that.error(err.message || String(err));
                 });
-            } else {
-                var oList = oModel.bindList("/ScheduleEntry");
-                var oCtxNew = oList.create({
-                    spaceId: d.spaceId || "",
-                    taskchain: d.taskchain || "",
-                    runDate: d.entryDate,
-                    runTime: d.entryTime,
-                    timezone: "Europe/Rome",
-                    active: !!d.entryActive,
-                    parameters: d.entryParameters || "",
-                    details: d.entryDetails || ""
-                });
-                pSaved = oCtxNew.created();
+                return;
             }
-            pSaved.then(function () {
-                that.onCloseCalendarEntryDialog();
-                that._loadCalendarEntries();
-            }).catch(function (err) {
-                that.error(err.message || String(err));
-            });
+
+            // New entry — stage it locally; it's only persisted (and scheduled)
+            // once the user clicks "Save Calendar".
+            var oNewEntry = {
+                ID: null,
+                chain: d.taskchain || "",
+                date: d.entryDate,
+                dateLabel: this._formatDateLabel(d.entryDate),
+                time: d.entryTime + " CET",
+                rawTime: d.entryTime,
+                timezone: "Europe/Rome",
+                active: !!d.entryActive,
+                parameters: d.entryParameters || "",
+                details: d.entryDetails || "",
+                isPast: false,
+                runStatus: "",
+                runAt: null,
+                _remoteId: "",
+                _unsaved: true
+            };
+            var aEntries = (this._editModel.getProperty("/calendarEntries") || []).concat([oNewEntry]);
+            this._editModel.setProperty("/calendarEntries", aEntries);
+            this._editModel.setProperty("/calendarFileStatus",
+                aEntries.filter(function (e) { return e._unsaved; }).length
+                + " entries loaded (not yet saved). Click \"Save Calendar\" to save and schedule them.");
+            this._updateSummary();
+            this._applyPastFilter();
+            this.onCloseCalendarEntryDialog();
         },
 
         onDeleteAllEntries: function () {
@@ -947,24 +1021,32 @@ sap.ui.define([
             MessageBox.confirm(oRb.getText("calendar.confirmDeleteAll", [aVisible.length]), {
                 onClose: function (sAction) {
                     if (sAction !== MessageBox.Action.OK) return;
-                    var aIds = aVisible.map(function (e) { return e.ID; }).filter(Boolean);
+                    // Unsaved (staged) entries have no ID and nothing to delete server-side —
+                    // just drop them locally. Already-saved entries need the real delete flow.
+                    var aSaved = aVisible.filter(function (e) { return !e._unsaved; });
+                    var aIds = aSaved.map(function (e) { return e.ID; }).filter(Boolean);
                     var oIdSet = {};
                     aIds.forEach(function (sId) { oIdSet[sId] = true; });
                     // Clear only the visible entries from the UI immediately; entries
                     // hidden by the current filter are left untouched.
                     var aRemaining = (that._editModel.getProperty("/calendarEntries") || [])
-                        .filter(function (e) { return !oIdSet[e.ID]; });
+                        .filter(function (e) {
+                            if (e._unsaved) { return aVisible.indexOf(e) === -1; }
+                            return !oIdSet[e.ID];
+                        });
                     that._editModel.setProperty("/calendarEntries", aRemaining);
                     if (!aRemaining.length) {
                         that._editModel.setProperty("/calendarFileStatus", "");
                     }
                     that._updateSummary();
                     that._applyPastFilter();
-                    // Delete from server + cancel APScheduler jobs in background
-                    that._cancelSchedulerJobs(aVisible).catch(function () {});
-                    that._deleteEntriesByIds(aIds).catch(function (err) {
-                        console.warn("[Scheduler] delete all failed:", err && err.message);
-                    });
+                    if (aSaved.length) {
+                        // Delete from server + cancel APScheduler jobs in background
+                        that._cancelSchedulerJobs(aSaved).catch(function () {});
+                        that._deleteEntriesByIds(aIds).catch(function (err) {
+                            console.warn("[Scheduler] delete all failed:", err && err.message);
+                        });
+                    }
                 }
             });
         },
@@ -1005,6 +1087,20 @@ sap.ui.define([
             if (!oCtx) return;
             var o = oCtx.getObject();
             var that = this;
+
+            // Unsaved (staged) entry — never persisted, so just drop it locally.
+            if (o._unsaved) {
+                var aRemaining = (this._editModel.getProperty("/calendarEntries") || [])
+                    .filter(function (e) { return e !== o; });
+                this._editModel.setProperty("/calendarEntries", aRemaining);
+                if (!aRemaining.length) {
+                    this._editModel.setProperty("/calendarFileStatus", "");
+                }
+                this._updateSummary();
+                this._applyPastFilter();
+                return;
+            }
+
             var oRb = this.getResourceBundle();
             MessageBox.confirm(oRb.getText("calendar.confirmRemove", [o.dateLabel, o.time]), {
                 onClose: function (sAction) {
@@ -1072,10 +1168,17 @@ sap.ui.define([
             // Single-shot consume
             oComp._stepParamsState = null;
             var sEntryId = this._calendarRowEntryId || null;
+            var oRowCtx = this._calendarRowCtx || null;
             this._calendarRowEntryId = null;
             this._calendarRowCtx = null;
             if (!sEntryId) {
-                this._editModel.setProperty("/parameters", s.parametersJson);
+                // Unsaved (staged) row — write the params directly into its local entry
+                // object; they'll be included when the row is actually persisted on Save.
+                if (oRowCtx) {
+                    this._editModel.setProperty(oRowCtx.getPath() + "/parameters", s.parametersJson);
+                } else {
+                    this._editModel.setProperty("/parameters", s.parametersJson);
+                }
                 return Promise.resolve();
             }
             var oModel = this.getModel();
@@ -1123,39 +1226,37 @@ sap.ui.define([
         // Confirm: schedule all active entries via py-srv
         // ------------------------------------------------------------
         onConfirmCustomCalendar: function () {
-            var d = this._editModel.getData();
-            var aEntries = (d.calendarEntries || []).filter(function (e) { return e.active && !e.isPast; });
-            if (!aEntries.length) {
-                this.error("No active entries to schedule");
+            var that = this;
+            var aEntries = this._editModel.getProperty("/calendarEntries") || [];
+            var aUnsaved = aEntries.filter(function (e) { return e._unsaved; });
+            var aPendingDeleteIds = this._editModel.getProperty("/pendingDeleteIds") || [];
+
+            if (!aUnsaved.length && !aPendingDeleteIds.length) {
+                this.error("Nothing to save");
                 return;
             }
+
             this._editModel.setProperty("/busy", true);
-            var that = this;
-            var aPromises = aEntries.map(function (e) {
-                var params = null;
-                if (e.parameters && String(e.parameters).trim()) {
-                    try { params = JSON.parse(e.parameters); } catch (_) { params = null; }
-                }
-                var payload = {
-                    spaceId: d.spaceId,
-                    taskchain: d.taskchain,
-                    runAt: e.date + "T" + (e.rawTime || (e.time || "").replace(/\s*CET.*$/i, "")) + ":00",
-                    parameters: params
-                };
-                return that.callScheduler("/schedule-once", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
+            var pDelete = aPendingDeleteIds.length
+                ? this._deleteEntriesByIds(aPendingDeleteIds).catch(function () {})
+                : Promise.resolve();
+
+            pDelete
+                .then(function () { return that._persistCalendarEntries(aUnsaved); })
+                .then(function () {
+                    that._editModel.setProperty("/pendingDeleteIds", []);
+                    // Clear so the reload below can recompute a fresh "loaded/scheduled" message.
+                    that._editModel.setProperty("/calendarFileStatus", "");
+                    return that._loadCalendarEntries();
+                })
+                .then(function () {
+                    that._editModel.setProperty("/busy", false);
+                    that.toast(aUnsaved.length + " calendar entries saved and scheduled");
+                })
+                .catch(function (err) {
+                    that._editModel.setProperty("/busy", false);
+                    that.error(err.message || String(err));
                 });
-            });
-            Promise.all(aPromises).then(function () {
-                that._editModel.setProperty("/busy", false);
-                that.toast(aEntries.length + " calendar entries scheduled for " + (d.name || d.taskchain));
-                that.onNavBack();
-            }).catch(function (err) {
-                that._editModel.setProperty("/busy", false);
-                that.error(err.message || String(err));
-            });
         }
     });
 });

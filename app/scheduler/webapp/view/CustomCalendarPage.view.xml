@@ -65,7 +65,7 @@
                             <core:Icon src="sap-icon://list" size="0.875rem" class="sapUiTinyMarginEnd"/>
                             <Label text="{i18n>calendar.activeEntries}"/>
                         </HBox>
-                        <Text text="{= ${edit>/activeCount} + ' / ' + ${edit>/totalCount} }"/>
+                        <Text text="{edit>/activeFutureCount}"/>
                     </VBox>
 
                     <!-- Next run -->
@@ -88,7 +88,8 @@
                 <Panel headerText="{i18n>calendar.title}" class="sapUiNoMargin">
                     <content>
                         <VBox class="sapUiMediumMarginTopBottom sapUiMediumMarginBeginEnd">
-                            <HBox alignItems="Center" class="sapUiSmallMarginBottom">
+                            <HBox alignItems="Center" class="sapUiSmallMarginBottom"
+                                  busy="{edit>/calendarUploadBusy}" busyIndicatorDelay="0">
                                 <u:FileUploader
                                     id="customCalendarPageFileUploader"
                                     name="calendar"
@@ -111,7 +112,7 @@
 
                             <ObjectStatus
                                 text="{edit>/calendarFileStatus}"
-                                state="{= ${edit>/calendarEntries}.length > 0 ? 'Success' : 'None' }"
+                                state="{ parts: ['edit>/calendarFileStatus', 'edit>/unsavedCount'], formatter: '.formatCalendarFileStatusState' }"
                                 class="sapUiTinyMarginBottom"
                                 visible="{= !!${edit>/calendarFileStatus} }"/>
 
@@ -243,7 +244,7 @@
                 <Button text="{i18n>common.cancel}" press=".onNavBack"/>
                 <Button text="{i18n>calendar.confirm}"
                         type="Emphasized"
-                        enabled="{= ${edit>/calendarEntries}.length > 0 }"
+                        enabled="{= ${edit>/unsavedCount} > 0 }"
                         press=".onConfirmCustomCalendar"/>
             </OverflowToolbar>
         </f:footer>
