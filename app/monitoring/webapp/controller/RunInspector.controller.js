@@ -83,10 +83,9 @@ sap.ui.define([
             var sBaseUrl = this._getPySrvUrl();
             var that = this;
             
-            // Get run info from taskchain-runs
-            var sRunsUrl = sBaseUrl + "/v1/dsp/taskchain-runs?spaceId=" + encodeURIComponent(sSpaceId) + 
-                       "&taskchain=" + encodeURIComponent(sChainId) + 
-                       "&limit=800";
+            // Get run info by task log id: chainId in the route may be the chain UUID,
+            // while DSP indexes runs by chain name, so filtering by taskchain can miss the run
+            var sRunsUrl = sBaseUrl + "/v1/dsp/taskchain-runs?runId=" + encodeURIComponent(sRunId);
             
             // Get detailed messages for this run
             var sMessagesUrl = sBaseUrl + "/v1/dsp/tasklog-messages?taskLogId=" + encodeURIComponent(sRunId);
@@ -102,20 +101,28 @@ sap.ui.define([
                 var runsResult = results[0];
                 var messagesResult = results[1];
                 var nodesResult = results[2];
-                
+
                 // Find the specific run
                 var oRun = null;
                 if (runsResult.success && runsResult.runs) {
-                    oRun = runsResult.runs.find(function(r) { 
-                        return String(r.runId) === String(sRunId); 
+                    oRun = runsResult.runs.find(function(r) {
+                        return String(r.runId) === String(sRunId);
                     });
                 }
                 
                 if (oRun) {
                     var sStatus = oRun.status;
-                    var sStatusText = sStatus === "success" ? "Success" : 
-                                     sStatus === "error" ? "Error" : 
+                    var sStatusText = sStatus === "success" ? "Success" :
+                                     sStatus === "error" ? "Error" :
                                      sStatus === "running" ? "Running" : "Pending";
+
+                    // The route may carry the chain UUID; show the real chain name from the run
+                    if (oRun.taskChain) {
+                        oModel.setProperty("/taskChainName", oRun.taskChain);
+                    }
+                    if (oRun.spaceId) {
+                        oModel.setProperty("/spaceId", oRun.spaceId);
+                    }
                     
                     // Calculate duration
                     var sDuration = "-";
@@ -132,6 +139,10 @@ sap.ui.define([
                     oModel.setProperty("/startTime", oRun.startTime || "-");
                     oModel.setProperty("/endTime", oRun.endTime || "-");
                     oModel.setProperty("/totalDuration", sDuration);
+                } else {
+                    // Run not found in DSP logs: don't leave the header stuck on "Loading..."
+                    oModel.setProperty("/status", "pending");
+                    oModel.setProperty("/statusText", "Unknown");
                 }
                 
                 // Process messages into timeline
@@ -303,7 +314,7 @@ sap.ui.define([
                 that.getOwnerComponent()._setBusy(false);
 
             }.bind(this)).catch(function(error) {
-                console.error("Error loading run details:", error);
+                console.error("[RunInspector] error loading run details:", error);
                 oModel.setProperty("/status", "error");
                 oModel.setProperty("/statusText", "Load Error");
                 that.getOwnerComponent()._setBusy(false);

@@ -41,7 +41,7 @@
 
         <content>
             <!-- DAG Visualization Section -->
-            <Panel id="dagPanel" headerText="Task Chain DAG" class="sapUiSmallMargin dagContainer">
+            <Panel id="dagPanel" headerText="Task Chain" class="sapUiSmallMargin dagContainer">
                 <content>
                     <core:HTML id="dagSvgContainer" content="{chainDetail>/dagHtml}" preferDOM="true"/>
                 </content>

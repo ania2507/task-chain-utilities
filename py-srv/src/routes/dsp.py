@@ -2093,7 +2093,7 @@ def get_taskchain_runs():
         '''
         
         rows = db_query_executor.query(sql, tuple(params))
-        
+
         # Transform results
         runs = []
         for row in rows:
