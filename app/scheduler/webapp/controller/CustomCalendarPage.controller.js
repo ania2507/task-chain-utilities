@@ -38,7 +38,8 @@ sap.ui.define([
                 filterDateFrom: null,
                 filterDateTo: null,
                 busy: false,
-                calendarUploadBusy: false
+                calendarUploadBusy: false,
+                lastUploadFileName: ""
             });
             this.getView().setModel(oModel, "edit");
             this._editModel = oModel;
@@ -48,6 +49,21 @@ sap.ui.define([
         _onMatched: function (oEvent) {
             var oArgs = oEvent.getParameter("arguments") || {};
             var oQuery = oArgs["?query"] || {};
+
+            // Returning from Configure Step Parameters — restore the full local state
+            // (including any not-yet-saved staged entries) instead of resetting and
+            // reloading from the server, which would silently drop unsaved entries.
+            var oComp = this.getOwnerComponent();
+            var savedState = oComp && oComp._customCalendarState;
+            if (savedState && savedState.taskchain === (oQuery.taskchain || "")
+                    && savedState.spaceId === (oQuery.spaceId || "")) {
+                oComp._customCalendarState = null;
+                this._editModel.setData(savedState);
+                this._consumeStepParametersResult();
+                this._loadLastRun(savedState.spaceId, savedState.taskchain);
+                return;
+            }
+
             this._editModel.setData({
                 name: oQuery.name || oQuery.taskchain || "",
                 spaceId: oQuery.spaceId || "",
@@ -72,7 +88,8 @@ sap.ui.define([
                 filterDateFrom: null,
                 filterDateTo: null,
                 busy: false,
-                calendarUploadBusy: false
+                calendarUploadBusy: false,
+                lastUploadFileName: ""
             });
             var that = this;
             this._consumeStepParametersResult().then(function () {
@@ -117,6 +134,21 @@ sap.ui.define([
             var nUnsaved = aEntries.filter(function (e) { return e._unsaved; }).length;
             var nPendingDelete = (this._editModel.getProperty("/pendingDeleteIds") || []).length;
             this._editModel.setProperty("/unsavedCount", nUnsaved + nPendingDelete);
+
+            // Keep the status message in sync with the current entry count —
+            // it must never show a stale number after an add/delete/save.
+            if (nUnsaved > 0) {
+                var sFileName = this._editModel.getProperty("/lastUploadFileName");
+                var sPrefix = sFileName ? (sFileName + " — ") : "";
+                this._editModel.setProperty("/calendarFileStatus",
+                    sPrefix + nUnsaved + " entries loaded (not yet saved). "
+                    + "Click \"Save Calendar\" to save and schedule them.");
+            } else if (aEntries.length > 0) {
+                var nUpcoming = aActive.filter(function (e) { return !e.isPast; }).length;
+                this._editModel.setProperty("/calendarFileStatus", nUpcoming + " active entries scheduled to run");
+            } else {
+                this._editModel.setProperty("/calendarFileStatus", "");
+            }
 
             var now = new Date();
             var oNext = null;
@@ -451,9 +483,7 @@ sap.ui.define([
                         var aRemaining = (that._editModel.getProperty("/calendarEntries") || [])
                             .filter(function (e) { return !e.ID || !oOverwriteIdSet[e.ID]; });
                         that._editModel.setProperty("/calendarEntries", aRemaining.concat(aStaged));
-                        that._editModel.setProperty("/calendarFileStatus",
-                            oFile.name + " — " + aEntries.length + " entries loaded (not yet saved). "
-                            + "Click \"Save Calendar\" to save and schedule them.");
+                        that._editModel.setProperty("/lastUploadFileName", oFile.name);
                         that._updateSummary();
                         that._applyPastFilter();
                     }
@@ -728,13 +758,7 @@ sap.ui.define([
                     };
                 });
                 that._editModel.setProperty("/calendarEntries", aEntries);
-                if (aEntries.length && !that._editModel.getProperty("/calendarFileStatus")) {
-                    // Active entries still to run (future date/time) — not the raw total,
-                    // since past/error/success entries aren't "upcoming" for the user.
-                    var nUpcoming = aEntries.filter(function (e) { return e.active && !e.isPast; }).length;
-                    that._editModel.setProperty("/calendarFileStatus",
-                        nUpcoming + " active entries scheduled to run");
-                }
+                that._editModel.setProperty("/lastUploadFileName", "");
                 that._updateSummary();
                 that._applyPastFilter();
                 that._editModel.setProperty("/busy", false);
@@ -1003,9 +1027,6 @@ sap.ui.define([
             };
             var aEntries = (this._editModel.getProperty("/calendarEntries") || []).concat([oNewEntry]);
             this._editModel.setProperty("/calendarEntries", aEntries);
-            this._editModel.setProperty("/calendarFileStatus",
-                aEntries.filter(function (e) { return e._unsaved; }).length
-                + " entries loaded (not yet saved). Click \"Save Calendar\" to save and schedule them.");
             this._updateSummary();
             this._applyPastFilter();
             this.onCloseCalendarEntryDialog();
@@ -1035,9 +1056,6 @@ sap.ui.define([
                             return !oIdSet[e.ID];
                         });
                     that._editModel.setProperty("/calendarEntries", aRemaining);
-                    if (!aRemaining.length) {
-                        that._editModel.setProperty("/calendarFileStatus", "");
-                    }
                     that._updateSummary();
                     that._applyPastFilter();
                     if (aSaved.length) {
@@ -1093,9 +1111,6 @@ sap.ui.define([
                 var aRemaining = (this._editModel.getProperty("/calendarEntries") || [])
                     .filter(function (e) { return e !== o; });
                 this._editModel.setProperty("/calendarEntries", aRemaining);
-                if (!aRemaining.length) {
-                    this._editModel.setProperty("/calendarFileStatus", "");
-                }
                 this._updateSummary();
                 this._applyPastFilter();
                 return;
@@ -1138,6 +1153,12 @@ sap.ui.define([
                 oComp._stepParamsState = sParams
                     ? { taskchain: this._editModel.getProperty("/taskchain") || "", parametersJson: sParams, viewOnly: bPast }
                     : null;
+                // Snapshot the full local state (including not-yet-saved staged entries)
+                // so _onMatched can restore it on return instead of reloading from the
+                // server, which would silently drop anything not yet persisted.
+                oComp._customCalendarState = Object.assign({}, this._editModel.getData(), {
+                    busy: false, calendarUploadBusy: false
+                });
             }
             this.onConfigureStepParameters(bPast);
         },
@@ -1180,6 +1201,11 @@ sap.ui.define([
                     this._editModel.setProperty("/parameters", s.parametersJson);
                 }
                 return Promise.resolve();
+            }
+            // Reflect the change locally right away — the page no longer reloads from
+            // the server on return, so the local copy must be kept in sync itself.
+            if (oRowCtx) {
+                this._editModel.setProperty(oRowCtx.getPath() + "/parameters", s.parametersJson);
             }
             var oModel = this.getModel();
             var oCtxBind = oModel.bindContext("/ScheduleEntry(" + sEntryId + ")");
@@ -1245,8 +1271,6 @@ sap.ui.define([
                 .then(function () { return that._persistCalendarEntries(aUnsaved); })
                 .then(function () {
                     that._editModel.setProperty("/pendingDeleteIds", []);
-                    // Clear so the reload below can recompute a fresh "loaded/scheduled" message.
-                    that._editModel.setProperty("/calendarFileStatus", "");
                     return that._loadCalendarEntries();
                 })
                 .then(function () {

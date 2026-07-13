@@ -243,7 +243,7 @@
                               busy="{edit>/sacLoading}">
                             <HBox alignItems="Center" class="sapUiSmallMargin">
                                 <Label text="Multi Action:" width="7rem"/>
-                                <Input value="{edit>/sacMultiActionIdInput}" width="18rem"
+                                <Input value="{edit>/sacMultiActionIdInput}" width="32rem"
                                        class="sapUiTinyMarginEnd"
                                        visible="{= !${edit>/viewOnly} }"/>
                                 <Text text="{= ${edit>/sacMultiActionName} ? ${edit>/sacMultiActionName} + ' (' + ${edit>/sacMultiActionId} + ')' : ${edit>/sacMultiActionId} }"

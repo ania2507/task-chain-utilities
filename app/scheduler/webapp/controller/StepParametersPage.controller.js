@@ -847,13 +847,31 @@ sap.ui.define([
 
         _doLoadIbpSteps: function (sTemplate) {
             var that = this;
-            // Resolve the description from the (lazily fetched) template catalog cache,
-            // if available — cleared when unknown (e.g. a manually typed name) rather
-            // than showing a stale description from a previously loaded template.
-            var oCacheMatch = (this._aIbpTemplatesCache || []).filter(function (t) {
-                return t.name === sTemplate;
-            })[0];
-            this._editModel.setProperty("/ibpTemplateDescription", oCacheMatch ? (oCacheMatch.description || "") : "");
+            // Resolve the description from the template catalog cache. The cache is
+            // normally populated by opening the value-help search dialog, but a
+            // manually typed/inserted template name (the override flow) may run
+            // before that ever happens — fetch the catalog on demand in that case
+            // instead of just clearing the description.
+            var pTemplatesCache = this._aIbpTemplatesCache
+                ? Promise.resolve(this._aIbpTemplatesCache)
+                : fetch(that._getApiBase() + "jobs/ibp/templates", { headers: { "Accept": "application/json" } })
+                    .then(function (res) { return res.json(); })
+                    .then(function (data) {
+                        that._aIbpTemplatesCache = data.templates || [];
+                        return that._aIbpTemplatesCache;
+                    })
+                    .catch(function () { return []; });
+            pTemplatesCache.then(function (aTemplates) {
+                var oCacheMatch = (aTemplates || []).filter(function (t) {
+                    return t.name === sTemplate;
+                })[0];
+                var sDescription = oCacheMatch ? (oCacheMatch.description || "") : "";
+                that._editModel.setProperty("/ibpTemplateDescription", sDescription);
+                var oCurNow = that._currentStep();
+                if (oCurNow && oCurNow.step.ibpTemplateName === sTemplate) {
+                    that._editModel.setProperty("/steps/" + oCurNow.idx + "/ibpTemplateDescription", sDescription);
+                }
+            });
             // Capture existing params BEFORE clearing /ibpSteps.
             // Priority: cached ibpSteps on the current DSP step (survive step-switching),
             // falling back to the current /ibpSteps working list.

@@ -7,7 +7,21 @@ sap.ui.define([
     "use strict";
 
     return Controller.extend("monitoring.controller.RunInspector", {
-        
+
+        formatDateTime: function (sDateTime) {
+            if (!sDateTime) return "-";
+            try {
+                var oDate = new Date(sDateTime);
+                if (isNaN(oDate.getTime())) return sDateTime;
+                return oDate.toLocaleString("en-GB", {
+                    day: "2-digit", month: "short", year: "numeric",
+                    hour: "2-digit", minute: "2-digit"
+                });
+            } catch (e) {
+                return sDateTime;
+            }
+        },
+
         onInit: function () {
             var oRouter = this.getOwnerComponent().getRouter();
             oRouter.getRoute("runInspector").attachPatternMatched(this._onRouteMatched, this);

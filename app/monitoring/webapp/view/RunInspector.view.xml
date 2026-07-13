@@ -45,12 +45,12 @@
                             state="{= ${runDetail>/status} === 'success' ? 'Success' : ${runDetail>/status} === 'error' ? 'Error' : 'Warning'}"/>
                     </VBox>
                     <VBox id="summaryCol4" class="sapUiMediumMarginEnd">
-                        <Label id="lblStartTime" text="Start Time" design="Bold"/>
-                        <Text id="txtStartTime" text="{runDetail>/startTime}"/>
+                        <Label id="lblStartTime" text="Start" design="Bold"/>
+                        <Text id="txtStartTime" text="{ path: 'runDetail>/startTime', formatter: '.formatDateTime' }"/>
                     </VBox>
                     <VBox id="summaryCol5" class="sapUiMediumMarginEnd">
-                        <Label id="lblEndTime" text="End Time" design="Bold"/>
-                        <Text id="txtEndTime" text="{runDetail>/endTime}"/>
+                        <Label id="lblEndTime" text="End" design="Bold"/>
+                        <Text id="txtEndTime" text="{ path: 'runDetail>/endTime', formatter: '.formatDateTime' }"/>
                     </VBox>
                     <VBox id="summaryCol6">
                         <Label id="lblTotalDuration" text="{i18n>dashboard.duration}" design="Bold"/>
@@ -68,7 +68,7 @@
                         <FeedListItem 
                             id="timelineItem"
                             sender="{runDetail>taskName}"
-                            timestamp="{runDetail>timestamp}"
+                            timestamp="{ path: 'runDetail>timestamp', formatter: '.formatDateTime' }"
                             text="{runDetail>message}"
                             icon="{= ${runDetail>status} === 'success' ? 'sap-icon://accept' : ${runDetail>status} === 'error' ? 'sap-icon://error' : 'sap-icon://process'}"/>
                     </List>
@@ -98,7 +98,7 @@
                         <ColumnListItem id="retryItem">
                             <cells>
                                 <ObjectNumber id="cellAttempt" number="{runDetail>attempt}"/>
-                                <Text id="cellAttemptTime" text="{runDetail>timestamp}"/>
+                                <Text id="cellAttemptTime" text="{ path: 'runDetail>timestamp', formatter: '.formatDateTime' }"/>
                                 <ObjectStatus id="cellAttemptStatus"
                                     text="{runDetail>statusText}"
                                     state="{= ${runDetail>status} === 'success' ? 'Success' : 'Error'}"/>

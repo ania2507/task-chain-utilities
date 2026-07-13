@@ -247,6 +247,15 @@ sap.ui.define([
             this._editModel.setProperty("/busy", true);
             var that = this;
 
+            // Consumed for this trigger — drop it so a later visit to On Demand for
+            // the same chain doesn't resurrect these now-stale configured params.
+            function clearStepParamsState() {
+                var oComp = that.getOwnerComponent();
+                if (oComp && oComp._stepParamsState && oComp._stepParamsState.taskchain === d.taskchain) {
+                    oComp._stepParamsState = null;
+                }
+            }
+
             if (d.onDemandModeIndex === 0) {
                 this.callScheduler("/run-now-adhoc", {
                     method: "POST",
@@ -255,6 +264,7 @@ sap.ui.define([
                 }).then(function () {
                     that._editModel.setProperty("/busy", false);
                     that.toast(that.i18n("msg.runTriggered", [d.name || d.taskchain]));
+                    clearStepParamsState();
                     that.onNavBack();
                 }).catch(function (err) {
                     that._editModel.setProperty("/busy", false);
@@ -303,6 +313,7 @@ sap.ui.define([
                 pPersist.then(function () {
                     that._editModel.setProperty("/busy", false);
                     that.toast(that.i18n("msg.created", [d.name || d.taskchain]));
+                    clearStepParamsState();
                     that.onNavBack();
                     // Fire scheduler registration in background — does not block navigation
                     that.callScheduler("/schedule-once", {
