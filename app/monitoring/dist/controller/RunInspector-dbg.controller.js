@@ -22,6 +22,18 @@ sap.ui.define([
             }
         },
 
+        // DSP's own log message text sometimes embeds a raw ISO timestamp
+        // (e.g. "...has finished at 2026-07-13T09:03:42.659Z with status...") —
+        // reformat any such substring in place rather than leaving it as-is.
+        formatMessageText: function (sText) {
+            if (!sText) return sText;
+            var that = this;
+            return String(sText).replace(
+                /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?/g,
+                function (sMatch) { return that.formatDateTime(sMatch); }
+            );
+        },
+
         onInit: function () {
             var oRouter = this.getOwnerComponent().getRouter();
             oRouter.getRoute("runInspector").attachPatternMatched(this._onRouteMatched, this);

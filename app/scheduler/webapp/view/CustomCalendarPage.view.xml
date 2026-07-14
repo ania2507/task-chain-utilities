@@ -108,6 +108,10 @@
                                         icon="sap-icon://add"
                                         press=".onAddCalendarEntry"
                                         class="sapUiTinyMarginBegin"/>
+                                <Button text="{i18n>kind.onDemand.title}"
+                                        icon="sap-icon://time-entry-request"
+                                        press=".onOpenOnDemand"
+                                        class="sapUiTinyMarginBegin"/>
                             </HBox>
 
                             <ObjectStatus
@@ -123,6 +127,7 @@
                             <Table id="calendarEntriesTable"
                                    items="{edit>/calendarEntries}"
                                    mode="None"
+                                   fixedLayout="true"
                                    growing="true"
                                    growingThreshold="50"
                                    visible="{= ${edit>/calendarEntries}.length > 0 }"
@@ -154,11 +159,11 @@
                                     </Toolbar>
                                 </headerToolbar>
                                 <columns>
-                                    <Column><Text text="{i18n>calendar.col.date}"/></Column>
-                                    <Column><Text text="{i18n>calendar.col.time}"/></Column>
-                                    <Column hAlign="Center"><Text text="{i18n>calendar.col.active}"/></Column>
-                                    <Column><Text text="{i18n>calendar.col.details}"/></Column>
-                                    <Column><Text text="{i18n>calendar.col.runStatus}"/></Column>
+                                    <Column width="8rem"><Text text="{i18n>calendar.col.date}"/></Column>
+                                    <Column width="5rem"><Text text="{i18n>calendar.col.time}"/></Column>
+                                    <Column hAlign="Center" width="4rem"><Text text="{i18n>calendar.col.active}"/></Column>
+                                    <Column width="26rem"><Text text="{i18n>calendar.col.details}"/></Column>
+                                    <Column width="9rem"><Text text="{i18n>calendar.col.runStatus}"/></Column>
                                     <Column hAlign="End" width="22rem"><Text text=""/></Column>
                                 </columns>
                                 <ColumnListItem>
@@ -168,7 +173,7 @@
                                         <core:Icon src="sap-icon://accept"
                                                    color="{= ${edit>active} ? 'Positive' : 'Neutral' }"
                                                    visible="{edit>active}"/>
-                                        <Text text="{edit>details}" maxLines="2"/>
+                                        <Text text="{edit>details}" maxLines="4" wrapping="true"/>
                                         <HBox alignItems="Center">
                                             <core:Icon
                                                 src="{= ${edit>runStatus} === 'success' ? 'sap-icon://sys-enter-2' : ${edit>runStatus} === 'error' ? 'sap-icon://sys-cancel-2' : ${edit>runStatus} === 'running' ? 'sap-icon://pending' : ${edit>runStatus} === 'skipped' ? 'sap-icon://step' : '' }"

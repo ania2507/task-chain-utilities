@@ -87,6 +87,7 @@
                     <content>
                         <VBox class="sapUiMediumMarginTopBottom sapUiMediumMarginBeginEnd">
                             <RadioButtonGroup selectedIndex="{edit>/onDemandModeIndex}" columns="1"
+                                              visible="{= !${edit>/runNowOnly} }"
                                               class="sapUiSmallMarginTop sapUiSmallMarginBottom">
                                 <buttons>
                                     <RadioButton text="{i18n>onDemand.runNow}"/>
@@ -94,7 +95,14 @@
                                 </buttons>
                             </RadioButtonGroup>
 
-                            <l:HorizontalLayout allowWrapping="true" class="sapUiLargeMarginBegin">
+                            <VBox visible="{= !!${edit>/runNowOnly} }"
+                                  class="sapUiSmallMarginTop sapUiSmallMarginBottom">
+                                <Label text="{i18n>onDemand.runNow}" design="Bold"/>
+                                <Text text="Configure step parameters, then trigger the task chain." class="sapUiTinyMarginTop"/>
+                            </VBox>
+
+                            <l:HorizontalLayout allowWrapping="true" class="sapUiLargeMarginBegin"
+                                                 visible="{= !${edit>/runNowOnly} }">
                                 <DatePicker value="{edit>/onDemandDate}"
                                             valueFormat="yyyy-MM-dd"
                                             displayFormat="long"

@@ -274,6 +274,21 @@ sap.ui.define([
 
         _preloadIbpStepsForDspStep: function (iDspIdx, sTemplate, sStepName) {
             var that = this;
+            // Resolve the template description in the background too — this preload
+            // path runs for steps whose template came from DSP auto-detection or from
+            // a saved/Excel-imported override, neither of which goes through the
+            // value-help dialog that would otherwise populate the description.
+            this._resolveIbpTemplateDescription(sTemplate).then(function (sDescription) {
+                if (!sDescription) return;
+                var aSteps = that._editModel.getProperty("/steps") || [];
+                if (iDspIdx < aSteps.length && !aSteps[iDspIdx].ibpTemplateDescription) {
+                    that._editModel.setProperty("/steps/" + iDspIdx + "/ibpTemplateDescription", sDescription);
+                    var oCurNow = that._currentStep();
+                    if (oCurNow && oCurNow.idx === iDspIdx) {
+                        that._editModel.setProperty("/ibpTemplateDescription", sDescription);
+                    }
+                }
+            });
             fetch(that._getApiBase() + "jobs/ibp/template-steps", {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "Accept": "application/json" },
@@ -845,13 +860,13 @@ sap.ui.define([
             if (sDetected) { this._doLoadIbpSteps(sDetected); }
         },
 
-        _doLoadIbpSteps: function (sTemplate) {
+        // Resolve an IBP template's description from the template catalog cache. The
+        // cache is normally populated by opening the value-help search dialog, but a
+        // manually typed/inserted template name (the override flow, or one loaded
+        // from a saved/Excel-imported override) may run before that ever happens —
+        // fetch the catalog on demand in that case instead of leaving it blank.
+        _resolveIbpTemplateDescription: function (sTemplate) {
             var that = this;
-            // Resolve the description from the template catalog cache. The cache is
-            // normally populated by opening the value-help search dialog, but a
-            // manually typed/inserted template name (the override flow) may run
-            // before that ever happens — fetch the catalog on demand in that case
-            // instead of just clearing the description.
             var pTemplatesCache = this._aIbpTemplatesCache
                 ? Promise.resolve(this._aIbpTemplatesCache)
                 : fetch(that._getApiBase() + "jobs/ibp/templates", { headers: { "Accept": "application/json" } })
@@ -861,11 +876,17 @@ sap.ui.define([
                         return that._aIbpTemplatesCache;
                     })
                     .catch(function () { return []; });
-            pTemplatesCache.then(function (aTemplates) {
+            return pTemplatesCache.then(function (aTemplates) {
                 var oCacheMatch = (aTemplates || []).filter(function (t) {
                     return t.name === sTemplate;
                 })[0];
-                var sDescription = oCacheMatch ? (oCacheMatch.description || "") : "";
+                return oCacheMatch ? (oCacheMatch.description || "") : "";
+            });
+        },
+
+        _doLoadIbpSteps: function (sTemplate) {
+            var that = this;
+            this._resolveIbpTemplateDescription(sTemplate).then(function (sDescription) {
                 that._editModel.setProperty("/ibpTemplateDescription", sDescription);
                 var oCurNow = that._currentStep();
                 if (oCurNow && oCurNow.step.ibpTemplateName === sTemplate) {

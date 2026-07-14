@@ -20,6 +20,9 @@ sap.ui.define([
                 stepParamsSummary: "",
                 lastRunAt: null,
                 lastRunStatus: "",
+                runNowOnly: false,
+                returnTo: "scheduleList",
+                returnQuery: {},
                 busy: false
             });
             this.getView().setModel(oModel, "edit");
@@ -44,6 +47,7 @@ sap.ui.define([
             }
 
             var now = new Date();
+            var sReturnTo = oQuery.returnTo || "scheduleList";
             this._editModel.setData({
                 name: oQuery.name || oQuery.taskchain || "",
                 spaceId: oQuery.spaceId || "",
@@ -56,6 +60,11 @@ sap.ui.define([
                 stepParamsSummary: "",
                 lastRunAt: null,
                 lastRunStatus: "",
+                runNowOnly: !!oQuery.runNowOnly,
+                returnTo: sReturnTo,
+                returnQuery: sReturnTo === "customCalendar"
+                    ? { spaceId: oQuery.spaceId || "", taskchain: oQuery.taskchain || "", name: oQuery.name || oQuery.taskchain || "" }
+                    : {},
                 busy: false
             });
             this._consumeStepParametersResult();
@@ -152,7 +161,9 @@ sap.ui.define([
         },
 
         onNavBack: function () {
-            this.getRouter().navTo("scheduleList", {}, true);
+            var sReturnTo = this._editModel.getProperty("/returnTo") || "scheduleList";
+            var oReturnQuery = this._editModel.getProperty("/returnQuery") || {};
+            this.getRouter().navTo(sReturnTo, { "?query": oReturnQuery }, true);
         },
 
         onDeleteOnDemand: function () {

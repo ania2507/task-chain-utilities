@@ -141,7 +141,7 @@
                                     text="{chainDetail>statusText}"
                                     state="{= ${chainDetail>status} === 'success' ? 'Success' : ${chainDetail>status} === 'error' ? 'Error' : 'Warning'}"
                                     inverted="true"/>
-                                <Text id="cellExecStart" text="{chainDetail>startTime}"/>
+                                <Text id="cellExecStart" text="{ path: 'chainDetail>startTime', formatter: '.formatDateTime' }"/>
                                 <Text id="cellExecDuration" text="{chainDetail>duration}"/>
                                 <ObjectNumber id="cellExecRetries" number="{chainDetail>retries}"/>
                             </cells>

@@ -69,7 +69,7 @@
                             id="timelineItem"
                             sender="{runDetail>taskName}"
                             timestamp="{ path: 'runDetail>timestamp', formatter: '.formatDateTime' }"
-                            text="{runDetail>message}"
+                            text="{ path: 'runDetail>message', formatter: '.formatMessageText' }"
                             icon="{= ${runDetail>status} === 'success' ? 'sap-icon://accept' : ${runDetail>status} === 'error' ? 'sap-icon://error' : 'sap-icon://process'}"/>
                     </List>
                 </content>

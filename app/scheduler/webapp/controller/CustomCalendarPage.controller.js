@@ -203,6 +203,19 @@ sap.ui.define([
             }
         },
 
+        onOpenOnDemand: function () {
+            var d = this._editModel.getData();
+            this.getRouter().navTo("onDemand", {
+                "?query": {
+                    spaceId: d.spaceId || "",
+                    taskchain: d.taskchain || "",
+                    name: d.name || d.taskchain || "",
+                    runNowOnly: "1",
+                    returnTo: "customCalendar"
+                }
+            });
+        },
+
         // ------------------------------------------------------------
         // Template / upload
         // ------------------------------------------------------------
@@ -541,8 +554,14 @@ sap.ui.define([
             var wb = XLSX.read(new Uint8Array(data), { type: "array", cellDates: true });
 
             // Sheet 1 (Calendar)
+            // raw: true (not dateNF-formatted strings) — a single dateNF applied to the
+            // whole sheet would also hit genuine Excel "time only" cells in the Time
+            // column, turning "02:00" into a date-only string like "1899-12-30" and
+            // silently making every row look invalid/past. Date/Time cells come back
+            // as native JS Date objects (thanks to cellDates: true above) and are
+            // formatted explicitly per-column in _buildCalendarEntries instead.
             var ws = wb.Sheets[wb.SheetNames[0]];
-            var rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: "yyyy-mm-dd" });
+            var rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
 
             // paramsByScheduleId: { scheduleId: { dspStepId: [{key, value, active, step?, hierarchyId?}] } }
             var oBySchId = {};
@@ -644,7 +663,7 @@ sap.ui.define([
                 if (!chain) continue;
                 if (sChain && chain !== sChain) continue;
                 var rawDate = r[iDateCol];
-                var time = String(r[iTimeCol] || "00:00").trim();
+                var time = this._toHHMM(r[iTimeCol]);
                 var d = this._toIsoDate(rawDate);
                 if (!d) continue;
                 var dt = new Date(d + "T" + (time.length === 5 ? time + ":00" : time));
@@ -662,6 +681,16 @@ sap.ui.define([
                 });
             }
             return aOut;
+        },
+
+        // Extract "HH:mm" from a cell value that may be a native JS Date (genuine
+        // Excel "time" cells, read raw thanks to cellDates: true) or plain text.
+        _toHHMM: function (v) {
+            if (!v) return "00:00";
+            if (v instanceof Date && !isNaN(v)) {
+                return ("0" + v.getHours()).slice(-2) + ":" + ("0" + v.getMinutes()).slice(-2);
+            }
+            return String(v).trim();
         },
 
         _toIsoDate: function (v) {
