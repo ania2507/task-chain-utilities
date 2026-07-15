@@ -115,6 +115,9 @@
                                             placeholder="{i18n>onDemand.time}"
                                             enabled="{= ${edit>/onDemandModeIndex} === 1 }"/>
                             </l:HorizontalLayout>
+                            <Label text="{i18n>calendar.col.details}" class="sapUiSmallMarginTop"/>
+                            <TextArea value="{edit>/onDemandDetails}" rows="3" width="100%"
+                                      placeholder="e.g. filters applied for this run"/>
                             <Button text="{i18n>onDemand.configureSteps}"
                                     icon="sap-icon://settings"
                                     type="Emphasized"

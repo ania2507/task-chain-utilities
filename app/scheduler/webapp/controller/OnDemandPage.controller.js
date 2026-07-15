@@ -16,6 +16,7 @@ sap.ui.define([
                 onDemandModeIndex: 0,
                 onDemandDate: "",
                 onDemandTime: "",
+                onDemandDetails: "",
                 parameters: "",
                 stepParamsSummary: "",
                 lastRunAt: null,
@@ -56,6 +57,7 @@ sap.ui.define([
                 onDemandModeIndex: 0,
                 onDemandDate: now.toISOString().slice(0, 10),
                 onDemandTime: ("0" + now.getHours()).slice(-2) + ":" + ("0" + now.getMinutes()).slice(-2),
+                onDemandDetails: "",
                 parameters: "",
                 stepParamsSummary: "",
                 lastRunAt: null,
@@ -107,6 +109,7 @@ sap.ui.define([
                 this._editModel.setProperty("/onDemandModeIndex", 1);
                 this._editModel.setProperty("/onDemandDate", obj.runDate || "");
                 this._editModel.setProperty("/onDemandTime", obj.runTime || "");
+                this._editModel.setProperty("/onDemandDetails", obj.details || "");
                 this._editModel.setProperty("/parameters", obj.parameters || "");
                 // Rebuild _stepParamsState from saved parameters so that
                 // re-opening StepParametersPage shows the previously saved params.
@@ -252,7 +255,8 @@ sap.ui.define([
             var payload = {
                 spaceId: d.spaceId,
                 taskchain: d.taskchain,
-                parameters: parameters
+                parameters: parameters,
+                details: d.onDemandDetails || ""
             };
 
             this._editModel.setProperty("/busy", true);
@@ -302,6 +306,7 @@ sap.ui.define([
                             oCtx.setProperty("runDate", d.onDemandDate);
                             oCtx.setProperty("runTime", d.onDemandTime);
                             oCtx.setProperty("parameters", d.parameters && String(d.parameters).trim() ? d.parameters : "");
+                            oCtx.setProperty("details", d.onDemandDetails || "");
                             oCtx.setProperty("active", true);
                             return oModel.submitBatch(oModel.getUpdateGroupId());
                         });
@@ -315,6 +320,7 @@ sap.ui.define([
                             timezone: "Europe/Rome",
                             active: true,
                             parameters: d.parameters && String(d.parameters).trim() ? d.parameters : "",
+                            details: d.onDemandDetails || "",
                             source: "onDemand"
                         });
                         pPersist = oCtxNew.created();

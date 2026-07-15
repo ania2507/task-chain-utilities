@@ -119,6 +119,9 @@
                         <Column id="colExecTask">
                             <Text id="colExecTaskText" text="{i18n>dashboard.task}"/>
                         </Column>
+                        <Column id="colExecDetails">
+                            <Text id="colExecDetailsText" text="{i18n>chainDetail.scheduleDetails}"/>
+                        </Column>
                         <Column id="colExecStatus" width="100px" hAlign="Center">
                             <Text id="colExecStatusText" text="{i18n>dashboard.status}"/>
                         </Column>
@@ -137,6 +140,7 @@
                             <cells>
                                 <Link id="cellExecRunId" text="{chainDetail>runId}" press=".onRunIdPress"/>
                                 <Text id="cellExecTask" text="{chainDetail>taskName}"/>
+                                <Text id="cellExecDetails" text="{chainDetail>details}" maxLines="2" wrapping="true"/>
                                 <ObjectStatus id="cellExecStatus"
                                     text="{chainDetail>statusText}"
                                     state="{= ${chainDetail>status} === 'success' ? 'Success' : ${chainDetail>status} === 'error' ? 'Error' : 'Warning'}"

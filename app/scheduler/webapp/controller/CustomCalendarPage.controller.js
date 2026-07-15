@@ -329,6 +329,16 @@ sap.ui.define([
             window.URL.revokeObjectURL(sUrl);
         },
 
+        // The FileUploader is kept hidden and triggered from a plain sap.m.Button
+        // instead — buttonOnly mode renders its own internal wrapper/button that
+        // doesn't align vertically with sibling Buttons in the same HBox.
+        onUploadButtonPress: function () {
+            var oFileUploader = this.byId("customCalendarPageFileUploader");
+            if (oFileUploader) {
+                oFileUploader.$().find("input[type=file]").trigger("click");
+            }
+        },
+
         onCalendarFileSelect: function (oEvt) {
             var oFile = oEvt.getParameter("files") && oEvt.getParameter("files")[0];
             if (!oFile) return;
@@ -944,6 +954,7 @@ sap.ui.define([
         // ------------------------------------------------------------
         onAddCalendarEntry: function () {
             this._editingEntryId = null;
+            this._editingUnsavedEntry = null;
             var now = new Date();
             this._editModel.setProperty("/entryDate", now.toISOString().slice(0, 10));
             this._editModel.setProperty("/entryTime", "04:00");
@@ -957,7 +968,11 @@ sap.ui.define([
             var oCtx = oEvt.getSource().getBindingContext("edit");
             if (!oCtx) return;
             var o = oCtx.getObject();
-            this._editingEntryId = o.ID;
+            this._editingEntryId = o.ID || null;
+            // Staged (not-yet-saved) entries have no ID — keep a direct reference
+            // to the exact object so onSaveCalendarEntry can update it in place
+            // instead of (falling through to) appending a duplicate new row.
+            this._editingUnsavedEntry = o.ID ? null : o;
             this._editModel.setProperty("/entryDate", o.date);
             this._editModel.setProperty("/entryTime", o.rawTime || (o.time || "").replace(/\s*CET.*$/i, ""));
             this._editModel.setProperty("/entryActive", !!o.active);
@@ -1017,7 +1032,7 @@ sap.ui.define([
             // user expects the live schedule to reflect the change right away.
             if (this._editingEntryId) {
                 var oModel = this.getModel();
-                var oCtxBind = oModel.bindContext("/ScheduleEntry(" + this._editingEntryId + ")");
+                var oCtxBind = oModel.bindContext("/ScheduleEntry('" + this._editingEntryId + "')");
                 oCtxBind.requestObject().then(function () {
                     var oCtx = oCtxBind.getBoundContext();
                     oCtx.setProperty("runDate", d.entryDate);
@@ -1027,11 +1042,58 @@ sap.ui.define([
                     oCtx.setProperty("details", d.entryDetails || "");
                     return oModel.submitBatch(oModel.getUpdateGroupId());
                 }).then(function () {
+                    // Patch this entry locally instead of a full reload — a full
+                    // reload here would wipe any not-yet-saved staged entries from
+                    // an upload that hasn't been confirmed with "Save Calendar" yet.
+                    var aEntries = (that._editModel.getProperty("/calendarEntries") || []).slice();
+                    var iIdx = aEntries.findIndex(function (e) { return e.ID === that._editingEntryId; });
+                    if (iIdx !== -1) {
+                        var oOld = aEntries[iIdx];
+                        var dt = new Date(d.entryDate + "T" + (d.entryTime.length === 5 ? d.entryTime + ":00" : d.entryTime));
+                        aEntries[iIdx] = Object.assign({}, oOld, {
+                            date: d.entryDate,
+                            dateLabel: that._formatDateLabel(d.entryDate),
+                            time: d.entryTime + " CET",
+                            rawTime: d.entryTime,
+                            active: !!d.entryActive,
+                            parameters: d.entryParameters || "",
+                            details: d.entryDetails || "",
+                            isPast: !isNaN(dt.getTime()) && dt < new Date()
+                        });
+                        that._editModel.setProperty("/calendarEntries", aEntries);
+                    }
+                    that._updateSummary();
+                    that._applyPastFilter();
                     that.onCloseCalendarEntryDialog();
-                    that._loadCalendarEntries();
                 }).catch(function (err) {
                     that.error(err.message || String(err));
                 });
+                return;
+            }
+
+            // Editing a staged (not-yet-saved) entry — update it in place rather
+            // than falling through to "new entry", which would duplicate it.
+            if (this._editingUnsavedEntry) {
+                var oTarget = this._editingUnsavedEntry;
+                this._editingUnsavedEntry = null;
+                var dtEdited = new Date(d.entryDate + "T" + (d.entryTime.length === 5 ? d.entryTime + ":00" : d.entryTime));
+                var aEntries2 = (this._editModel.getProperty("/calendarEntries") || []).map(function (e) {
+                    if (e !== oTarget) return e;
+                    return Object.assign({}, e, {
+                        date: d.entryDate,
+                        dateLabel: that._formatDateLabel(d.entryDate),
+                        time: d.entryTime + " CET",
+                        rawTime: d.entryTime,
+                        active: !!d.entryActive,
+                        parameters: d.entryParameters || "",
+                        details: d.entryDetails || "",
+                        isPast: !isNaN(dtEdited.getTime()) && dtEdited < new Date()
+                    });
+                });
+                this._editModel.setProperty("/calendarEntries", aEntries2);
+                this._updateSummary();
+                this._applyPastFilter();
+                this.onCloseCalendarEntryDialog();
                 return;
             }
 
@@ -1158,7 +1220,14 @@ sap.ui.define([
                         if (!aCtx.length) return;
                         return aCtx[0].delete();
                     }).then(function () {
-                        that._loadCalendarEntries();
+                        // Remove only this entry locally — a full reload here would
+                        // wipe any not-yet-saved staged entries from an upload that
+                        // hasn't been confirmed with "Save Calendar" yet.
+                        var aRemaining = (that._editModel.getProperty("/calendarEntries") || [])
+                            .filter(function (e) { return e !== o; });
+                        that._editModel.setProperty("/calendarEntries", aRemaining);
+                        that._updateSummary();
+                        that._applyPastFilter();
                     }).catch(function (err) {
                         that.error(err.message || String(err));
                     });
@@ -1237,7 +1306,7 @@ sap.ui.define([
                 this._editModel.setProperty(oRowCtx.getPath() + "/parameters", s.parametersJson);
             }
             var oModel = this.getModel();
-            var oCtxBind = oModel.bindContext("/ScheduleEntry(" + sEntryId + ")");
+            var oCtxBind = oModel.bindContext("/ScheduleEntry('" + sEntryId + "')");
             return oCtxBind.requestObject().then(function () {
                 oCtxBind.getBoundContext().setProperty("parameters", s.parametersJson);
                 return oModel.submitBatch(oModel.getUpdateGroupId());
@@ -1264,7 +1333,7 @@ sap.ui.define([
                 this._editModel.setProperty(this._calendarRowCtx.getPath() + "/parameters", s || "");
                 if (oRow && oRow.ID) {
                     var oModel = this.getModel();
-                    var oCtxBind = oModel.bindContext("/ScheduleEntry(" + oRow.ID + ")");
+                    var oCtxBind = oModel.bindContext("/ScheduleEntry('" + oRow.ID + "')");
                     oCtxBind.requestObject().then(function () {
                         oCtxBind.getBoundContext().setProperty("parameters", s || "");
                         return oModel.submitBatch(oModel.getUpdateGroupId());

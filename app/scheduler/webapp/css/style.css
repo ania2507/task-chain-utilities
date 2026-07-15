@@ -13,3 +13,16 @@
 .scheduler-status-success { color: #107e3e; }
 .scheduler-status-error   { color: #bb0000; }
 .scheduler-status-running { color: #0a6ed1; }
+
+/* Kept in the DOM (so it can still be triggered programmatically from a
+   regular sap.m.Button) but visually hidden — visible="false" would remove
+   it from the DOM entirely and break the click-forwarding trick. */
+.calFileUploaderHidden {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    overflow: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+

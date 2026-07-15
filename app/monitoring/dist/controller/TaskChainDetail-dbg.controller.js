@@ -2,8 +2,10 @@ sap.ui.define([
     "sap/ui/core/mvc/Controller",
     "sap/ui/model/json/JSONModel",
     "sap/m/MessageToast",
-    "sap/ui/core/routing/History"
-], function (Controller, JSONModel, MessageToast, History) {
+    "sap/ui/core/routing/History",
+    "sap/ui/model/Filter",
+    "sap/ui/model/FilterOperator"
+], function (Controller, JSONModel, MessageToast, History, Filter, FilterOperator) {
     "use strict";
 
     return Controller.extend("monitoring.controller.TaskChainDetail", {
@@ -398,19 +400,22 @@ sap.ui.define([
                             return {
                                 runId: run.runId,
                                 taskName: run.taskChain,
+                                details: "",
                                 status: run.status,
-                                statusText: run.status === "success" ? "Success" : 
-                                           run.status === "error" ? "Error" : 
+                                statusText: run.status === "success" ? "Success" :
+                                           run.status === "error" ? "Error" :
                                            run.status === "running" ? "Running" : "Pending",
                                 startTime: run.startTime,
                                 duration: run.durationDisplay || run.duration || "-",
                                 retries: 0
                             };
                         });
-                        
+
                         oModel.setProperty("/status", sStatus);
                         oModel.setProperty("/statusText", sStatusText);
                         oModel.setProperty("/executions", aExecutions);
+
+                        this._loadScheduleDetails(sFoundSpaceId, oModel);
                     }
                     this.getOwnerComponent()._setBusy(false);
                 }.bind(this))
@@ -422,7 +427,40 @@ sap.ui.define([
                     this.getOwnerComponent()._setBusy(false);
                 }.bind(this));
         },
-        
+
+        /**
+         * Fill in the "Details" free-text field (set by the Scheduler app —
+         * calendar entries, on-demand scheduled runs, and on-demand "Run Now")
+         * for each execution row, matched by DSP run/log ID. ScheduleRun.remoteId
+         * is stored as "<spaceId>__<logId>" — logId is the same value DSP (and
+         * this page) calls "Run ID". ScheduleRun.details is a direct copy set at
+         * fire time, not a join through ScheduleEntry, so it also covers ad-hoc
+         * "Run Now" executions that have no persisted ScheduleEntry row at all.
+         */
+        _loadScheduleDetails: function (sSpaceId, oModel) {
+            var oCapModel = this.getOwnerComponent().getModel();
+            if (!oCapModel || !sSpaceId) return;
+            var oList = oCapModel.bindList("/ScheduleRun", undefined, undefined, [
+                new Filter("remoteId", FilterOperator.StartsWith, sSpaceId + "__")
+            ], { $select: "remoteId,details" });
+            oList.requestContexts(0, 500).then(function (aCtx) {
+                var oDetailsByRunId = {};
+                aCtx.forEach(function (oCtx) {
+                    var o = oCtx.getObject();
+                    var aParts = (o.remoteId || "").split("__");
+                    var sLogId = aParts.length === 2 ? aParts[1] : "";
+                    if (sLogId && o.details) oDetailsByRunId[sLogId] = o.details;
+                });
+                var aExecutions = oModel.getProperty("/executions") || [];
+                var aUpdated = aExecutions.map(function (e) {
+                    return Object.assign({}, e, { details: oDetailsByRunId[e.runId] || "" });
+                });
+                oModel.setProperty("/executions", aUpdated);
+            }).catch(function (err) {
+                console.warn("[Monitoring] Could not load schedule details:", err && err.message);
+            });
+        },
+
         /**
          * Get py-srv URL
          */

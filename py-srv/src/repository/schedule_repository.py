@@ -89,6 +89,7 @@ class ScheduleRepository:
         target_type: str,
         remote_id: Optional[str],
         error_message: Optional[str],
+        details: Optional[str] = None,
     ) -> str:
         run_id = str(uuid.uuid4())
         if self._use_mem:
@@ -101,18 +102,19 @@ class ScheduleRepository:
                 "targetType": target_type,
                 "remoteId": remote_id,
                 "errorMessage": error_message,
+                "details": details,
             })
             return run_id
         sql = (
             f"INSERT INTO {RUN_TBL} "
-            f"(ID, SCHEDULEENTRY_ID, TRIGGEREDAT, FINISHEDAT, STATUS, TARGETTYPE, REMOTEID, ERRORMESSAGE) "
-            f"VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            f"(ID, SCHEDULEENTRY_ID, TRIGGEREDAT, FINISHEDAT, STATUS, TARGETTYPE, REMOTEID, ERRORMESSAGE, DETAILS) "
+            f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         conn = self._conn()
         try:
             cur = conn.cursor()
             cur.execute(sql, (run_id, schedule_entry_id, triggered_at, finished_at,
-                              status, target_type, remote_id, error_message))
+                              status, target_type, remote_id, error_message, details))
             conn.commit()
             cur.close()
         finally:
@@ -127,7 +129,7 @@ class ScheduleRepository:
         if self._use_mem:
             return []
         sql = (
-            f"SELECT ID, SPACEID, TASKCHAIN, RUNDATE, RUNTIME, TIMEZONE, ACTIVE, PARAMETERS "
+            f"SELECT ID, SPACEID, TASKCHAIN, RUNDATE, RUNTIME, TIMEZONE, ACTIVE, PARAMETERS, DETAILS "
             f"FROM {SCHEDULE_ENTRY_TBL} "
             f"WHERE ACTIVE = TRUE AND RUNDATE >= CURRENT_DATE"
         )
@@ -348,6 +350,7 @@ def _row_to_entry(row: Dict[str, Any]) -> Dict[str, Any]:
         "timezone": row.get("TIMEZONE") or "Europe/Rome",
         "active": bool(row.get("ACTIVE")),
         "parameters": row.get("PARAMETERS"),
+        "details": row.get("DETAILS"),
     }
 
 

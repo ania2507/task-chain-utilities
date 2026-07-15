@@ -72,41 +72,66 @@ class SchedulerService:
 
     # ------------------------------------------------------------------
     def sync(self) -> Dict[str, Any]:
-        """Reload CalendarEntry + Schedule rows and rebuild APScheduler jobs."""
+        """Reload CalendarEntry + Schedule rows and (re)build APScheduler jobs.
+
+        Deliberately non-destructive: a job is only removed here if its backing
+        DB row was deleted or deactivated. It is never removed just because its
+        scheduled time has, in the meantime, moved into the past — sync() can
+        run at any moment (including right after a fire is due), and wiping
+        every job up front would race an about-to-fire or just-fired job out
+        of existence before it gets a chance to run.
+        """
         if not self._scheduler:
             return {"status": "disabled", "loaded": 0}
 
         with self._lock:
-            for job in list(self._scheduler.get_jobs()):
-                try:
-                    self._scheduler.remove_job(job.id)
-                except Exception:
-                    pass
-
             errors: List[str] = []
             loaded = 0
             loaded_tl = 0
+            valid_entry_ids: Optional[set] = None
+            valid_tl_ids: Optional[set] = None
             try:
-                loaded = self._register_entries()
+                loaded, valid_entry_ids = self._register_entries()
             except Exception as e:
                 logger.exception("Failed to register calendar entries")
                 errors.append(f"entries: {e}")
             try:
-                loaded_tl = self._register_traffic_light_schedules()
+                loaded_tl, valid_tl_ids = self._register_traffic_light_schedules()
             except Exception as e:
                 logger.exception("Failed to register traffic light schedules")
                 errors.append(f"traffic_lights: {e}")
 
+            # Prune only what's genuinely gone — skip pruning a category
+            # entirely if its registration failed, since we can't tell valid
+            # from stale without a successful read.
+            for job in list(self._scheduler.get_jobs()):
+                try:
+                    if job.id.startswith("entry::") and valid_entry_ids is not None \
+                            and job.id not in valid_entry_ids:
+                        self._scheduler.remove_job(job.id)
+                    elif job.id.startswith("tl::") and valid_tl_ids is not None \
+                            and job.id not in valid_tl_ids:
+                        self._scheduler.remove_job(job.id)
+                except Exception:
+                    pass
+
             logger.info("Scheduler sync complete: %d calendar entries, %d traffic light schedules", loaded, loaded_tl)
             return {"status": "ok", "loaded": loaded, "loaded_traffic_lights": loaded_tl, "errors": errors}
 
-    def _register_entries(self) -> int:
-        """Register one-shot APScheduler jobs for active ScheduleEntry rows."""
+    def _register_entries(self) -> tuple[int, set]:
+        """Register one-shot APScheduler jobs for active ScheduleEntry rows.
+
+        Returns (count actually (re)scheduled, set of job IDs for every row
+        that's still a legitimate active entry — including ones whose time
+        has already passed today, which are intentionally NOT (re)scheduled
+        but must still be protected from pruning in sync()).
+        """
         if not self._scheduler or not hasattr(self._repo, "list_active_entries"):
-            return 0
+            return 0, set()
         entries = self._repo.list_active_entries() or []
         now = datetime.now(timezone.utc)
         count = 0
+        valid_ids: set = set()
         for e in entries:
             try:
                 space_id = e.get("spaceId")
@@ -116,11 +141,16 @@ class SchedulerService:
                 tz = e.get("timezone") or "Europe/Rome"
                 if not (space_id and taskchain and run_date):
                     continue
+                entry_id = e.get("ID") or f"{space_id}::{taskchain}::{run_date}T{run_time}"
+                valid_ids.add(f"entry::{entry_id}")
+
                 iso = f"{run_date}T{run_time}:00"
                 run_at = datetime.fromisoformat(iso)
                 if run_at.tzinfo is None and ZoneInfo:
                     run_at = run_at.replace(tzinfo=ZoneInfo(tz))
                 if run_at <= now:
+                    # Already due/passed — leave any existing job alone (see
+                    # sync()'s pruning guard) rather than (re)scheduling it.
                     continue
                 params = None
                 if e.get("parameters"):
@@ -128,7 +158,6 @@ class SchedulerService:
                         params = json.loads(e["parameters"])
                     except Exception:
                         params = None
-                entry_id = e.get("ID") or f"{space_id}::{taskchain}::{iso}"
                 job_id = f"entry::{entry_id}"
                 sch = {
                     "ID": entry_id,
@@ -136,6 +165,7 @@ class SchedulerService:
                     "spaceId": space_id,
                     "taskchain": taskchain,
                     "parameters": json.dumps(params) if params else None,
+                    "details": e.get("details"),
                 }
                 self._scheduler.add_job(
                     self._fire,
@@ -149,9 +179,9 @@ class SchedulerService:
                 count += 1
             except Exception:
                 logger.exception("Failed to register schedule entry %s", e.get("ID"))
-        return count
+        return count, valid_ids
 
-    def _register_traffic_light_schedules(self) -> int:
+    def _register_traffic_light_schedules(self) -> tuple[int, set]:
         """Register recurring interval jobs for active Schedule (Traffic Lights) rows.
 
         Each job ticks every `checkInterval` minutes (configured by the user in the
@@ -159,11 +189,14 @@ class SchedulerService:
         On each tick the job checks TrafficLightStatus for the schedule's
         (spaceId, taskchain).  If status == 'ready' it fires the task chain in
         DSP and sets the semaphore to 'running'.  Otherwise the tick is skipped.
+
+        Returns (count registered, set of job IDs for every active schedule).
         """
         if not self._scheduler or not hasattr(self._repo, "list_active_schedules"):
-            return 0
+            return 0, set()
         schedules = self._repo.list_active_schedules() or []
         count = 0
+        valid_ids: set = set()
         for s in schedules:
             try:
                 space_id = s.get("spaceId")
@@ -183,6 +216,7 @@ class SchedulerService:
                     check_interval_min = 15
 
                 job_id = f"tl::{s['ID']}"
+                valid_ids.add(job_id)
                 self._scheduler.add_job(
                     self._fire_traffic_light,
                     trigger="interval",
@@ -196,7 +230,7 @@ class SchedulerService:
                 count += 1
             except Exception:
                 logger.exception("Failed to register traffic light schedule %s", s.get("ID"))
-        return count
+        return count, valid_ids
 
     def _fire_traffic_light(self, schedule: Dict[str, Any]) -> Dict[str, Any]:
         """Interval tick handler for a Traffic Lights schedule.
@@ -469,7 +503,8 @@ class SchedulerService:
         return self._fire(entry_id=entry["ID"], manual=True, entry=entry)
 
     # ------------------------------------------------------------------
-    def run_adhoc(self, space_id: str, taskchain: str, parameters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def run_adhoc(self, space_id: str, taskchain: str, parameters: Optional[Dict[str, Any]] = None,
+                  details: Optional[str] = None) -> Dict[str, Any]:
         """Execute a DSP task chain immediately, without a persisted ScheduleEntry row."""
         entry = {
             "ID": f"adhoc::{space_id}::{taskchain}::{datetime.now(timezone.utc).isoformat()}",
@@ -477,13 +512,15 @@ class SchedulerService:
             "spaceId": space_id,
             "taskchain": taskchain,
             "parameters": json.dumps(parameters) if parameters else None,
+            "details": details,
         }
         return self._fire(entry_id=entry["ID"], manual=True, entry=entry)
 
     # ------------------------------------------------------------------
     def schedule_once(self, space_id: str, taskchain: str, run_at_iso: str,
                       parameters: Optional[Dict[str, Any]] = None,
-                      tz: str = "Europe/Rome") -> Dict[str, Any]:
+                      tz: str = "Europe/Rome",
+                      details: Optional[str] = None) -> Dict[str, Any]:
         """Register a one-shot APScheduler job at the given local datetime."""
         if not self._scheduler:
             raise RuntimeError("Scheduler is disabled (APScheduler not installed)")
@@ -502,6 +539,7 @@ class SchedulerService:
             "spaceId": space_id,
             "taskchain": taskchain,
             "parameters": json.dumps(parameters) if parameters else None,
+            "details": details,
         }
 
         self._scheduler.add_job(
@@ -553,7 +591,8 @@ class SchedulerService:
                         )
                         triggered_at = datetime.now(timezone.utc).isoformat()
                         try:
-                            self._insert_run(entry_id, triggered_at, triggered_at, "queued", target_type, None, None)
+                            self._insert_run(entry_id, triggered_at, triggered_at, "queued", target_type, None, None,
+                                              details=entry.get("details"))
                         except Exception:
                             logger.exception("Failed to persist queued ScheduleRun for %s", entry_id)
                         return {
@@ -629,7 +668,8 @@ class SchedulerService:
         self._advance_taskchain_queue(queue_key)
 
     def _insert_run(self, entry_id: str, triggered_at: str, finished_at: str, status: str,
-                     target_type: str, remote_id: Optional[str], error_msg: Optional[str]) -> None:
+                     target_type: str, remote_id: Optional[str], error_msg: Optional[str],
+                     details: Optional[str] = None) -> None:
         """Persist a ScheduleRun history row (shared by _launch and the queued-fire path)."""
         import re as _re
         # SCHEDULEENTRY_ID is a FK to ScheduleEntry.ID (UUID, 36 chars).
@@ -648,6 +688,7 @@ class SchedulerService:
             target_type=target_type or "",
             remote_id=remote_id,
             error_message=error_msg,
+            details=details,
         )
 
     def _launch(self, entry_id: str, manual: bool = False, entry: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -703,7 +744,8 @@ class SchedulerService:
         finished_at = datetime.now(timezone.utc).isoformat()
 
         try:
-            self._insert_run(entry_id, triggered_at, finished_at, status, target_type, remote_id, error_msg)
+            self._insert_run(entry_id, triggered_at, finished_at, status, target_type, remote_id, error_msg,
+                              details=entry.get("details"))
         except Exception:
             logger.exception("Failed to persist ScheduleRun for %s", entry_id)
 

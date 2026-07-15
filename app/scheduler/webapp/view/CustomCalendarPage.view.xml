@@ -90,15 +90,15 @@
                         <VBox class="sapUiMediumMarginTopBottom sapUiMediumMarginBeginEnd">
                             <HBox alignItems="Center" class="sapUiSmallMarginBottom"
                                   busy="{edit>/calendarUploadBusy}" busyIndicatorDelay="0">
+                                <Button text="{i18n>calendar.upload}"
+                                        icon="sap-icon://upload"
+                                        type="Emphasized"
+                                        press=".onUploadButtonPress"/>
                                 <u:FileUploader
                                     id="customCalendarPageFileUploader"
                                     name="calendar"
-                                    buttonOnly="true"
-                                    buttonText="{i18n>calendar.upload}"
+                                    class="calFileUploaderHidden"
                                     fileType="xlsx,xls,csv"
-                                    style="Emphasized"
-                                    icon="sap-icon://upload"
-                                    iconOnly="false"
                                     change=".onCalendarFileSelect"/>
                                 <Button text="{i18n>calendar.downloadTemplate}"
                                         icon="sap-icon://download"

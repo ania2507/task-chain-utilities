@@ -101,9 +101,10 @@ def run_now_adhoc():
         space_id = body.get("spaceId")
         taskchain = body.get("taskchain")
         parameters = body.get("parameters")
+        details = body.get("details")
         if not space_id or not taskchain:
             return jsonify({"error": "spaceId and taskchain are required"}), 400
-        result = _svc().run_adhoc(space_id, taskchain, parameters)
+        result = _svc().run_adhoc(space_id, taskchain, parameters, details)
         return jsonify(result)
     except Exception as e:
         logger.exception("run-now-adhoc failed")
@@ -120,9 +121,10 @@ def schedule_once():
         run_at = body.get("runAt")
         parameters = body.get("parameters")
         tz = body.get("timezone") or "Europe/Rome"
+        details = body.get("details")
         if not space_id or not taskchain or not run_at:
             return jsonify({"error": "spaceId, taskchain and runAt are required"}), 400
-        result = _svc().schedule_once(space_id, taskchain, run_at, parameters, tz)
+        result = _svc().schedule_once(space_id, taskchain, run_at, parameters, tz, details)
         return jsonify(result)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
@@ -206,11 +208,19 @@ def list_jobs():
         sched = getattr(svc, "_scheduler", None)
         if not sched:
             return jsonify({"jobs": [], "status": "disabled"})
+        def _job_entry_info(j):
+            entry = (j.kwargs or {}).get("entry") or {}
+            return {
+                "spaceId": entry.get("spaceId"),
+                "taskchain": entry.get("taskchain"),
+            }
+
         jobs = [
             {
                 "id": j.id,
                 "next_run_time": j.next_run_time.isoformat() if j.next_run_time else None,
                 "trigger": str(j.trigger),
+                **_job_entry_info(j),
             }
             for j in sched.get_jobs()
         ]

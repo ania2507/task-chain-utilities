@@ -13,6 +13,10 @@ entity ScheduleRun : cuid {
   targetType    : String(10) @title: 'Target Type';
   remoteId      : String(200) @title: 'Remote Execution ID';
   errorMessage  : String(2000) @title: 'Error Message';
+  // Copied from the firing ScheduleEntry (or passed directly for ad-hoc/on-demand
+  // runs, which have no persisted ScheduleEntry row) so Monitoring can show it
+  // per run without needing a join — free-text notes, e.g. filters applied.
+  details       : LargeString @title: 'Details';
 }
 
 /**
