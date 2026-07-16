@@ -7,12 +7,14 @@
       "target": "/odata/$1",
       "destination": "srv-api",
       "authenticationType": "xsuaa",
+      "scope": "$XSAPPNAME.admin",
       "csrfProtection": true
     },
     {
       "source": "^(.*)$",
       "service": "html5-apps-repo-rt",
       "authenticationType": "xsuaa",
+      "scope": "$XSAPPNAME.admin",
       "target": "$1"
     }
   ]

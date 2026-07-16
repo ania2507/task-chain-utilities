@@ -1,42 +1,54 @@
 {
   "welcomeFile": "/home/index.html",
   "authenticationMethod": "route",
+  "errorPage": [
+    {
+      "status": [403],
+      "file": "resources/error-403.html"
+    }
+  ],
   "routes": [
     {
       "source": "^/sap/bc/lrep/(.*)$",
       "target": "/sap/bc/lrep/$1",
       "service": "html5-apps-repo-rt",
-      "authenticationType": "xsuaa"
+      "authenticationType": "xsuaa",
+      "scope": "$XSAPPNAME.admin"
     },
     {
       "source": "^/webapp/odata/(.*)$",
       "target": "/odata/$1",
       "destination": "srv-api",
-      "authenticationType": "xsuaa"
+      "authenticationType": "xsuaa",
+      "scope": "$XSAPPNAME.admin"
     },
     {
       "source": "^/monitoring/odata/(.*)$",
       "target": "/odata/$1",
       "destination": "srv-api",
-      "authenticationType": "xsuaa"
+      "authenticationType": "xsuaa",
+      "scope": "$XSAPPNAME.admin"
     },
     {
       "source": "^/skipoverrides/odata/(.*)$",
       "target": "/odata/$1",
       "destination": "srv-api",
-      "authenticationType": "xsuaa"
+      "authenticationType": "xsuaa",
+      "scope": "$XSAPPNAME.admin"
     },
     {
       "source": "^/scheduler/odata/(.*)$",
       "target": "/odata/$1",
       "destination": "srv-api",
-      "authenticationType": "xsuaa"
+      "authenticationType": "xsuaa",
+      "scope": "$XSAPPNAME.admin"
     },
     {
       "source": "^/scheduler/v1/(.*)$",
       "target": "/v1/$1",
       "destination": "py-srv-api",
-      "authenticationType": "xsuaa"
+      "authenticationType": "xsuaa",
+      "scope": "$XSAPPNAME.admin"
     },
     {
       "source": "^/webapp/api/rules/(.*)$",
@@ -54,25 +66,29 @@
       "source": "^/api/dsp/(.*)$",
       "target": "/v1/dsp/$1",
       "destination": "py-srv-api",
-      "authenticationType": "xsuaa"
+      "authenticationType": "xsuaa",
+      "scope": "$XSAPPNAME.admin"
     },
     {
       "source": "^/v1/(.*)$",
       "target": "/v1/$1",
       "destination": "py-srv-api",
-      "authenticationType": "xsuaa"
+      "authenticationType": "xsuaa",
+      "scope": "$XSAPPNAME.admin"
     },
     {
       "source": "^/odata/(.*)$",
       "target": "/odata/$1",
       "destination": "srv-api",
-      "authenticationType": "xsuaa"
+      "authenticationType": "xsuaa",
+      "scope": "$XSAPPNAME.admin"
     },
     {
       "source": "^/(.*)$",
       "target": "$1",
       "service": "html5-apps-repo-rt",
-      "authenticationType": "xsuaa"
+      "authenticationType": "xsuaa",
+      "scope": "$XSAPPNAME.admin"
     }
   ]
 }

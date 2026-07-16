@@ -6,6 +6,7 @@
       "source": "^(.*)$",
       "service": "html5-apps-repo-rt",
       "authenticationType": "xsuaa",
+      "scope": "$XSAPPNAME.admin",
       "target": "$1"
     }
   ]
