@@ -236,10 +236,20 @@ class TaskchainExecutor:
         def _poll():
             while True:
                 time.sleep(_ACTIVE_TASKCHAIN_POLL_SECONDS)
+                with _ACTIVE_TASKCHAINS_LOCK:
+                    current = _ACTIVE_TASKCHAINS.get(taskchain_name)
+                if not current or current[0] != execution_id:
+                    return  # slot reclaimed or cleared by someone else — stop polling
+                if current[1] <= time.time():
+                    return  # safety-net expiry already passed — the block is lifted anyway
                 try:
                     info = self.get_status_dsp(execution_id)
                     status = (info.get("status") or "").upper()
-                except Exception:
+                except Exception as e:
+                    logger.warning(
+                        "active-taskchain watcher: get_status_dsp(%s) failed for '%s': %s",
+                        execution_id, taskchain_name, e,
+                    )
                     continue
                 if status in (TaskchainStatus.COMPLETED.value, TaskchainStatus.FAILED.value):
                     with _ACTIVE_TASKCHAINS_LOCK:
@@ -249,6 +259,10 @@ class TaskchainExecutor:
                         # safety-net expiry.
                         if current and current[0] == execution_id:
                             _ACTIVE_TASKCHAINS.pop(taskchain_name, None)
+                    logger.info(
+                        "active-taskchain watcher: cleared '%s' (execution_id=%s, status=%s)",
+                        taskchain_name, execution_id, status,
+                    )
                     return
 
         threading.Thread(target=_poll, daemon=True).start()

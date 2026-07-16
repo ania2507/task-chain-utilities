@@ -557,13 +557,15 @@ class SchedulerService:
     def _fire(self, entry_id: str, manual: bool = False, entry: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Entry point for every scheduled/manual fire.
 
-        For non-manual DSP fires, gates the actual launch through a per-
-        (spaceId, taskchain) in-memory slot: if that taskchain is already
-        running (a previous fire's execution hasn't reached a terminal DSP
-        status yet), this fire is queued instead of launched, and the queue
-        is drained (FIFO) once the running execution finishes. Manual fires
-        (Run Now / ad-hoc) intentionally bypass this gate, same as the
-        existing Traffic Lights semaphore bypass.
+        Gates the actual launch through a per-(spaceId, taskchain) in-memory
+        slot: if that taskchain is already running (a previous fire's
+        execution hasn't reached a terminal DSP status yet), this fire is
+        queued instead of launched, and the queue is drained (FIFO) once the
+        running execution finishes. This applies to manual (Run Now / ad-hoc)
+        fires too — triggering the same chain again while it's still running
+        queues the new run rather than rejecting it outright. Traffic Lights
+        fires keep their own separate semaphore (TrafficLightStatus) and opt
+        out of this gate (see below).
         """
         if not entry:
             logger.warning("ScheduleEntry %s vanished before firing", entry_id)
@@ -575,7 +577,7 @@ class SchedulerService:
         # per-(spaceId, taskchain) semaphore (TrafficLightStatus) checked before
         # _fire is even called, and _fire_traffic_light's result handling doesn't
         # understand a "queued" status — so they opt out of this generic gate.
-        if target_type == "DSP" and not manual and not str(entry_id or "").startswith("tl::"):
+        if target_type == "DSP" and not str(entry_id or "").startswith("tl::"):
             space_id = entry.get("spaceId")
             taskchain = entry.get("taskchain")
             if space_id and taskchain:

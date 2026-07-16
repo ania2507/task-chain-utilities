@@ -6,6 +6,8 @@ import logging
 
 from flask import Blueprint, current_app, jsonify, request
 
+from ..auth import flask_access_validation
+
 logger = logging.getLogger(__name__)
 
 bp = Blueprint("scheduler", __name__)
@@ -30,6 +32,7 @@ def sync():
 
 
 @bp.route("/traffic-light", methods=["GET"])
+@flask_access_validation()
 def get_traffic_light():
     """Return the current TrafficLightStatus for a given (spaceId, taskchain).
 
@@ -55,6 +58,7 @@ def get_traffic_light():
 
 
 @bp.route("/traffic-light", methods=["POST"])
+@flask_access_validation()
 def set_traffic_light():
     """Upsert the TrafficLightStatus for a given (spaceId, taskchain).
 
@@ -105,6 +109,12 @@ def run_now_adhoc():
         if not space_id or not taskchain:
             return jsonify({"error": "spaceId and taskchain are required"}), 400
         result = _svc().run_adhoc(space_id, taskchain, parameters, details)
+        # _fire/_launch catch their own exceptions and always return 200-shaped
+        # JSON with status embedded — surface a launch failure (e.g. "already
+        # running") as a real HTTP error, or the frontend has no way to tell
+        # a rejected launch apart from a successful one.
+        if result.get("status") == "error":
+            return jsonify(result), 409
         return jsonify(result)
     except Exception as e:
         logger.exception("run-now-adhoc failed")
@@ -225,5 +235,44 @@ def list_jobs():
             for j in sched.get_jobs()
         ]
         return jsonify({"jobs": jobs, "count": len(jobs)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/active-taskchains", methods=["GET"])
+def list_active_taskchains():
+    """Return the in-memory "already running" guard state (debug).
+
+    Each entry blocks a new Run Now / schedule fire for that taskchain until
+    it's cleared by the background completion watcher (or the safety-net
+    expiry passes). Useful to see why a launch is being rejected as
+    "already running", and how long until it self-clears.
+    """
+    try:
+        from ..services import taskchain_executor as tce
+        import time as _time
+        now = _time.time()
+        with tce._ACTIVE_TASKCHAINS_LOCK:
+            items = [
+                {
+                    "taskchain": name,
+                    "execution_id": execution_id,
+                    "expires_in_seconds": round(expiry - now, 1),
+                }
+                for name, (execution_id, expiry) in tce._ACTIVE_TASKCHAINS.items()
+            ]
+        return jsonify({"active": items, "count": len(items)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/active-taskchains/<path:taskchain>", methods=["DELETE"])
+def clear_active_taskchain(taskchain):
+    """Manually clear the "already running" guard for a taskchain (debug/unblock)."""
+    try:
+        from ..services import taskchain_executor as tce
+        with tce._ACTIVE_TASKCHAINS_LOCK:
+            existed = tce._ACTIVE_TASKCHAINS.pop(taskchain, None) is not None
+        return jsonify({"cleared": existed, "taskchain": taskchain})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

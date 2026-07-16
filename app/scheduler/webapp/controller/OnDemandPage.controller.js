@@ -276,9 +276,13 @@ sap.ui.define([
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload)
-                }).then(function () {
+                }).then(function (data) {
                     that._editModel.setProperty("/busy", false);
-                    that.toast(that.i18n("msg.runTriggered", [d.name || d.taskchain]));
+                    if (data && data.status === "queued") {
+                        that.toast((d.name || d.taskchain) + " is already running — this run has been queued and will start automatically once it finishes.");
+                    } else {
+                        that.toast(that.i18n("msg.runTriggered", [d.name || d.taskchain]));
+                    }
                     clearStepParamsState();
                     that.onNavBack();
                 }).catch(function (err) {
