@@ -38,6 +38,10 @@
                         <Label id="lblTaskChainRun" text="{i18n>dashboard.taskChain}" design="Bold"/>
                         <Text id="txtTaskChainRun" text="{runDetail>/taskChainName}"/>
                     </VBox>
+                    <VBox id="summaryColDetails" class="sapUiMediumMarginEnd" visible="{= !!${runDetail>/details} }">
+                        <Label id="lblDetailsRun" text="{i18n>chainDetail.scheduleDetails}" design="Bold"/>
+                        <Text id="txtDetailsRun" text="{runDetail>/details}" maxLines="2" wrapping="true"/>
+                    </VBox>
                     <VBox id="summaryCol3" class="sapUiMediumMarginEnd">
                         <Label id="lblStatusRun" text="{i18n>dashboard.status}" design="Bold"/>
                         <ObjectStatus id="statusRun"

@@ -108,15 +108,16 @@
                         <ToolbarSpacer/>
                     </Toolbar>
                 </headerToolbar>
-                <Table id="executionDetailsTable" 
-                    items="{chainDetail>/executions}" 
-                    growing="true" 
+                <Table id="executionDetailsTable"
+                    items="{chainDetail>/executions}"
+                    fixedLayout="true"
+                    growing="true"
                     growingThreshold="10">
                     <columns>
                         <Column id="colExecRunId" width="120px">
                             <Text id="colExecRunIdText" text="{i18n>dashboard.runId}"/>
                         </Column>
-                        <Column id="colExecTask">
+                        <Column id="colExecTask" width="220px">
                             <Text id="colExecTaskText" text="{i18n>dashboard.task}"/>
                         </Column>
                         <Column id="colExecDetails">

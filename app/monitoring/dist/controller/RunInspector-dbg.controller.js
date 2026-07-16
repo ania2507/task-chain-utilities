@@ -2,8 +2,10 @@ sap.ui.define([
     "sap/ui/core/mvc/Controller",
     "sap/ui/model/json/JSONModel",
     "sap/m/MessageToast",
-    "sap/ui/core/routing/History"
-], function (Controller, JSONModel, MessageToast, History) {
+    "sap/ui/core/routing/History",
+    "sap/ui/model/Filter",
+    "sap/ui/model/FilterOperator"
+], function (Controller, JSONModel, MessageToast, History, Filter, FilterOperator) {
     "use strict";
 
     return Controller.extend("monitoring.controller.RunInspector", {
@@ -83,6 +85,7 @@ sap.ui.define([
                 startTime: "-",
                 endTime: "-",
                 totalDuration: "-",
+                details: "",
                 retryCount: 0,
                 correlationId: "",
                 errorMessage: "",
@@ -165,6 +168,7 @@ sap.ui.define([
                     oModel.setProperty("/startTime", oRun.startTime || "-");
                     oModel.setProperty("/endTime", oRun.endTime || "-");
                     oModel.setProperty("/totalDuration", sDuration);
+                    that._loadScheduleDetails(oRun.spaceId || sSpaceId, sRunId, oModel);
                 } else {
                     // Run not found in DSP logs: don't leave the header stuck on "Loading..."
                     oModel.setProperty("/status", "pending");
@@ -347,6 +351,30 @@ sap.ui.define([
             });
         },
         
+        /**
+         * Fill in the "Details" free-text field (set by the Scheduler app —
+         * calendar entries, on-demand scheduled runs, and on-demand "Run Now")
+         * for this run, matched by DSP run/log ID. ScheduleRun.remoteId is
+         * stored as "<spaceId>__<logId>" — logId is the same value DSP (and
+         * this page) calls "Run ID". ScheduleRun.details is a direct copy set
+         * at fire time, not a join through ScheduleEntry, so it also covers
+         * ad-hoc "Run Now" executions that have no persisted ScheduleEntry row.
+         */
+        _loadScheduleDetails: function (sSpaceId, sRunId, oModel) {
+            var oCapModel = this.getOwnerComponent().getModel();
+            if (!oCapModel || !sSpaceId || !sRunId) return;
+            var oList = oCapModel.bindList("/ScheduleRun", undefined, undefined, [
+                new Filter("remoteId", FilterOperator.EQ, sSpaceId + "__" + sRunId)
+            ], { $select: "remoteId,details" });
+            oList.requestContexts(0, 1).then(function (aCtx) {
+                if (!aCtx.length) return;
+                var o = aCtx[0].getObject();
+                if (o.details) oModel.setProperty("/details", o.details);
+            }).catch(function (err) {
+                console.warn("[Monitoring] Could not load schedule details:", err && err.message);
+            });
+        },
+
         /**
          * Get py-srv URL
          */
