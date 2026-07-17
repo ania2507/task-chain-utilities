@@ -18,3 +18,6 @@ extend service Services with {
   @odata.draft.enabled
   entity SkipOverride as projection on sk.SkipOverride;
 }
+
+// Scritto solo dal runtime (py-srv) quando consuma l'override
+annotate Services.SkipOverride : lastOverrideAt with @readonly;
