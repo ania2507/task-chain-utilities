@@ -56,7 +56,7 @@ def _init_components() -> Tuple[Any, Any, RuleEngine, TaskchainRoutingService, T
 
     engine = RuleEngine(db_query_func=getattr(db_query_executor, "query", None))
     routing_service = TaskchainRoutingService(repository, engine)
-    taskchain_executor = TaskchainExecutor()
+    taskchain_executor = TaskchainExecutor(db_query_executor)
     return repository, db_query_executor, engine, routing_service, taskchain_executor
 
 

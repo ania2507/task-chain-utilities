@@ -581,9 +581,10 @@ sap.ui.define([
         _parseReturnQuery: function (oQuery) {
             // Re-build query string for the calling page from what we received
             var out = {};
-            if (oQuery.spaceId)   out.spaceId   = oQuery.spaceId;
-            if (oQuery.taskchain) out.taskchain = oQuery.taskchain;
-            if (oQuery.name)      out.name      = oQuery.name;
+            if (oQuery.spaceId)    out.spaceId    = oQuery.spaceId;
+            if (oQuery.taskchain)  out.taskchain  = oQuery.taskchain;
+            if (oQuery.name)       out.name       = oQuery.name;
+            if (oQuery.scheduleID) out.scheduleID = oQuery.scheduleID;
             return out;
         },
 

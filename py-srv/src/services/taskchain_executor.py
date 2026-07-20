@@ -64,9 +64,10 @@ class TaskchainExecution:
 
 
 class TaskchainExecutor:
-    def __init__(self):
+    def __init__(self, db_query_executor=None):
         self._executions: Dict[str, TaskchainExecution] = {}
         self._lock = threading.Lock()
+        self._db_query = db_query_executor
 
         self._simulate = os.environ.get("DSP_SIMULATE", "false").lower() == "true"
 
@@ -527,9 +528,31 @@ class TaskchainExecutor:
             raise RuntimeError(f"DSP task chain launch did not return a logId. Response: {data}")
         return str(logid)
 
+    def _dsp_get_chain_status(self, spaceid: str, logid: str) -> str:
+        """Get the status of a DSP task chain execution.
+
+        Reads the same local HANA view (populated by DWC's own metadata
+        replication) that /v1/dsp/taskchain-runs uses — the direct DSP REST
+        API (`/api/v1/tasks/spaces/{spaceid}/logs/{logid}`) 404s for logIds
+        that this view resolves without issue, so it's kept only as a
+        fallback for when the DB isn't available (e.g. local dev).
+        """
+        if self._db_query is not None:
+            try:
+                rows = self._db_query.query(
+                    'SELECT "STATUS" AS "status" FROM "ORCHESTRATION"."3VR_DWC_TASK_LOGS_01" '
+                    'WHERE "TASK_LOG_ID" = ? AND "SPACE_ID" = ?',
+                    (logid, spaceid),
+                )
+                if rows and rows[0].get("status"):
+                    return rows[0]["status"]
+            except Exception as e:
+                logger.warning("_dsp_get_chain_status: DB lookup failed for %s/%s: %s", spaceid, logid, e)
+        return self._dsp_get_chain_status_rest(spaceid, logid)
+
     @staticmethod
-    def _dsp_get_chain_status(spaceid: str, logid: str) -> str:
-        """Get the status of a DSP task chain execution via REST API."""
+    def _dsp_get_chain_status_rest(spaceid: str, logid: str) -> str:
+        """Fallback: get the status of a DSP task chain execution via REST API."""
         conn = TaskchainExecutor._get_dsp_connection()
         url = f"{conn['base_url']}/api/v1/tasks/spaces/{spaceid}/logs/{logid}"
         req = urllib.request.Request(

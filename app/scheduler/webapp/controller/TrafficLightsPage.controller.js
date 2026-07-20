@@ -3,10 +3,9 @@ sap.ui.define([
     "sap/ui/model/json/JSONModel",
     "sap/m/MessageBox",
     "sap/m/MessageToast",
-    "sap/ui/core/routing/History",
     "sap/ui/model/Filter",
     "sap/ui/model/FilterOperator"
-], function (BaseController, JSONModel, MessageBox, MessageToast, History, Filter, FilterOperator) {
+], function (BaseController, JSONModel, MessageBox, MessageToast, Filter, FilterOperator) {
     "use strict";
 
     var DEFAULTS = {
@@ -34,7 +33,9 @@ sap.ui.define([
         nextCheckIn: null,
         createdBy: "",
         createdAt: null,
-        modifiedAt: null
+        modifiedAt: null,
+        returnTo: "scheduleList",
+        returnQuery: {}
     };
 
     return BaseController.extend("scheduler.controller.TrafficLightsPage", {
@@ -57,6 +58,11 @@ sap.ui.define([
             if (savedState && savedState.taskchain === (oQuery.taskchain || "")) {
                 oComp._trafficLightsState = null;
                 this._editModel.setData(savedState);
+                // Defensive: the schedule ID drives the Delete button's visibility;
+                // restore it from the query if it didn't survive the round trip.
+                if (!this._editModel.getProperty("/ID") && oQuery.scheduleID) {
+                    this._editModel.setProperty("/ID", oQuery.scheduleID);
+                }
                 this._previewModel.setProperty("/next", []);
                 this._consumeStepParametersResult();
                 this._loadTrafficLightStatus(savedState.spaceId, savedState.taskchain);
@@ -68,7 +74,9 @@ sap.ui.define([
                 name: oQuery.name || oQuery.taskchain || "",
                 spaceId: oQuery.spaceId || "",
                 taskchain: oQuery.taskchain || "",
-                stepParamsSummary: ""
+                stepParamsSummary: "",
+                returnTo: oQuery.returnTo || "scheduleList",
+                returnQuery: {}
             }));
             this._previewModel.setProperty("/next", []);
             this._consumeStepParametersResult();
@@ -100,11 +108,34 @@ sap.ui.define([
                 this._editModel.setData(Object.assign({}, DEFAULTS, obj, tl, {
                     parameters: stepParamsJson
                 }));
+                // Rebuild _stepParamsState from saved parameters so that
+                // re-opening StepParametersPage shows the previously saved params.
+                this._restoreStepParamsFromEntry(obj.taskchain, stepParamsJson);
                 this._loadTrafficLightStatus(obj.spaceId, obj.taskchain);
                 this._loadLastRun(obj.spaceId, obj.taskchain);
             }.bind(this)).catch(function (err) {
                 this.error("Could not load schedule: " + (err && err.message || err));
             }.bind(this));
+        },
+
+        _restoreStepParamsFromEntry: function (sTaskchain, sParametersJson) {
+            if (!sTaskchain || !sParametersJson || !String(sParametersJson).trim()) return;
+            var oComp = this.getOwnerComponent();
+            if (!oComp) return;
+            // Don't overwrite params freshly edited by the user in StepParametersPage
+            if (oComp._stepParamsState && oComp._stepParamsState.taskchain === sTaskchain
+                    && oComp._stepParamsState._fresh) return;
+            try {
+                JSON.parse(sParametersJson); // validate JSON before storing
+                // Store only parametersJson (no synthetic steps).
+                // StepParametersPage will load real DSP steps and apply these params after loading.
+                oComp._stepParamsState = {
+                    cacheKey: sTaskchain,
+                    taskchain: sTaskchain,
+                    steps: [],
+                    parametersJson: sParametersJson
+                };
+            } catch (_) {}
         },
 
         // Lifecycle / Current state is unified: it comes from
@@ -234,13 +265,9 @@ sap.ui.define([
         },
 
         onNavBack: function () {
-            var oHistory = History.getInstance();
-            var sPrev = oHistory.getPreviousHash();
-            if (sPrev !== undefined) {
-                window.history.go(-1);
-            } else {
-                this.getRouter().navTo("scheduleList", {}, true);
-            }
+            var sReturnTo = this._editModel.getProperty("/returnTo") || "scheduleList";
+            var oReturnQuery = this._editModel.getProperty("/returnQuery") || {};
+            this.getRouter().navTo(sReturnTo, { "?query": oReturnQuery }, true);
         },
 
         onConfigureStepParameters: function () {
@@ -254,6 +281,7 @@ sap.ui.define([
                     spaceId: d.spaceId || "",
                     taskchain: d.taskchain || "",
                     name: d.name || "",
+                    scheduleID: d.ID || "",
                     returnTo: "trafficLights"
                 }
             });
