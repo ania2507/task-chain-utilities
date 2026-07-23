@@ -175,6 +175,7 @@ def create_app() -> Flask:
 
     # Scheduler service (APScheduler).  Safe to instantiate even if DB/APS unavailable;
     # `sync()` will simply load zero jobs.
+    schedule_repo = None
     try:
         schedule_repo = ScheduleRepository()
         scheduler_service = SchedulerService(
@@ -199,6 +200,7 @@ def create_app() -> Flask:
         "taskchain_executor": taskchain_executor,
         "job_executor": job_executor,
         "scheduler_service": scheduler_service,
+        "schedule_repo": schedule_repo,
     }
 
     app.register_blueprint(meta_bp)

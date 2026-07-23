@@ -43,7 +43,8 @@ sap.ui.define([
                 filterType: "all",
                 filterSpace: "all",
                 spaceOptions: [],
-                summary: { total: 0, scheduled: 0, notScheduled: 0, paused: 0 }
+                summary: { total: 0, scheduled: 0, notScheduled: 0, paused: 0 },
+                filteredCount: 0
             });
             this.getView().setModel(this._pageModel, "page");
 
@@ -380,6 +381,10 @@ sap.ui.define([
             this._pageModel.setProperty("/summary", summary);
             this._pageModel.setProperty("/spaceOptions", [{ key: "all", text: this.i18n("list.filter.spaceAll") }]
                 .concat(aSpaces.map(function (s) { return { key: s, text: s }; })));
+
+            // Re-apply the currently active filters so /filteredCount (and the
+            // table's visible rows) stay in sync whenever /rows is reloaded.
+            this._applyFilters();
         },
 
         onSearchTaskchains: function (oEvt) {
@@ -430,6 +435,7 @@ sap.ui.define([
             }
 
             oBinding.filter(aFilters);
+            this._pageModel.setProperty("/filteredCount", oBinding.getLength());
         },
 
         // ------------------------------------------------------------

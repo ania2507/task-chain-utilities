@@ -166,10 +166,6 @@ sap.ui.define([
 
                 Promise.all(aNodePromises).then(function(aNodeResults) {
                     // Enhance runs with step counts
-                    var iTotalSteps = 0;
-                    var iTotalFailedSteps = 0;
-                    var iRunsWithSteps = 0;
-
                     aRecentRuns.forEach(function(run, idx) {
                         var nodeResult = aNodeResults[idx];
                         if (nodeResult.success && nodeResult.nodes) {
@@ -178,16 +174,11 @@ sap.ui.define([
                             run.stepsRunning = aNodes.filter(function(n) { return n.status === "running" || n.status === "pending"; }).length;
                             run.stepsFailed = aNodes.filter(function(n) { return n.status === "error"; }).length;
                             run.totalSteps = aNodes.length;
-                            
-                            iTotalSteps += aNodes.length;
-                            iTotalFailedSteps += run.stepsFailed;
-                            iRunsWithSteps++;
-                        } else {
-                            run.stepsCompleted = 0;
-                            run.stepsRunning = 0;
-                            run.stepsFailed = 0;
-                            run.totalSteps = 0;
                         }
+                        // else: leave stepsCompleted/stepsRunning/stepsFailed/totalSteps undefined
+                        // so onExecutionsTableUpdate's lazy-load retries it later, same as
+                        // older runs beyond the first 10 (see below) - and so _computeKpis'
+                        // "totalSteps !== undefined" check doesn't count it as a zero-step run.
 
                         // Calculate duration display - for running, show elapsed time
                         if (run.status === "running" && run.startTime) {
@@ -212,65 +203,27 @@ sap.ui.define([
                         }
                     });
 
-                    // Calculate KPIs
-                    var iSuccessCount = aAllRuns.filter(function(e) { return e.status === "success"; }).length;
-                    var iTotalCount = aAllRuns.length;
-                    var fSuccessRate = iTotalCount > 0 ? (iSuccessCount / iTotalCount * 100) : 100;
-
-                    var now = new Date();
-                    // Count runs with errors in last 24h: either status=error OR has failed steps (even if still running)
-                    var iErrors24h = aRecentRuns.filter(function(e) {
-                        var execTime = new Date(e.startTime);
-                        var isRecent = (now - execTime) < 24 * 60 * 60 * 1000;
-                        var hasError = e.status === "error" || (e.stepsFailed && e.stepsFailed > 0);
-                        return isRecent && hasError;
-                    }).length;
-
-                    // Calculate Avg Duration (P95) and Std Dev
-                    var aDurations = aAllRuns
-                        .filter(function(e) { return e.duration && typeof e.duration === "number" && e.duration > 0; })
-                        .map(function(e) { return e.duration; })
-                        .sort(function(a, b) { return a - b; });
-                    
-                    var fAvgDurationP95 = 0;
-                    var fDurationStdDev = 0;
-                    if (aDurations.length > 0) {
-                        var iP95Index = Math.floor(aDurations.length * 0.95);
-                        iP95Index = Math.min(iP95Index, aDurations.length - 1);
-                        fAvgDurationP95 = aDurations[iP95Index];
-                        
-                        // Calculate standard deviation
-                        var fAvgDuration = aDurations.reduce(function(a, b) { return a + b; }, 0) / aDurations.length;
-                        if (aDurations.length > 1) {
-                            var fVariance = aDurations.reduce(function(sum, val) {
-                                return sum + Math.pow(val - fAvgDuration, 2);
-                            }, 0) / aDurations.length;
-                            fDurationStdDev = Math.sqrt(fVariance);
-                        }
-                    }
-
-                    // Calculate avg steps KPIs
-                    var fAvgSteps = iRunsWithSteps > 0 ? (iTotalSteps / iRunsWithSteps) : 0;
-                    var fAvgFailedSteps = iRunsWithSteps > 0 ? (iTotalFailedSteps / iRunsWithSteps) : 0;
+                    // Calculate all 7 KPIs from the full (unfiltered) run set
+                    var oKpis = that._computeKpis(aAllRuns);
 
                     // Update model
                     oDashboardModel.setProperty("/allExecutions", aAllRuns);
                     oDashboardModel.setProperty("/filteredExecutions", aAllRuns);
                     oDashboardModel.setProperty("/recentExecutions", aAllRuns);
-                    oDashboardModel.setProperty("/totalExecutions", iTotalCount);
-                    oDashboardModel.setProperty("/successRate", fSuccessRate.toFixed(1));
-                    oDashboardModel.setProperty("/errorsLast24h", iErrors24h);
-                    oDashboardModel.setProperty("/avgDurationP95", fAvgDurationP95.toFixed(1));
-                    oDashboardModel.setProperty("/durationStdDev", fDurationStdDev.toFixed(1));
-                    oDashboardModel.setProperty("/avgStepsExecuted", fAvgSteps.toFixed(1));
-                    oDashboardModel.setProperty("/avgStepsFailed", fAvgFailedSteps.toFixed(2));
+                    oDashboardModel.setProperty("/totalExecutions", oKpis.totalExecutions);
+                    oDashboardModel.setProperty("/successRate", oKpis.successRate);
+                    oDashboardModel.setProperty("/errorsLast24h", oKpis.errorsLast24h);
+                    oDashboardModel.setProperty("/avgDurationP95", oKpis.avgDurationP95);
+                    oDashboardModel.setProperty("/durationStdDev", oKpis.durationStdDev);
+                    oDashboardModel.setProperty("/avgStepsExecuted", oKpis.avgStepsExecuted);
+                    oDashboardModel.setProperty("/avgStepsFailed", oKpis.avgStepsFailed);
                     oDashboardModel.setProperty("/executionChartData", that._generateChartDataFromExecutions(aAllRuns, "related"));
                     oDashboardModel.setProperty("/topFailingTasks", that._getTopFailingTasks(aAllRuns));
                     oDashboardModel.setProperty("/loading", false);
                     that.getOwnerComponent()._setBusy(false);
 
                     // Update project in monitoring model with real data
-                    that._updateProjectStats(fSuccessRate, iErrors24h, fAvgDurationP95, aTaskChains.length);
+                    that._updateProjectStats(parseFloat(oKpis.successRate), oKpis.errorsLast24h, parseFloat(oKpis.avgDurationP95), aTaskChains.length);
                 }).catch(function(error) {
                     console.error("Error loading node details:", error);
                     oDashboardModel.setProperty("/loading", false);
@@ -281,6 +234,74 @@ sap.ui.define([
                 oDashboardModel.setProperty("/loading", false);
                 that.getOwnerComponent()._setBusy(false);
             });
+        },
+
+        /**
+         * Compute all 7 dashboard KPIs from a set of runs.
+         *
+         * Works on either the full run set or a chain-filtered subset, so it can
+         * be reused by both the initial load and _updateKPIsForFilteredData.
+         * Step-count KPIs (avgStepsExecuted/avgStepsFailed) only consider runs
+         * whose node data has already been fetched (run.totalSteps !== undefined) -
+         * older runs are lazy-loaded on scroll (see onExecutionsTableUpdate) and
+         * are excluded until then, same as the original whole-project calculation.
+         * @param {Array} aRuns - Runs to compute KPIs over
+         * @returns {Object} KPI values, pre-formatted (toFixed) like the model expects
+         */
+        _computeKpis: function (aRuns) {
+            var iTotalCount = aRuns.length;
+            var iSuccessCount = aRuns.filter(function(e) { return e.status === "success"; }).length;
+            var fSuccessRate = iTotalCount > 0 ? (iSuccessCount / iTotalCount * 100) : 100;
+
+            var now = new Date();
+            // Count runs with errors in last 24h: chain's own final status only (consistent
+            // with _getTopFailingTasks) - a run whose overall status is not "error" (e.g. a
+            // step configured with "Ignore Error" in DSP) is not counted here even if one of
+            // its steps individually failed.
+            var iErrors24h = aRuns.filter(function(e) {
+                var execTime = new Date(e.startTime);
+                var isRecent = (now - execTime) < 24 * 60 * 60 * 1000;
+                return isRecent && e.status === "error";
+            }).length;
+
+            // Calculate Avg Duration (P95) and Std Dev
+            var aDurations = aRuns
+                .filter(function(e) { return e.duration && typeof e.duration === "number" && e.duration > 0; })
+                .map(function(e) { return e.duration; })
+                .sort(function(a, b) { return a - b; });
+
+            var fAvgDurationP95 = 0;
+            var fDurationStdDev = 0;
+            if (aDurations.length > 0) {
+                var iP95Index = Math.floor(aDurations.length * 0.95);
+                iP95Index = Math.min(iP95Index, aDurations.length - 1);
+                fAvgDurationP95 = aDurations[iP95Index];
+
+                var fAvgDuration = aDurations.reduce(function(a, b) { return a + b; }, 0) / aDurations.length;
+                if (aDurations.length > 1) {
+                    var fVariance = aDurations.reduce(function(sum, val) {
+                        return sum + Math.pow(val - fAvgDuration, 2);
+                    }, 0) / aDurations.length;
+                    fDurationStdDev = Math.sqrt(fVariance);
+                }
+            }
+
+            // Calculate avg steps KPIs - only over runs whose node data is loaded
+            var aRunsWithSteps = aRuns.filter(function(e) { return e.totalSteps !== undefined; });
+            var iTotalSteps = aRunsWithSteps.reduce(function(sum, e) { return sum + (e.totalSteps || 0); }, 0);
+            var iTotalFailedSteps = aRunsWithSteps.reduce(function(sum, e) { return sum + (e.stepsFailed || 0); }, 0);
+            var fAvgSteps = aRunsWithSteps.length > 0 ? (iTotalSteps / aRunsWithSteps.length) : 0;
+            var fAvgFailedSteps = aRunsWithSteps.length > 0 ? (iTotalFailedSteps / aRunsWithSteps.length) : 0;
+
+            return {
+                totalExecutions: iTotalCount,
+                successRate: fSuccessRate.toFixed(1),
+                errorsLast24h: iErrors24h,
+                avgDurationP95: fAvgDurationP95.toFixed(1),
+                durationStdDev: fDurationStdDev.toFixed(1),
+                avgStepsExecuted: fAvgSteps.toFixed(1),
+                avgStepsFailed: fAvgFailedSteps.toFixed(2)
+            };
         },
 
         /**
@@ -1062,6 +1083,9 @@ sap.ui.define([
 
             // Update chart — _updateChartData reads from filteredExecutions automatically
             this._updateChartData(null, null);
+
+            // Restore whole-project KPIs (previously left stale from the last filter)
+            this._updateKPIsForFilteredData(aAllExecutions);
         },
 
         /**
@@ -1096,20 +1120,15 @@ sap.ui.define([
          */
         _updateKPIsForFilteredData: function (aExecutions) {
             var oDashboardModel = this.getView().getModel("dashboard");
-            
-            var iSuccessCount = aExecutions.filter(function(e) { return e.status === "success"; }).length;
-            var iTotalCount = aExecutions.length;
-            var fSuccessRate = iTotalCount > 0 ? (iSuccessCount / iTotalCount * 100) : 100;
-            
-            var now = new Date();
-            var iErrors24h = aExecutions.filter(function(e) {
-                var execTime = new Date(e.startTime);
-                return e.status === "error" && (now - execTime) < 24 * 60 * 60 * 1000;
-            }).length;
-            
-            oDashboardModel.setProperty("/successRate", fSuccessRate.toFixed(1));
-            oDashboardModel.setProperty("/errorsLast24h", iErrors24h);
-            oDashboardModel.setProperty("/totalExecutions", iTotalCount);
+            var oKpis = this._computeKpis(aExecutions);
+
+            oDashboardModel.setProperty("/totalExecutions", oKpis.totalExecutions);
+            oDashboardModel.setProperty("/successRate", oKpis.successRate);
+            oDashboardModel.setProperty("/errorsLast24h", oKpis.errorsLast24h);
+            oDashboardModel.setProperty("/avgDurationP95", oKpis.avgDurationP95);
+            oDashboardModel.setProperty("/durationStdDev", oKpis.durationStdDev);
+            oDashboardModel.setProperty("/avgStepsExecuted", oKpis.avgStepsExecuted);
+            oDashboardModel.setProperty("/avgStepsFailed", oKpis.avgStepsFailed);
             oDashboardModel.setProperty("/topFailingTasks", this._getTopFailingTasks(aExecutions));
         },
 

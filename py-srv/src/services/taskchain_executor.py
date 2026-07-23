@@ -77,8 +77,13 @@ class TaskchainExecutor:
             logger.info("TaskchainExecutor initialized (DSP via BTP Destination)")
 
     @staticmethod
-    def store_pending_step_params(taskchain: str, params: Dict[str, Any]) -> None:
-        """Store step-level params for *taskchain* so the job-launch endpoint can pick them up."""
+    def store_pending_step_params(taskchain: str, params: Dict[str, Any], space_id: str = "") -> None:
+        """Store step-level params for *taskchain* so the job-launch endpoint can pick
+        them up. Kept in-memory (fast path for the steps of the run firing right
+        now) AND persisted durably in the PendingStepParams table, so a manual
+        DSP-side "Retry" long after this launch — or a py-srv restart in between —
+        still finds the right parameters instead of firing without them.
+        """
         with _PENDING_STEP_PARAMS_LOCK:
             _PENDING_STEP_PARAMS[taskchain] = params
             _PENDING_STEP_PARAMS_TTL[taskchain] = time.time() + _STEP_PARAMS_TTL_SECONDS
@@ -90,29 +95,51 @@ class TaskchainExecutor:
         step_keys = list(params.keys()) if isinstance(params, dict) else []
         logger.info("store_pending_step_params: taskchain=%r steps=%s", taskchain, step_keys)
 
+        try:
+            from flask import current_app
+            repo = current_app.extensions["taskchain"].get("schedule_repo")
+            if repo is not None:
+                repo.set_pending_step_params(taskchain, space_id or "", json.dumps(params))
+        except Exception as e:
+            logger.warning("store_pending_step_params: DB persist failed for taskchain=%r: %s", taskchain, e)
+
     @staticmethod
     def consume_pending_step_params(taskchain: str) -> Optional[Dict[str, Any]]:
         """Return stored step params for *taskchain* without removing them.
 
-        Params are kept so multiple steps in the same task chain can each
-        read their own params.  Entries expire via TTL set in store_pending_step_params.
+        Checks the in-memory cache first (fast path, valid for TTL_SECONDS after
+        the launch that stored it). Falls back to the durable DB snapshot —
+        which survives both a longer time gap (e.g. a manual DSP "Retry" days
+        later) and a py-srv restart — when the in-memory entry is missing or
+        expired, so a delayed retry still fires with the right parameters.
         """
         with _PENDING_STEP_PARAMS_LOCK:
             entry = _PENDING_STEP_PARAMS.get(taskchain)
-            if entry is None:
-                stored_keys = list(_PENDING_STEP_PARAMS.keys())
-                logger.warning(
-                    "consume_pending_step_params: no params for taskchain=%r — stored keys: %s",
-                    taskchain, stored_keys,
-                )
-                return None
             exp = _PENDING_STEP_PARAMS_TTL.get(taskchain, 0)
-            if exp and time.time() > exp:
+            if entry is not None and (not exp or time.time() <= exp):
+                return entry
+            if entry is not None:
                 _PENDING_STEP_PARAMS.pop(taskchain, None)
                 _PENDING_STEP_PARAMS_TTL.pop(taskchain, None)
-                logger.warning("consume_pending_step_params: TTL expired for taskchain=%r", taskchain)
-                return None
-            return entry
+
+        try:
+            from flask import current_app
+            repo = current_app.extensions["taskchain"].get("schedule_repo")
+            if repo is not None:
+                raw = repo.get_pending_step_params(taskchain)
+                if raw:
+                    parsed = json.loads(raw)
+                    # Refresh the in-memory cache so subsequent steps in the same
+                    # (retried) run don't need another DB round-trip.
+                    with _PENDING_STEP_PARAMS_LOCK:
+                        _PENDING_STEP_PARAMS[taskchain] = parsed
+                        _PENDING_STEP_PARAMS_TTL[taskchain] = time.time() + _STEP_PARAMS_TTL_SECONDS
+                    return parsed
+        except Exception as e:
+            logger.warning("consume_pending_step_params: DB lookup failed for taskchain=%r: %s", taskchain, e)
+
+        logger.warning("consume_pending_step_params: no params found (memory or DB) for taskchain=%r", taskchain)
+        return None
 
     @staticmethod
     def find_active_taskchain_for_multiaction(multiaction_id: str) -> Optional[str]:
@@ -201,7 +228,7 @@ class TaskchainExecutor:
 
         # Store step params so the API-task's /v1/jobs/launch call can pick them up.
         if payload:
-            TaskchainExecutor.store_pending_step_params(taskchain_name, payload)
+            TaskchainExecutor.store_pending_step_params(taskchain_name, payload, spaceid)
 
         try:
             logid = self._dsp_run_task_chain(spaceid, taskchain_name)
@@ -222,6 +249,47 @@ class TaskchainExecutor:
                 taskchain_name=taskchain_name,
                 status=TaskchainStatus.PENDING,
                 payload=payload,
+                created_at=datetime.utcnow(),
+            )
+
+        self._watch_taskchain_active_flag(taskchain_name, execution_id)
+
+        return execution_id
+
+    def retry_dsp(self, spaceid: str, taskchain_name: str) -> str:
+        """Retry the last FAILED/CANCELED run of *taskchain_name* via DSP's Tasks
+        REST API (see _dsp_retry_task_chain). Registers the same active-taskchain
+        guard/watcher used for a fresh launch, so our own scheduler won't fire a
+        concurrent run of the same task chain while the retried execution is
+        still in flight.
+        """
+        now = time.time()
+        with _ACTIVE_TASKCHAINS_LOCK:
+            active = _ACTIVE_TASKCHAINS.get(taskchain_name)
+            if active and active[1] > now:
+                raise RuntimeError(
+                    f"Task chain '{taskchain_name}' is already running (started earlier and not "
+                    f"yet finished). Wait for the current run to finish before retrying it."
+                )
+            _ACTIVE_TASKCHAINS[taskchain_name] = (None, now + _ACTIVE_TASKCHAIN_MAX_SECONDS)
+
+        try:
+            logid = self._dsp_retry_task_chain(spaceid, taskchain_name)
+        except Exception:
+            with _ACTIVE_TASKCHAINS_LOCK:
+                _ACTIVE_TASKCHAINS.pop(taskchain_name, None)
+            raise
+
+        execution_id = self.make_execution_id(spaceid, logid)
+        with _ACTIVE_TASKCHAINS_LOCK:
+            _ACTIVE_TASKCHAINS[taskchain_name] = (execution_id, now + _ACTIVE_TASKCHAIN_MAX_SECONDS)
+
+        with self._lock:
+            self._executions[execution_id] = TaskchainExecution(
+                execution_id=execution_id,
+                taskchain_name=taskchain_name,
+                status=TaskchainStatus.PENDING,
+                payload={},
                 created_at=datetime.utcnow(),
             )
 
@@ -488,8 +556,10 @@ class TaskchainExecutor:
         """Launch a DSP task chain via the directexecute endpoint and return the logId.
 
         DSP's native scheduler uses applicationId=TASK_CHAINS, activity=RUN_CHAIN
-        on /dwaas-core/tf/directexecute. The REST path
-        /api/v1/tasks/spaces/{space}/chains/{name} returns 404 in this tenant.
+        on /dwaas-core/tf/directexecute — kept as-is since it's proven reliable
+        here. (SAP's documented Tasks REST API also offers an equivalent
+        POST /api/v1/datasphere/tasks/chains/{spaceId}/run/{objectId} — see
+        _dsp_retry_task_chain below, which uses that same API family for retry.)
         """
         conn = TaskchainExecutor._get_dsp_connection()
         url = f"{conn['base_url']}/dwaas-core/tf/directexecute"
@@ -532,10 +602,8 @@ class TaskchainExecutor:
         """Get the status of a DSP task chain execution.
 
         Reads the same local HANA view (populated by DWC's own metadata
-        replication) that /v1/dsp/taskchain-runs uses — the direct DSP REST
-        API (`/api/v1/tasks/spaces/{spaceid}/logs/{logid}`) 404s for logIds
-        that this view resolves without issue, so it's kept only as a
-        fallback for when the DB isn't available (e.g. local dev).
+        replication) that /v1/dsp/taskchain-runs uses, falling back to the
+        DSP REST API only for when the DB isn't available (e.g. local dev).
         """
         if self._db_query is not None:
             try:
@@ -552,9 +620,15 @@ class TaskchainExecutor:
 
     @staticmethod
     def _dsp_get_chain_status_rest(spaceid: str, logid: str) -> str:
-        """Fallback: get the status of a DSP task chain execution via REST API."""
+        """Fallback: get the status of a DSP task chain execution via DSP's
+        documented Tasks REST API (GET .../tasks/logs/{spaceId}/{logId}, default
+        Accept header returns {"status": "..."}). A previous version of this
+        call used /api/v1/tasks/spaces/{spaceid}/logs/{logid} (missing the
+        "datasphere" path segment required by SAP's own API docs) and always
+        404d — this is why the DB lookup above is preferred whenever available.
+        """
         conn = TaskchainExecutor._get_dsp_connection()
-        url = f"{conn['base_url']}/api/v1/tasks/spaces/{spaceid}/logs/{logid}"
+        url = f"{conn['base_url']}/api/v1/datasphere/tasks/logs/{spaceid}/{logid}"
         req = urllib.request.Request(
             url,
             headers={
@@ -565,6 +639,40 @@ class TaskchainExecutor:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         return data.get("status", "")
+
+    @staticmethod
+    def _dsp_retry_task_chain(spaceid: str, objectid: str) -> str:
+        """Retry the last FAILED/CANCELED run of a task chain via DSP's
+        documented Tasks REST API:
+
+            POST /api/v1/datasphere/tasks/chains/{spaceId}/retry/{objectId}
+
+        Only valid if that run was the LAST run of the object — DSP itself
+        rejects the request otherwise (e.g. a newer run has since completed).
+        Returns the (re-)used logId from DSP's response.
+        """
+        conn = TaskchainExecutor._get_dsp_connection()
+        url = f"{conn['base_url']}/api/v1/datasphere/tasks/chains/{spaceid}/retry/{objectid}"
+        req = urllib.request.Request(
+            url,
+            data=b"{}",
+            headers={
+                "Authorization": f"Bearer {conn['access_token']}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            raw = resp.read().decode("utf-8")
+        try:
+            data = json.loads(raw) if raw else {}
+        except Exception:
+            data = {"raw": raw}
+        logid = data.get("logId") if isinstance(data, dict) else None
+        if not logid:
+            raise RuntimeError(f"DSP task chain retry did not return a logId. Response: {data}")
+        return str(logid)
 
     def list_executions(self, limit: int = 50) -> list[Dict[str, Any]]:
         with self._lock:

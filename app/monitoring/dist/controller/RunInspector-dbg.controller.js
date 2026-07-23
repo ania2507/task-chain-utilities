@@ -2,10 +2,11 @@ sap.ui.define([
     "sap/ui/core/mvc/Controller",
     "sap/ui/model/json/JSONModel",
     "sap/m/MessageToast",
+    "sap/m/MessageBox",
     "sap/ui/core/routing/History",
     "sap/ui/model/Filter",
     "sap/ui/model/FilterOperator"
-], function (Controller, JSONModel, MessageToast, History, Filter, FilterOperator) {
+], function (Controller, JSONModel, MessageToast, MessageBox, History, Filter, FilterOperator) {
     "use strict";
 
     return Controller.extend("monitoring.controller.RunInspector", {
@@ -95,7 +96,9 @@ sap.ui.define([
                 timeline: [],
                 retries: [],
                 failedSteps: [],
-                failedStepsCount: 0
+                failedStepsCount: 0,
+                retryBusy: false,
+                isLastRun: false
             });
             
             oView.setModel(oRunDetailModel, "runDetail");
@@ -169,6 +172,7 @@ sap.ui.define([
                     oModel.setProperty("/endTime", oRun.endTime || "-");
                     oModel.setProperty("/totalDuration", sDuration);
                     that._loadScheduleDetails(oRun.spaceId || sSpaceId, sRunId, oModel);
+                    that._checkIsLastRun(oRun.spaceId || sSpaceId, oRun.taskChain || sChainId, sRunId, oModel);
                 } else {
                     // Run not found in DSP logs: don't leave the header stuck on "Loading..."
                     oModel.setProperty("/status", "pending");
@@ -180,7 +184,12 @@ sap.ui.define([
                 var sErrorMessage = "";
                 var sErrorCode = "";
                 var sCorrelationId = "";
-                
+                var aRetries = that._computeRetryAttempts(
+                    messagesResult.success ? messagesResult.messages : []
+                );
+                oModel.setProperty("/retries", aRetries);
+                oModel.setProperty("/retryCount", Math.max(0, aRetries.length - 1));
+
                 if (messagesResult.success && messagesResult.messages) {
                     messagesResult.messages.forEach(function(msg) {
                         // Extract correlation ID from details
@@ -352,6 +361,62 @@ sap.ui.define([
         },
         
         /**
+         * Build the Retry Attempts list from the run's own DSP tasklog messages.
+         *
+         * DSP emits "chainRetried" whenever someone re-launches a failed chain
+         * run (same taskLogId, new attempt) and "taskFinishedAt" at the end of
+         * each attempt with the resulting status embedded in its text (e.g.
+         * "...with status FAILED"). This is chain-level retry (a full re-run of
+         * the chain), distinct from "taskRetried" which is DSP's own automatic
+         * per-step retry within a single attempt and isn't tracked here.
+         *
+         * Returns one entry per attempt, including the initial run as attempt 1,
+         * so the caller should use (length - 1) as the "was this retried" count.
+         */
+        _computeRetryAttempts: function (aMessages) {
+            if (!aMessages || !aMessages.length) return [];
+            var aSorted = aMessages.slice().sort(function (a, b) {
+                return new Date(a.timestamp) - new Date(b.timestamp);
+            });
+            var aStarts = [{ timestamp: aSorted[0].timestamp, reason: "Initial run" }];
+            aSorted.forEach(function (msg) {
+                if (msg.messageKey === "chainRetried") {
+                    aStarts.push({ timestamp: msg.timestamp, reason: msg.text || "Task chain retried" });
+                }
+            });
+            // DSP uses two variant keys for the same "attempt finished" event
+            // depending on the run ("taskFinished" and "taskFinishedAt") — both
+            // embed "with status X" in their text, so match either.
+            var aFinishes = aSorted.filter(function (msg) {
+                return msg.messageKey === "taskFinished" || msg.messageKey === "taskFinishedAt";
+            });
+            return aStarts.map(function (oStart, idx) {
+                var oNextStart = aStarts[idx + 1];
+                var oFinish = aFinishes.find(function (f) {
+                    return new Date(f.timestamp) >= new Date(oStart.timestamp)
+                        && (!oNextStart || new Date(f.timestamp) < new Date(oNextStart.timestamp));
+                });
+                var sStatus = "running", sStatusText = "Running";
+                if (oFinish) {
+                    var m = /status\s+(\w+)/i.exec(oFinish.text || "");
+                    var sRaw = (m && m[1] || "").toUpperCase();
+                    if (sRaw === "COMPLETED" || sRaw === "SUCCESS") {
+                        sStatus = "success"; sStatusText = "Success";
+                    } else if (sRaw) {
+                        sStatus = "error"; sStatusText = sRaw.charAt(0) + sRaw.slice(1).toLowerCase();
+                    }
+                }
+                return {
+                    attempt: idx + 1,
+                    timestamp: oStart.timestamp,
+                    status: sStatus,
+                    statusText: sStatusText,
+                    reason: oStart.reason
+                };
+            });
+        },
+
+        /**
          * Fill in the "Details" free-text field (set by the Scheduler app —
          * calendar entries, on-demand scheduled runs, and on-demand "Run Now")
          * for this run, matched by DSP run/log ID. ScheduleRun.remoteId is
@@ -373,6 +438,29 @@ sap.ui.define([
             }).catch(function (err) {
                 console.warn("[Monitoring] Could not load schedule details:", err && err.message);
             });
+        },
+
+        /**
+         * DSP's retry API only accepts a FAILED/CANCELED run if it was the
+         * LAST run of that task chain object — check that here so the Retry
+         * button doesn't show (and fail) for an older, superseded failed run.
+         */
+        _checkIsLastRun: function (sSpaceId, sTaskchain, sRunId, oModel) {
+            if (!sSpaceId || !sTaskchain) {
+                oModel.setProperty("/isLastRun", false);
+                return;
+            }
+            var sUrl = this._getPySrvUrl() + "/v1/dsp/taskchain-runs?spaceId=" + encodeURIComponent(sSpaceId)
+                + "&taskchain=" + encodeURIComponent(sTaskchain) + "&limit=1";
+            fetch(sUrl, { credentials: "same-origin", headers: { "Accept": "application/json" } })
+                .then(function (res) { return res.json(); })
+                .then(function (data) {
+                    var lastRun = (data && data.success && data.runs && data.runs[0]) || null;
+                    oModel.setProperty("/isLastRun", !!lastRun && String(lastRun.runId) === String(sRunId));
+                })
+                .catch(function () {
+                    oModel.setProperty("/isLastRun", false);
+                });
         },
 
         /**
@@ -427,6 +515,61 @@ sap.ui.define([
         },
 
         /**
+         * Retry the last FAILED run of this task chain via DSP's Tasks REST API.
+         * Only valid if this run is still DSP's last run of the object — DSP
+         * itself rejects the request otherwise (e.g. a newer run has since
+         * completed), and that error is surfaced to the user as-is.
+         */
+        onRetryRun: function () {
+            var oModel = this.getView().getModel("runDetail");
+            var sSpaceId = oModel.getProperty("/spaceId");
+            var sTaskchain = oModel.getProperty("/taskChainName");
+            if (!sSpaceId || !sTaskchain) {
+                MessageToast.show("Missing spaceId/taskchain for this run.");
+                return;
+            }
+            var that = this;
+            MessageBox.confirm(
+                "Retry the failed run for \"" + sTaskchain + "\"? This will resume it in DSP from where it left off.",
+                {
+                    title: "Retry Run",
+                    onClose: function (sAction) {
+                        if (sAction !== MessageBox.Action.OK) return;
+                        that._doRetryRun(sSpaceId, sTaskchain);
+                    }
+                }
+            );
+        },
+
+        _doRetryRun: function (sSpaceId, sTaskchain) {
+            var oModel = this.getView().getModel("runDetail");
+            var that = this;
+            oModel.setProperty("/retryBusy", true);
+            fetch(this._getPySrvUrl() + "/v1/taskchains/retry", {
+                method: "POST",
+                credentials: "same-origin",
+                headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                body: JSON.stringify({ spaceid: sSpaceId, taskchain: sTaskchain })
+            })
+                .then(function (res) {
+                    return res.json().then(function (data) { return { ok: res.ok, data: data }; });
+                })
+                .then(function (r) {
+                    oModel.setProperty("/retryBusy", false);
+                    if (!r.ok) {
+                        MessageBox.error("Retry failed: " + (r.data && r.data.error || "Unknown error"));
+                        return;
+                    }
+                    MessageToast.show("Retry started in DSP.");
+                    that._loadRunData();
+                })
+                .catch(function (err) {
+                    oModel.setProperty("/retryBusy", false);
+                    MessageBox.error("Retry failed: " + (err && err.message || err));
+                });
+        },
+
+        /**
          * Handle click on failed step - show error detail dialog
          */
         onFailedStepPress: function (oEvent) {
@@ -467,15 +610,15 @@ sap.ui.define([
             }).addStyleClass("sapUiSmallMarginBottom"));
             
             oContentBox.addItem(this._createDetailRow("Status", oStep.status.toUpperCase()));
-            oContentBox.addItem(this._createDetailRow("Start Time", oStep.startTime || "-"));
-            oContentBox.addItem(this._createDetailRow("End Time", oStep.endTime || "-"));
+            oContentBox.addItem(this._createDetailRow("Start Time", this.formatDateTime(oStep.startTime)));
+            oContentBox.addItem(this._createDetailRow("End Time", this.formatDateTime(oStep.endTime)));
             oContentBox.addItem(this._createDetailRow("Duration", oStep.durationDisplay));
             oContentBox.addItem(this._createDetailRow("Task Log ID", oStep.taskLogId ? String(oStep.taskLogId) : "-"));
             
             // Error message
             oContentBox.addItem(new sap.m.Label({ text: "Error Message:", design: "Bold" }).addStyleClass("sapUiSmallMarginTop"));
             oContentBox.addItem(new sap.m.MessageStrip({
-                text: oStep.errorMessage || "No error message available",
+                text: this.formatMessageText(oStep.errorMessage) || "No error message available",
                 type: "Error",
                 showIcon: true
             }).addStyleClass("sapUiTinyMarginTop"));

@@ -15,7 +15,8 @@
       "target": "/v1/$1",
       "destination": "py-srv-api",
       "authenticationType": "xsuaa",
-      "scope": "$XSAPPNAME.admin"
+      "scope": "$XSAPPNAME.admin",
+      "csrfProtection": false
     },
     {
       "source": "^(.*)$",

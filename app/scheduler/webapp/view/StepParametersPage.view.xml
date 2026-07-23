@@ -61,8 +61,8 @@
                        width="auto" class="sapUiSmallMargin">
                     <content>
 
-                        <!-- CASE 0: step does not allow parameters (not an API call) -->
-                        <MessageStrip text="Parameters are not allowed for this step: it is not an API call."
+                        <!-- CASE 0: step does not allow parameters (not an API call, or a skip-override step) -->
+                        <MessageStrip text="Parameters are not allowed for this step."
                                        type="Warning" showIcon="true" class="sapUiSmallMargin"
                                        visible="{= !!${edit>/selectedStepId} &amp;&amp; !!${edit>/selectedStepIsBlocked} }"/>
 

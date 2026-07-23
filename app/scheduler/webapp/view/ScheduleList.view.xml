@@ -142,7 +142,7 @@
                    noDataText="{i18n>list.empty}">
                 <headerToolbar>
                     <OverflowToolbar>
-                        <Title text="{= ${page>/rows}.length + ' Task Chains'}" level="H5"/>
+                        <Title text="{= ${page>/filteredCount} + ' Task Chains'}" level="H5"/>
                         <ToolbarSpacer/>
                         <Button icon="sap-icon://refresh" press=".onRefresh" tooltip="{i18n>common.refresh}"/>
                         <Button icon="sap-icon://add" type="Emphasized" text="{i18n>common.addTaskchain}" press=".onAddTaskchain"/>

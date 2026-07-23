@@ -270,6 +270,44 @@ def execute_taskchain():
         return jsonify({"error": f"Errore esecuzione DSP: {str(e)}"}), 500
 
 
+@bp.route("/retry", methods=["POST"])
+@flask_access_validation(required_scope="admin")
+def retry_taskchain():
+    """Retry the last FAILED/CANCELED run of a task chain via DSP's Tasks REST
+    API. Valid only if that run was the last run of the object — DSP itself
+    rejects the request otherwise (e.g. a newer run has since completed).
+    """
+    if not request.is_json:
+        return jsonify({"error": "Request body must be JSON"}), 400
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Payload must be a JSON object"}), 400
+
+    spaceid = payload.get("spaceid") or payload.get("spaceId")
+    taskchain = payload.get("taskchain") or payload.get("taskchain_name")
+    if not spaceid or not taskchain:
+        return jsonify({"error": "'spaceid' e 'taskchain' sono obbligatori"}), 400
+
+    taskchain_executor = current_app.extensions["taskchain"]["taskchain_executor"]
+    try:
+        execution_id = taskchain_executor.retry_dsp(spaceid, taskchain)
+        return (
+            jsonify(
+                {
+                    "execution_id": execution_id,
+                    "taskchain": taskchain,
+                    "status": "pending",
+                    "message": "Taskchain retry started",
+                }
+            ),
+            202,
+        )
+    except Exception as e:
+        logger.exception("Error during DSP taskchain retry")
+        return jsonify({"error": f"Errore retry DSP: {str(e)}"}), 500
+
+
 @bp.route("/skip", methods=["POST"])
 @flask_access_validation(required_scope="admin")
 def skip_taskchain():

@@ -21,6 +21,10 @@
                     <Title id="runInspectorTitle" text="Run Inspector - {runDetail>/runId}" level="H4"/>
                 </contentMiddle>
                 <contentRight>
+                    <Button id="btnRetryRun" text="Retry" icon="sap-icon://redo" type="Emphasized"
+                            visible="{= ${runDetail>/status} === 'error' &amp;&amp; ${runDetail>/isLastRun} }"
+                            busy="{runDetail>/retryBusy}"
+                            press=".onRetryRun"/>
                     <Button id="btnRefreshRun" icon="sap-icon://refresh" tooltip="{i18n>common.refresh}" press=".onRefresh"/>
                 </contentRight>
             </Bar>
@@ -126,13 +130,13 @@
                 visible="{= ${runDetail>/status} === 'error'}">
                 <content>
                     <MessageStrip id="errorStrip"
-                        text="{runDetail>/errorMessage}"
+                        text="{ path: 'runDetail>/errorMessage', formatter: '.formatMessageText' }"
                         type="Error"
                         showIcon="true"
                         class="sapUiSmallMarginBottom"/>
                     
                     <VBox id="errorDetailsBox" class="sapUiSmallMargin">
-                        <HBox id="errorCodeBox" class="sapUiTinyMarginBottom">
+                        <HBox id="errorCodeBox" class="sapUiTinyMarginBottom" visible="{= !!${runDetail>/errorCode} }">
                             <Label id="lblErrorCode" text="Error Code:" design="Bold" class="sapUiSmallMarginEnd"/>
                             <Text id="txtErrorCode" text="{runDetail>/errorCode}"/>
                         </HBox>
@@ -140,7 +144,7 @@
                             <Label id="lblErrorTask" text="Failed Task:" design="Bold" class="sapUiSmallMarginEnd"/>
                             <Text id="txtErrorTask" text="{runDetail>/failedTask}"/>
                         </HBox>
-                        <VBox id="stackTraceBox" visible="{= ${runDetail>/stackTrace} !== null}">
+                        <VBox id="stackTraceBox" visible="{= !!${runDetail>/stackTrace} }">
                             <Label id="lblStackTrace" text="Stack Trace:" design="Bold"/>
                             <TextArea id="txtStackTrace" 
                                 value="{runDetail>/stackTrace}"

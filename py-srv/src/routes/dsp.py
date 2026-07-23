@@ -284,6 +284,46 @@ def _extract_integration_type_from_metadata(md: dict) -> str | None:
     return _deep_search(md)
 
 
+# API-trigger steps used for skip overrides call this app's own /v1/taskchains/skip
+# endpoint directly (see routes/tasks.py) instead of /v1/jobs/launch — they never
+# have an IBP template or SAC multi action, so the frontend must not offer that
+# association UI for them. Detected the same way as the IBP/SAC signals above: by
+# scanning the step's own configured request (URL/body) in the DWC deployment
+# metadata for its distinctive path, not by guessing from the step's DSP name.
+_SKIP_STEP_URL_PATTERN = re.compile(r"/v1/taskchains/skip\b", re.IGNORECASE)
+
+
+def _extract_is_skip_step_from_metadata(md: dict) -> bool:
+    if not isinstance(md, dict):
+        return False
+
+    def _deep_search(obj, depth=0) -> bool:
+        if depth > 8 or not isinstance(obj, dict):
+            return False
+        for v in obj.values():
+            if isinstance(v, str):
+                stripped = v.strip()
+                if stripped.startswith("{"):
+                    try:
+                        parsed = json.loads(stripped)
+                        if isinstance(parsed, dict) and _deep_search(parsed, depth + 1):
+                            return True
+                    except Exception:
+                        pass
+                elif _SKIP_STEP_URL_PATTERN.search(stripped):
+                    return True
+            elif isinstance(v, dict):
+                if _deep_search(v, depth + 1):
+                    return True
+            elif isinstance(v, list):
+                for item in v:
+                    if isinstance(item, dict) and _deep_search(item, depth + 1):
+                        return True
+        return False
+
+    return _deep_search(md)
+
+
 def _truncate(s: str, limit: int = 6000) -> str:
     s = s or ""
     if len(s) <= limit:
@@ -1116,6 +1156,10 @@ def get_taskchain_dag():
                     sac_ma_id = None
                 elif sac_ma_id:
                     ibp_tpl = None
+                is_skip_step = (
+                    _extract_is_skip_step_from_metadata(task_id)
+                    or _extract_is_skip_step_from_metadata(node)
+                )
                 nodes.append({
                     "id": node.get("id"),
                     "type": node.get("type", "TASK"),
@@ -1132,6 +1176,7 @@ def get_taskchain_dag():
                     "sacMultiActionId": sac_ma_id,
                     "integrationType": integration_type,
                     "objectType": object_type_map.get(obj_id) if obj_id else None,
+                    "isSkipStep": is_skip_step,
                 })
             for link in raw_links:
                 links.append({
@@ -1465,6 +1510,10 @@ def get_taskchain_dag():
                     sac_ma_id = None
                 elif sac_ma_id:
                     ibp_tpl = None
+                is_skip_step = (
+                    _extract_is_skip_step_from_metadata(task_id)
+                    or _extract_is_skip_step_from_metadata(node)
+                )
 
                 # Best-effort extraction of a human-readable label/description
                 label = (
@@ -1498,8 +1547,9 @@ def get_taskchain_dag():
                     "sacMultiActionId": sac_ma_id,
                     "integrationType": integration_type,
                     "objectType": object_type_map.get(obj_id) if obj_id else None,
+                    "isSkipStep": is_skip_step,
                 })
-            
+
             for link in raw_links:
                 links.append({
                     "id": link.get("id"),
@@ -2015,6 +2065,10 @@ def get_taskchain_steps():
                 sac_ma_id = None
             elif sac_ma_id:
                 ibp_tpl = None
+            is_skip_step = (
+                _extract_is_skip_step_from_metadata(task_id)
+                or _extract_is_skip_step_from_metadata(node)
+            )
             steps.append({
                 "id":              node.get("id") or obj_id,
                 "order":           i + 1,
@@ -2025,6 +2079,7 @@ def get_taskchain_steps():
                 "sacMultiActionId": sac_ma_id or "",
                 "integrationType": integration_type or "",
                 "objectType":      otype_map.get(obj_id) or "",
+                "isSkipStep":      is_skip_step,
             })
 
         return jsonify({"success": True, "steps": steps, "debug": debug_info}), 200

@@ -98,3 +98,20 @@ entity TrafficLightStatus {
   note          : String(500) @title: 'Note';
   initialState  : String(10)  default 'GREEN' @title: 'Initial State'; // 'GREEN' (Enabled) | 'RED' (Disabled)
 }
+
+/**
+ * Durable snapshot of the per-step parameters (including SAC multi action /
+ * IBP job template overrides) used the last time the scheduler launched a
+ * given task chain in DSP. Read by py-srv's /v1/jobs/launch when DSP calls
+ * back to trigger a SAC/IBP step, so a manual DSP-side "Retry" — which can
+ * happen long after the original launch, and after a py-srv restart wipes
+ * its in-memory cache — still finds the right parameters instead of firing
+ * without them. One row per taskchain, overwritten on every new launch.
+ * Purely a technical/internal table: not exposed via any OData service.
+ */
+entity PendingStepParams {
+  key taskchain : String(200) @title: 'Taskchain';
+  spaceId       : String(100) @title: 'DSP Space ID';
+  paramsJson    : LargeString @title: 'Step Params JSON';
+  updatedAt     : Timestamp   @title: 'Updated At';
+}

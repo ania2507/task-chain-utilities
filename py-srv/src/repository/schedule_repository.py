@@ -6,6 +6,7 @@ Tables (generated from CDS namespace `conditional.app.schedules`):
   - CONDITIONAL_APP_SCHEDULES_SCHEDULE
   - CONDITIONAL_APP_SCHEDULES_SCHEDULERUN
   - CONDITIONAL_APP_SCHEDULES_TRAFFICLIGHTSTATUS
+  - CONDITIONAL_APP_SCHEDULES_PENDINGSTEPPARAMS
 """
 
 from __future__ import annotations
@@ -21,10 +22,11 @@ from src.config import Config
 logger = logging.getLogger(__name__)
 
 
-SCHEDULE_ENTRY_TBL = "CONDITIONAL_APP_SCHEDULES_SCHEDULEENTRY"
-SCHEDULE_TBL       = "CONDITIONAL_APP_SCHEDULES_SCHEDULE"
-RUN_TBL            = "CONDITIONAL_APP_SCHEDULES_SCHEDULERUN"
-TRAFFIC_LIGHT_TBL  = "CONDITIONAL_APP_SCHEDULES_TRAFFICLIGHTSTATUS"
+SCHEDULE_ENTRY_TBL   = "CONDITIONAL_APP_SCHEDULES_SCHEDULEENTRY"
+SCHEDULE_TBL         = "CONDITIONAL_APP_SCHEDULES_SCHEDULE"
+RUN_TBL              = "CONDITIONAL_APP_SCHEDULES_SCHEDULERUN"
+TRAFFIC_LIGHT_TBL    = "CONDITIONAL_APP_SCHEDULES_TRAFFICLIGHTSTATUS"
+PENDING_PARAMS_TBL   = "CONDITIONAL_APP_SCHEDULES_PENDINGSTEPPARAMS"
 
 
 class ScheduleRepository:
@@ -331,6 +333,66 @@ class ScheduleRepository:
             cur.close()
         except Exception as e:
             logger.warning("set_traffic_light_initial_state failed: %s", e)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
+    # PendingStepParams - durable snapshot of the last step params used to
+    # launch a task chain, so /v1/jobs/launch can still find them for a
+    # manual DSP-side "Retry" long after the original launch (and across a
+    # py-srv restart, unlike the in-memory cache in taskchain_executor.py).
+    # ------------------------------------------------------------------
+    def get_pending_step_params(self, taskchain: str) -> Optional[str]:
+        """Return the last stored step-params JSON for *taskchain*, or None."""
+        if self._use_mem:
+            mem = getattr(self, "_mem_pending_params", {})
+            return mem.get(taskchain)
+        sql = f"SELECT PARAMSJSON FROM {PENDING_PARAMS_TBL} WHERE TASKCHAIN = ?"
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(sql, (taskchain,))
+            row = cur.fetchone()
+            cur.close()
+            return row[0] if row else None
+        except Exception as e:
+            logger.warning("get_pending_step_params failed: %s", e)
+            return None
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def set_pending_step_params(self, taskchain: str, space_id: str, params_json: str) -> None:
+        """Upsert the step-params JSON for *taskchain* (one row per taskchain,
+        overwritten on every new launch)."""
+        now = datetime.now(timezone.utc).isoformat()
+        if self._use_mem:
+            if not hasattr(self, "_mem_pending_params"):
+                self._mem_pending_params: Dict[str, str] = {}
+            self._mem_pending_params[taskchain] = params_json
+            return
+        sql = (
+            f"MERGE INTO {PENDING_PARAMS_TBL} AS tgt "
+            f"USING (SELECT ? AS TASKCHAIN FROM DUMMY) AS src "
+            f"ON tgt.TASKCHAIN = src.TASKCHAIN "
+            f"WHEN MATCHED THEN UPDATE SET SPACEID = ?, PARAMSJSON = ?, UPDATEDAT = ? "
+            f"WHEN NOT MATCHED THEN INSERT (TASKCHAIN, SPACEID, PARAMSJSON, UPDATEDAT) "
+            f"VALUES (?, ?, ?, ?)"
+        )
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(sql, (taskchain, space_id, params_json, now,
+                              taskchain, space_id, params_json, now))
+            conn.commit()
+            cur.close()
+        except Exception as e:
+            logger.warning("set_pending_step_params failed: %s", e)
         finally:
             try:
                 conn.close()

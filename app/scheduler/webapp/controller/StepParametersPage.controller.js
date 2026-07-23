@@ -202,6 +202,7 @@ sap.ui.define([
                                     sacMultiActionId: n.sacMultiActionId || "",
                                     integrationType: n.integrationType || "",
                                     objectType: n.objectType || "",
+                                    isSkipStep: !!n.isSkipStep,
                                     allowParams: true,
                                     params: []
                                 };
@@ -234,6 +235,7 @@ sap.ui.define([
                                         sacMultiActionId: s.sacMultiActionId || "",
                                         integrationType: s.integrationType || "",
                                         objectType: s.objectType || "",
+                                        isSkipStep: !!s.isSkipStep,
                                         allowParams: true,
                                         params: []
                                     };
@@ -763,8 +765,15 @@ sap.ui.define([
         // A DSP step accepts parameters only if it's an API-trigger task (DSP names
         // these objects "APITask_..."), or its repository object type is "API",
         // or it already has an IBP/SAC job template resolved.
+        //
+        // Exception: "skip override" steps call this app's own /v1/taskchains/skip
+        // endpoint directly (not /v1/jobs/launch) — they never have an IBP template
+        // or SAC multi action, so this association UI must never be offered for them.
+        // Detected server-side from the step's own configured request in the DWC
+        // deployment metadata (isSkipStep), not guessed from its DSP name.
         _isApiStep: function (oStep) {
             if (!oStep) return false;
+            if (oStep.isSkipStep) return false;
             if (oStep.ibpTemplateName) return true;
             if (oStep.sacMultiActionId) return true;
             if ((oStep.objectType || "").toUpperCase().indexOf("API") !== -1) return true;
@@ -796,7 +805,9 @@ sap.ui.define([
             aParams.push({
                 key: String(oNew.key).trim(),
                 value: oNew.value == null ? "" : String(oNew.value),
-                active: !!oNew.active
+                active: !!oNew.active,
+                description: oNew.description || "",
+                hierarchyId: oNew.hierarchyId || ""
             });
             this._editModel.setProperty("/steps/" + oCur.idx + "/params", aParams);
             this._editModel.setProperty("/selectedStepParams", aParams);
@@ -812,7 +823,8 @@ sap.ui.define([
             if (!oCtx) return;
             var oRow = oCtx.getObject();
             this._editModel.setProperty("/newParam", {
-                key: oRow.key, value: oRow.value, active: !!oRow.active
+                key: oRow.key, value: oRow.value, active: !!oRow.active,
+                description: oRow.description || "", hierarchyId: oRow.hierarchyId || ""
             });
             this.onDeleteParam(oEvt);
         },
@@ -887,7 +899,13 @@ sap.ui.define([
 
         _doLoadIbpSteps: function (sTemplate) {
             var that = this;
+            // Guard against out-of-order responses: if the template is changed and
+            // "refresh" is clicked again before the previous request for the OLD
+            // template comes back, that stale response must not be allowed to
+            // overwrite the newer one once it does arrive.
+            var iSeq = (this._ibpStepsLoadSeq = (this._ibpStepsLoadSeq || 0) + 1);
             this._resolveIbpTemplateDescription(sTemplate).then(function (sDescription) {
+                if (iSeq !== that._ibpStepsLoadSeq) return;
                 that._editModel.setProperty("/ibpTemplateDescription", sDescription);
                 var oCurNow = that._currentStep();
                 if (oCurNow && oCurNow.step.ibpTemplateName === sTemplate) {
@@ -922,6 +940,7 @@ sap.ui.define([
             })
                 .then(function (res) { return res.json(); })
                 .then(function (data) {
+                    if (iSeq !== that._ibpStepsLoadSeq) return; // superseded by a newer load
                     if (data.error) {
                         MessageToast.show("IBP error: " + data.error);
                         return;
@@ -986,9 +1005,11 @@ sap.ui.define([
                     }
                 })
                 .catch(function (e) {
+                    if (iSeq !== that._ibpStepsLoadSeq) return; // superseded by a newer load
                     MessageToast.show("Failed to load IBP template: " + e.message);
                 })
                 .finally(function () {
+                    if (iSeq !== that._ibpStepsLoadSeq) return; // let the newer load's own .finally() clear busy
                     that._editModel.setProperty("/ibpLoading", false);
                 });
         },
