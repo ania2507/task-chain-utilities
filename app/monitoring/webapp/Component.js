@@ -28,19 +28,28 @@ sap.ui.define([
         },
 
         /**
-         * Show or hide the global BusyDialog
+         * Show or hide the global BusyDialog.
+         *
+         * Reference-counted: several pages/controllers call this independently and
+         * their async loads can overlap (e.g. navigating away before one finishes),
+         * so a plain open/close would let one operation's "done" prematurely close
+         * the dialog while another is still in flight — or, if a call site forgets
+         * its own _setBusy(false) on some path, leave it stuck open forever. The
+         * dialog only actually opens on the first outstanding call and only closes
+         * once every outstanding call has been matched by a _setBusy(false).
          * @param {boolean} bBusy
          */
         _setBusy: function (bBusy) {
-            if (bBusy) {
+            this._iBusyCount = (this._iBusyCount || 0) + (bBusy ? 1 : -1);
+            if (this._iBusyCount < 0) this._iBusyCount = 0; // defensive: unmatched false
+
+            if (this._iBusyCount > 0) {
                 if (!this._oBusyDialog) {
                     this._oBusyDialog = new BusyDialog();
                 }
                 this._oBusyDialog.open();
-            } else {
-                if (this._oBusyDialog) {
-                    this._oBusyDialog.close();
-                }
+            } else if (this._oBusyDialog) {
+                this._oBusyDialog.close();
             }
         },
 
@@ -54,7 +63,8 @@ sap.ui.define([
                 selectedProject: null,
                 executions: [],
                 taskChains: [],
-                alerts: []
+                alerts: [],
+                loading: true
             });
             this.setModel(oMonitoringModel, "monitoring");
 
@@ -108,9 +118,11 @@ sap.ui.define([
 
                 oMonitoringModel.setProperty("/projects", aProjects);
                 oMonitoringModel.setProperty("/filteredProjects", aProjects);
+                oMonitoringModel.setProperty("/loading", false);
                 that._setBusy(false);
             }).catch(function (oError) {
                 console.error("Error loading projects from OData:", oError);
+                oMonitoringModel.setProperty("/loading", false);
                 that._setBusy(false);
             });
         },
@@ -120,6 +132,7 @@ sap.ui.define([
          */
         refreshProjects: function () {
             this._setBusy(true);
+            this.getModel("monitoring").setProperty("/loading", true);
             return this._loadProjectsFromOData();
         },
 

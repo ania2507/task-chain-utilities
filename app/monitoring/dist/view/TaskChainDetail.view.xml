@@ -114,11 +114,11 @@
                     growing="true"
                     growingThreshold="10">
                     <columns>
-                        <Column id="colExecRunId" width="120px">
-                            <Text id="colExecRunIdText" text="{i18n>dashboard.runId}"/>
-                        </Column>
                         <Column id="colExecTask" width="220px">
                             <Text id="colExecTaskText" text="{i18n>dashboard.task}"/>
+                        </Column>
+                        <Column id="colExecRunId" width="120px">
+                            <Text id="colExecRunIdText" text="{i18n>dashboard.runId}"/>
                         </Column>
                         <Column id="colExecDetails">
                             <Text id="colExecDetailsText" text="{i18n>chainDetail.scheduleDetails}"/>
@@ -139,8 +139,8 @@
                     <items>
                         <ColumnListItem id="execDetailItem" type="Active" press=".onExecutionRowPress">
                             <cells>
-                                <Link id="cellExecRunId" text="{chainDetail>runId}" press=".onRunIdPress"/>
                                 <Text id="cellExecTask" text="{chainDetail>taskName}"/>
+                                <Link id="cellExecRunId" text="{chainDetail>runId}" press=".onRunIdPress"/>
                                 <Text id="cellExecDetails" text="{chainDetail>details}" maxLines="2" wrapping="true"/>
                                 <ObjectStatus id="cellExecStatus"
                                     text="{chainDetail>statusText}"

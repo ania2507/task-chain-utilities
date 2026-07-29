@@ -8,11 +8,14 @@ sap.ui.define([
     "sap/m/HBox",
     "sap/m/Label",
     "sap/f/Card",
-    "sap/ui/core/Icon"
-], function (Controller, JSONModel, Column, Text, ObjectStatus, VBox, HBox, Label, Card, Icon) {
+    "sap/ui/core/Icon",
+    "../model/formatter"
+], function (Controller, JSONModel, Column, Text, ObjectStatus, VBox, HBox, Label, Card, Icon, formatter) {
     "use strict";
 
     return Controller.extend("monitoring.controller.RunComparison", {
+
+        formatter: formatter,
 
         onInit: function () {
             var oRouter = this.getOwnerComponent().getRouter();
@@ -143,10 +146,14 @@ sap.ui.define([
             
             oModel.setProperty("/stats", {
                 successRate: fSuccessRate.toFixed(1),
-                avgDuration: fAvg.toFixed(1),
-                minDuration: fMin.toFixed(1),
-                maxDuration: fMax.toFixed(1),
-                durationVariance: fVariance.toFixed(1)
+                avgDuration: formatter.formatDurationMinutes(fAvg),
+                minDuration: formatter.formatDurationMinutes(fMin),
+                maxDuration: formatter.formatDurationMinutes(fMax),
+                // Kept numeric (raw minutes) since the view uses it in a numeric
+                // threshold comparison for the state color; durationVarianceDisplay
+                // is the human-readable "Xm Ys" text shown to the user.
+                durationVariance: fVariance,
+                durationVarianceDisplay: formatter.formatDurationMinutes(fVariance)
             });
         },
 
@@ -240,7 +247,7 @@ sap.ui.define([
                     if (fMin > 0 && (fMax / fMin) > 2) {
                         aAnomalies.push({
                             title: "Duration variance: " + oStep.taskName,
-                            description: "Duration varies significantly: " + fMin.toFixed(1) + " - " + fMax.toFixed(1) + " min",
+                            description: "Duration varies significantly: " + formatter.formatDurationMinutes(fMin) + " - " + formatter.formatDurationMinutes(fMax),
                             icon: "sap-icon://time-overtime",
                             severity: "Medium"
                         });
@@ -298,7 +305,7 @@ sap.ui.define([
                             that._createInfoRow("Task Chain", oRun.taskChain),
                             that._createInfoRow("Status", oRun.status.toUpperCase()),
                             that._createInfoRow("Start", that._formatDateTime(oRun.startTime)),
-                            that._createInfoRow("Duration", (oRun.duration || 0).toFixed(1) + " min"),
+                            that._createInfoRow("Duration", formatter.formatDurationMinutes(oRun.duration)),
                             that._createInfoRow("Steps", (oRun.nodes || []).length + " tasks")
                         ]
                     }).addStyleClass("sapUiSmallMargin")
@@ -392,7 +399,7 @@ sap.ui.define([
             var aCells = [
                 new Text({ text: oStep.taskName }),
                 new ObjectStatus({ text: oStep.type, inverted: true, state: "Information" }),
-                new Text({ text: (oStep.avgDuration || 0).toFixed(2) + " min" }),
+                new Text({ text: formatter.formatDurationMinutes(oStep.avgDuration) }),
                 new VBox({
                     items: [
                         new ObjectStatus({ 

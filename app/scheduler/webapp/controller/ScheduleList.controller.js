@@ -42,7 +42,9 @@ sap.ui.define([
                 filterStatus: "all",
                 filterType: "all",
                 filterSpace: "all",
+                filterFolder: "all",
                 spaceOptions: [],
+                folderOptions: [],
                 summary: { total: 0, scheduled: 0, notScheduled: 0, paused: 0 },
                 filteredCount: 0
             });
@@ -67,12 +69,12 @@ sap.ui.define([
             var oModel = this.getModel();
             if (!oModel) return Promise.resolve();
             var oList = oModel.bindList("/ScheduledTaskchain", undefined, undefined, undefined, {
-                $select: "spaceId,name,businessName"
+                $select: "spaceId,name,businessName,folder"
             });
             return oList.requestContexts(0, 1000).then(function (aCtx) {
                 var rows = aCtx.map(function (c) {
                     var o = c.getObject();
-                    return { spaceId: o.spaceId, name: o.name, businessName: o.businessName || o.name, hasSchedule: false, schedulesLoaded: false, filterStatus: "notScheduled", filterType: "none" };
+                    return { spaceId: o.spaceId, name: o.name, businessName: o.businessName || o.name, folder: o.folder || "", hasSchedule: false, schedulesLoaded: false, filterStatus: "notScheduled", filterType: "none" };
                 });
                 this._pageModel.setProperty("/rows", rows);
                 this._updateSummary();
@@ -369,21 +371,28 @@ sap.ui.define([
 
         _updateSummary: function () {
             var rows = this._pageModel.getProperty("/rows") || [];
-            var summary = { total: rows.length, scheduled: 0, notScheduled: 0, paused: 0 };
             var aSpaces = [];
+            var aFolders = [];
+            var bHasUnassigned = false;
             rows.forEach(function (r) {
-                if (r.filterStatus === "scheduled") summary.scheduled++;
-                else if (r.filterStatus === "paused") summary.paused++;
-                else summary.notScheduled++;
                 if (r.spaceId && aSpaces.indexOf(r.spaceId) === -1) aSpaces.push(r.spaceId);
+                if (r.folder) {
+                    if (aFolders.indexOf(r.folder) === -1) aFolders.push(r.folder);
+                } else {
+                    bHasUnassigned = true;
+                }
             });
             aSpaces.sort();
-            this._pageModel.setProperty("/summary", summary);
+            aFolders.sort();
             this._pageModel.setProperty("/spaceOptions", [{ key: "all", text: this.i18n("list.filter.spaceAll") }]
                 .concat(aSpaces.map(function (s) { return { key: s, text: s }; })));
+            this._pageModel.setProperty("/folderOptions", [{ key: "all", text: this.i18n("list.filter.folderAll") }]
+                .concat(aFolders.map(function (f) { return { key: f, text: f }; }))
+                .concat(bHasUnassigned ? [{ key: "__none__", text: this.i18n("list.filter.folderNone") }] : []));
 
-            // Re-apply the currently active filters so /filteredCount (and the
-            // table's visible rows) stay in sync whenever /rows is reloaded.
+            // Re-apply the currently active filters so /filteredCount, /summary
+            // (KPI tiles) and the table's visible rows all stay in sync whenever
+            // /rows is reloaded.
             this._applyFilters();
         },
 
@@ -434,8 +443,47 @@ sap.ui.define([
                 aFilters.push(new Filter("spaceId", FilterOperator.EQ, sSpace));
             }
 
+            var sFolder = this._pageModel.getProperty("/filterFolder");
+            if (sFolder && sFolder !== "all") {
+                if (sFolder === "__none__") {
+                    aFilters.push(new Filter({
+                        filters: [new Filter("folder", FilterOperator.EQ, null), new Filter("folder", FilterOperator.EQ, "")],
+                        and: false
+                    }));
+                } else {
+                    aFilters.push(new Filter("folder", FilterOperator.EQ, sFolder));
+                }
+            }
+
             oBinding.filter(aFilters);
             this._pageModel.setProperty("/filteredCount", oBinding.getLength());
+
+            // KPI tiles reflect the currently filtered set, not the full list —
+            // recompute them from the same rows the table binding just filtered to.
+            var sQLower = sQ.toLowerCase();
+            var aVisible = (this._pageModel.getProperty("/rows") || []).filter(function (r) {
+                if (sQLower) {
+                    var bHit = (r.spaceId || "").toLowerCase().indexOf(sQLower) !== -1
+                        || (r.name || "").toLowerCase().indexOf(sQLower) !== -1
+                        || (r.businessName || "").toLowerCase().indexOf(sQLower) !== -1;
+                    if (!bHit) return false;
+                }
+                if (sStatus && sStatus !== "all" && r.filterStatus !== sStatus) return false;
+                if (sType && sType !== "all" && r.filterType !== sType) return false;
+                if (sSpace && sSpace !== "all" && r.spaceId !== sSpace) return false;
+                if (sFolder && sFolder !== "all") {
+                    if (sFolder === "__none__") { if (r.folder) return false; }
+                    else if (r.folder !== sFolder) return false;
+                }
+                return true;
+            });
+            var summary = { total: aVisible.length, scheduled: 0, notScheduled: 0, paused: 0 };
+            aVisible.forEach(function (r) {
+                if (r.filterStatus === "scheduled") summary.scheduled++;
+                else if (r.filterStatus === "paused") summary.paused++;
+                else summary.notScheduled++;
+            });
+            this._pageModel.setProperty("/summary", summary);
         },
 
         // ------------------------------------------------------------
@@ -517,6 +565,7 @@ sap.ui.define([
                     spaceId: o.spaceId,
                     name: o.name,
                     businessName: o.businessName || o.name,
+                    folder: "",
                     hasSchedule: false,
                     filterStatus: "notScheduled",
                     filterType: "none"
@@ -1433,7 +1482,6 @@ sap.ui.define([
                 this._deleteSavedRow(row.spaceId, row.name);
             }.bind(this);
 
-            if (!row.hasSchedule) { doRemove(); return; }
             MessageBox.confirm(this.i18n("msg.confirmRemoveRow", [sName]), {
                 onClose: function (sAction) {
                     if (sAction === MessageBox.Action.OK) doRemove();
@@ -1457,6 +1505,231 @@ sap.ui.define([
             }).catch(function (err) {
                 console.warn("Could not locate saved task chain:", err && err.message);
             });
+        },
+
+        // ------------------------------------------------------------
+        // Folder grouping (free-text label per task chain, one folder each)
+        // ------------------------------------------------------------
+        onEditFolder: function (oEvt) {
+            var oBtn = oEvt.getSource();
+            var oCtx = oBtn.getBindingContext("page");
+            if (!oCtx) return;
+            var row = oCtx.getObject();
+            this._oEditingFolderRow = row;
+
+            var aFolderOptions = (this._pageModel.getProperty("/folderOptions") || [])
+                .filter(function (o) { return o.key !== "all" && o.key !== "__none__"; })
+                .map(function (o) { return { text: o.text }; });
+
+            if (!this._oFolderEditModel) {
+                this._oFolderEditModel = new JSONModel({ value: "", current: "", suggestions: [] });
+            }
+            this._oFolderEditModel.setData({
+                value: row.folder || "",
+                current: row.folder || "",
+                suggestions: aFolderOptions
+            });
+
+            var oView = this.getView();
+            if (!this._pEditFolderPopover) {
+                this._pEditFolderPopover = Fragment.load({
+                    id: oView.getId(),
+                    name: "scheduler.view.fragments.EditFolderDialog",
+                    controller: this
+                }).then(function (oPop) {
+                    oView.addDependent(oPop);
+                    oPop.setModel(this._oFolderEditModel, "folderEdit");
+                    return oPop;
+                }.bind(this));
+            }
+            this._pEditFolderPopover.then(function (oPop) { oPop.openBy(oBtn); });
+        },
+
+        onEditFolderClear: function () {
+            this._oFolderEditModel.setProperty("/value", "");
+            this.onEditFolderSave();
+        },
+
+        onEditFolderCancel: function () {
+            this._oEditingFolderRow = null;
+            if (this._pEditFolderPopover) this._pEditFolderPopover.then(function (oPop) { oPop.close(); });
+        },
+
+        onEditFolderSave: function () {
+            var row = this._oEditingFolderRow;
+            if (!row) return;
+            var sFolder = (this._oFolderEditModel.getProperty("/value") || "").trim();
+
+            if (this._pEditFolderPopover) this._pEditFolderPopover.then(function (oPop) { oPop.close(); });
+
+            var oModel = this.getModel();
+            if (!oModel) return;
+            var oList = oModel.bindList("/ScheduledTaskchain", undefined, undefined, [
+                new Filter("spaceId", FilterOperator.EQ, row.spaceId),
+                new Filter("name", FilterOperator.EQ, row.name)
+            ]);
+            var that = this;
+            oList.requestContexts(0, 1).then(function (aCtx) {
+                if (!aCtx || !aCtx[0]) return;
+                aCtx[0].setProperty("folder", sFolder);
+                return oModel.submitBatch(oModel.getUpdateGroupId());
+            }).then(function () {
+                row.folder = sFolder;
+                that._pageModel.setProperty("/rows", (that._pageModel.getProperty("/rows") || []).slice());
+                that._updateSummary();
+            }).catch(function (err) {
+                that.error(err && err.message || String(err));
+            });
+        },
+
+        // ------------------------------------------------------------
+        // Manage Tags dialog — bulk operations on top of the same "folder" field
+        // used by the per-row tag button above: rename a tag across every task
+        // chain that has it, or assign a tag to a chosen set of task chains.
+        // ------------------------------------------------------------
+        onManageTag: function () {
+            var oView = this.getView();
+            var aExistingTags = (this._pageModel.getProperty("/folderOptions") || [])
+                .filter(function (o) { return o.key !== "all" && o.key !== "__none__"; });
+            var aRows = this._pageModel.getProperty("/rows") || [];
+            var aChains = aRows.map(function (r) {
+                return {
+                    spaceId: r.spaceId,
+                    name: r.name,
+                    businessName: r.businessName || r.name,
+                    folder: r.folder || "",
+                    selected: false
+                };
+            });
+
+            if (!this._oManageTagModel) {
+                this._oManageTagModel = new JSONModel({});
+            }
+            this._oManageTagModel.setData({
+                mode: "rename",
+                fromTag: aExistingTags.length ? aExistingTags[0].key : "",
+                toTag: "",
+                assignTag: "",
+                existingTags: aExistingTags,
+                chainsAll: aChains,
+                chainsFiltered: aChains
+            });
+
+            if (!this._pManageTagDialog) {
+                this._pManageTagDialog = Fragment.load({
+                    id: oView.getId(),
+                    name: "scheduler.view.fragments.ManageTagDialog",
+                    controller: this
+                }).then(function (oDialog) {
+                    oView.addDependent(oDialog);
+                    oDialog.setModel(this._oManageTagModel, "manageTag");
+                    return oDialog;
+                }.bind(this));
+            }
+            this._pManageTagDialog.then(function (oDialog) { oDialog.open(); });
+        },
+
+        onManageTagChainSearch: function (oEvt) {
+            var sQuery = (oEvt.getParameter("value") || oEvt.getParameter("newValue") || "").toLowerCase().trim();
+            var aAll = this._oManageTagModel.getProperty("/chainsAll") || [];
+            var aFiltered = sQuery ? aAll.filter(function (c) {
+                return (c.name || "").toLowerCase().indexOf(sQuery) !== -1
+                    || (c.businessName || "").toLowerCase().indexOf(sQuery) !== -1
+                    || (c.spaceId || "").toLowerCase().indexOf(sQuery) !== -1;
+            }) : aAll;
+            this._oManageTagModel.setProperty("/chainsFiltered", aFiltered);
+        },
+
+        onManageTagCancel: function () {
+            if (this._pManageTagDialog) this._pManageTagDialog.then(function (oDialog) { oDialog.close(); });
+        },
+
+        onManageTagSave: function () {
+            var sMode = this._oManageTagModel.getProperty("/mode");
+            if (sMode === "assign") {
+                this._saveManageTagAssign();
+            } else {
+                this._saveManageTagRename();
+            }
+        },
+
+        _saveManageTagRename: function () {
+            var sFromTag = this._oManageTagModel.getProperty("/fromTag");
+            var sToTag = (this._oManageTagModel.getProperty("/toTag") || "").trim();
+            if (!sFromTag) { this.toast(this.i18n("msg.selectFromTag")); return; }
+            if (!sToTag) { this.toast(this.i18n("msg.enterToTag")); return; }
+            if (sToTag === sFromTag) { this.toast(this.i18n("msg.sameTagName")); return; }
+
+            var aRows = this._pageModel.getProperty("/rows") || [];
+            var aMatches = aRows.filter(function (r) { return r.folder === sFromTag; });
+            if (!aMatches.length) { this.toast(this.i18n("msg.selectFromTag")); return; }
+
+            var that = this;
+            MessageBox.confirm(this.i18n("msg.confirmRenameTag", [sFromTag, sToTag, aMatches.length]), {
+                onClose: function (sAction) {
+                    if (sAction !== MessageBox.Action.OK) return;
+                    that._bulkUpdateFolder(aMatches, sToTag).then(function () {
+                        if (that._pManageTagDialog) that._pManageTagDialog.then(function (oDialog) { oDialog.close(); });
+                        that.toast(that.i18n("msg.tagRenamed", [sToTag, aMatches.length]));
+                    }).catch(function (err) {
+                        that.error(err && err.message || String(err));
+                    });
+                }
+            });
+        },
+
+        _saveManageTagAssign: function () {
+            var sTag = (this._oManageTagModel.getProperty("/assignTag") || "").trim();
+            if (!sTag) { this.toast(this.i18n("msg.enterAssignTag")); return; }
+
+            var that = this;
+            var aChains = this._oManageTagModel.getProperty("/chainsAll") || [];
+            var aSelectedKeys = aChains.filter(function (c) { return c.selected; })
+                .map(function (c) { return that._rowKey(c.spaceId, c.name); });
+            if (!aSelectedKeys.length) { this.toast(this.i18n("msg.selectChainsToAssign")); return; }
+
+            var aRows = this._pageModel.getProperty("/rows") || [];
+            var aMatches = aRows.filter(function (r) { return aSelectedKeys.indexOf(that._rowKey(r.spaceId, r.name)) !== -1; });
+
+            this._bulkUpdateFolder(aMatches, sTag).then(function () {
+                if (that._pManageTagDialog) that._pManageTagDialog.then(function (oDialog) { oDialog.close(); });
+                that.toast(that.i18n("msg.tagAssigned", [sTag, aMatches.length]));
+            }).catch(function (err) {
+                that.error(err && err.message || String(err));
+            });
+        },
+
+        /**
+         * Bulk-set /folder (displayed as "Tag") on a set of page rows in one OData batch
+         * — same request-context-then-setProperty pattern as onEditFolderSave, just for
+         * many rows flushed together instead of one. Mutates the row objects directly
+         * (they're the same references held in /rows) then forces a rebind via a fresh
+         * array, consistent with how other bulk/async row updates in this app avoid
+         * stale-reference bugs.
+         */
+        _bulkUpdateFolder: function (aRows, sTag) {
+            var oModel = this.getModel();
+            if (!oModel || !aRows.length) return Promise.resolve();
+
+            var aPromises = aRows.map(function (row) {
+                var oList = oModel.bindList("/ScheduledTaskchain", undefined, undefined, [
+                    new Filter("spaceId", FilterOperator.EQ, row.spaceId),
+                    new Filter("name", FilterOperator.EQ, row.name)
+                ]);
+                return oList.requestContexts(0, 1).then(function (aCtx) {
+                    if (aCtx && aCtx[0]) {
+                        aCtx[0].setProperty("folder", sTag);
+                        row.folder = sTag;
+                    }
+                });
+            });
+
+            return Promise.all(aPromises).then(function () {
+                return oModel.submitBatch(oModel.getUpdateGroupId());
+            }).then(function () {
+                this._pageModel.setProperty("/rows", (this._pageModel.getProperty("/rows") || []).slice());
+                this._updateSummary();
+            }.bind(this));
         },
 
         onRunNow: function (oEvt) {

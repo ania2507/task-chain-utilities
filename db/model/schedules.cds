@@ -28,6 +28,7 @@ entity ScheduledTaskchain : managed {
   key spaceId      : String(100);
   key name         : String(200);
   businessName     : String(500);
+  folder           : String(100) @title: 'Folder';
 }
 
 /**

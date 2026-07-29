@@ -1,0 +1,73 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core">
+    <Dialog
+        id="manageTagDialog"
+        title="{i18n>manageTag.title}"
+        contentWidth="32rem"
+        contentHeight="34rem"
+        resizable="true"
+        draggable="true">
+        <content>
+            <VBox class="sapUiSmallMargin">
+                <SegmentedButton id="manageTagModeButton"
+                    selectedKey="{manageTag>/mode}"
+                    class="sapUiSmallMarginBottom">
+                    <items>
+                        <SegmentedButtonItem key="rename" text="{i18n>manageTag.modeRename}"/>
+                        <SegmentedButtonItem key="assign" text="{i18n>manageTag.modeAssign}"/>
+                    </items>
+                </SegmentedButton>
+
+                <!-- Rename mode: bulk-rename a tag across every task chain that has it -->
+                <VBox visible="{= ${manageTag>/mode} === 'rename'}">
+                    <Label text="{i18n>manageTag.fromTag}" labelFor="manageTagFromSelect" class="sapUiTinyMarginBottom"/>
+                    <Select id="manageTagFromSelect"
+                        selectedKey="{manageTag>/fromTag}"
+                        forceSelection="false"
+                        class="sapUiSmallMarginBottom"
+                        items="{path: 'manageTag>/existingTags', templateShareable: false}">
+                        <core:Item key="{manageTag>key}" text="{manageTag>text}"/>
+                    </Select>
+                    <Text text="{i18n>manageTag.noTags}" visible="{= ${manageTag>/existingTags}.length === 0}" class="sapUiSmallMarginBottom"/>
+
+                    <Label text="{i18n>manageTag.toTag}" labelFor="manageTagToInput" class="sapUiTinyMarginBottom"/>
+                    <Input id="manageTagToInput" value="{manageTag>/toTag}" placeholder="{i18n>manageTag.toTagPlaceholder}"/>
+                </VBox>
+
+                <!-- Assign mode: set one tag on a chosen set of task chains -->
+                <VBox visible="{= ${manageTag>/mode} === 'assign'}">
+                    <Label text="{i18n>manageTag.assignTag}" labelFor="manageTagAssignInput" class="sapUiTinyMarginBottom"/>
+                    <Input id="manageTagAssignInput"
+                        value="{manageTag>/assignTag}"
+                        placeholder="{i18n>manageTag.assignTagPlaceholder}"
+                        showSuggestion="true"
+                        class="sapUiSmallMarginBottom"
+                        suggestionItems="{path: 'manageTag>/existingTags', templateShareable: false}">
+                        <suggestionItems>
+                            <core:Item text="{manageTag>text}"/>
+                        </suggestionItems>
+                    </Input>
+
+                    <Label text="{i18n>manageTag.assignChains}" class="sapUiTinyMarginBottom"/>
+                    <SearchField search=".onManageTagChainSearch" liveChange=".onManageTagChainSearch" class="sapUiTinyMarginBottom"/>
+                    <List id="manageTagChainsList"
+                        mode="MultiSelect"
+                        growing="true"
+                        growingThreshold="100"
+                        items="{path: 'manageTag>/chainsFiltered', templateShareable: false}">
+                        <StandardListItem
+                            title="{manageTag>name}"
+                            description="{manageTag>businessName}"
+                            info="{manageTag>folder}"
+                            selected="{manageTag>selected}"/>
+                    </List>
+                </VBox>
+            </VBox>
+        </content>
+        <buttons>
+            <Button text="{i18n>common.save}" type="Emphasized" press=".onManageTagSave"/>
+            <Button text="{i18n>common.cancel}" press=".onManageTagCancel"/>
+        </buttons>
+    </Dialog>
+</core:FragmentDefinition>

@@ -272,23 +272,43 @@ sap.ui.define([
             }
 
             if (d.onDemandModeIndex === 0) {
-                this.callScheduler("/run-now-adhoc", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                }).then(function (data) {
-                    that._editModel.setProperty("/busy", false);
-                    if (data && data.status === "queued") {
-                        that.toast((d.name || d.taskchain) + " is already running — this run has been queued and will start automatically once it finishes.");
-                    } else {
-                        that.toast(that.i18n("msg.runTriggered", [d.name || d.taskchain]));
-                    }
-                    clearStepParamsState();
-                    that.onNavBack();
-                }).catch(function (err) {
-                    that._editModel.setProperty("/busy", false);
-                    that.error(err.message || String(err));
-                });
+                var fnDoRunNow = function () {
+                    that.callScheduler("/run-now-adhoc", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(payload)
+                    }).then(function (data) {
+                        that._editModel.setProperty("/busy", false);
+                        if (data && data.status === "queued") {
+                            that.toast((d.name || d.taskchain) + " is already running — this run has been queued and will start automatically once it finishes.");
+                        } else {
+                            that.toast(that.i18n("msg.runTriggered", [d.name || d.taskchain]));
+                        }
+                        clearStepParamsState();
+                        that.onNavBack();
+                    }).catch(function (err) {
+                        that._editModel.setProperty("/busy", false);
+                        that.error(err.message || String(err));
+                    });
+                };
+
+                if ((d.lastRunStatus || "").toLowerCase() === "running") {
+                    this._editModel.setProperty("/busy", false);
+                    MessageBox.confirm(
+                        (d.name || d.taskchain) + " is currently running. Do you want to trigger it anyway? "
+                        + "It will be queued and will start automatically once the current run finishes.",
+                        {
+                            title: "Task chain already running",
+                            onClose: function (sAction) {
+                                if (sAction !== MessageBox.Action.OK) return;
+                                that._editModel.setProperty("/busy", true);
+                                fnDoRunNow();
+                            }
+                        }
+                    );
+                } else {
+                    fnDoRunNow();
+                }
             } else {
                 if (!d.onDemandDate || !d.onDemandTime) {
                     this._editModel.setProperty("/busy", false);

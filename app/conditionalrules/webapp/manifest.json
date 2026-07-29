@@ -141,7 +141,7 @@
           "options": {
             "settings": {
               "contextPath": "/RuleTable",
-              "variantManagement": "Page",
+              "variantManagement": "None",
               "hideFilterBar": false,
               "navigation": {
                 "RuleTable": {

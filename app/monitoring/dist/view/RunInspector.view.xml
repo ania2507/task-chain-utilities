@@ -34,13 +34,13 @@
             <!-- Run Summary Header -->
             <Panel id="runSummaryPanel" class="sapUiSmallMargin">
                 <layout:HorizontalLayout id="summaryLayout" class="sapUiSmallMargin">
-                    <VBox id="summaryCol1" class="sapUiMediumMarginEnd">
-                        <Label id="lblRunId" text="{i18n>dashboard.runId}" design="Bold"/>
-                        <Text id="txtRunId" text="{runDetail>/runId}"/>
-                    </VBox>
                     <VBox id="summaryCol2" class="sapUiMediumMarginEnd">
                         <Label id="lblTaskChainRun" text="{i18n>dashboard.taskChain}" design="Bold"/>
                         <Text id="txtTaskChainRun" text="{runDetail>/taskChainName}"/>
+                    </VBox>
+                    <VBox id="summaryCol1" class="sapUiMediumMarginEnd">
+                        <Label id="lblRunId" text="{i18n>dashboard.runId}" design="Bold"/>
+                        <Text id="txtRunId" text="{runDetail>/runId}"/>
                     </VBox>
                     <VBox id="summaryColDetails" class="sapUiMediumMarginEnd" visible="{= !!${runDetail>/details} }">
                         <Label id="lblDetailsRun" text="{i18n>chainDetail.scheduleDetails}" design="Bold"/>

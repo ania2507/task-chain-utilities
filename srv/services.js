@@ -221,6 +221,19 @@ module.exports = cds.service.impl(async function () {
         }
     });
 
+    // Blocca il salvataggio se esiste già un override per la stessa combinazione
+    // Space/Taskchain/Step ID/Step To Be Checked — indipendentemente da Override
+    // e Last Override, che non fanno parte della chiave logica della riga.
+    this.before('SAVE', SkipOverride, async (req) => {
+        const { spaceId, taskchain, stepId, stepToBeChecked, ID } = req.data;
+        if (!spaceId || !taskchain || !stepId || !stepToBeChecked) return;
+        const existing = await SELECT.one.from(SkipOverride)
+            .where`spaceId = ${spaceId} and taskchain = ${taskchain} and stepId = ${stepId} and stepToBeChecked = ${stepToBeChecked} and ID != ${ID}`;
+        if (existing) {
+            req.error(400, `A skip override for Space "${spaceId}", Taskchain "${taskchain}", Step ID "${stepId}", Step To Be Checked "${stepToBeChecked}" already exists.`);
+        }
+    });
+
     this.before('NEW', RuleTable.drafts, async (req) => {
         // Trova il massimo RuleNumber tra le entità attive
         const maxActiveResult = await SELECT.one

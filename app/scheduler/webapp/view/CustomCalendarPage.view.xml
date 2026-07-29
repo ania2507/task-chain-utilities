@@ -160,20 +160,20 @@
                                 </headerToolbar>
                                 <columns>
                                     <Column width="8rem"><Text text="{i18n>calendar.col.date}"/></Column>
-                                    <Column width="5rem"><Text text="{i18n>calendar.col.time}"/></Column>
+                                    <Column width="7rem"><Text text="{i18n>calendar.col.time}"/></Column>
+                                    <Column width="20rem"><Text text="{i18n>calendar.col.details}"/></Column>
                                     <Column hAlign="Center" width="4rem"><Text text="{i18n>calendar.col.active}"/></Column>
-                                    <Column width="26rem"><Text text="{i18n>calendar.col.details}"/></Column>
                                     <Column width="9rem"><Text text="{i18n>calendar.col.runStatus}"/></Column>
-                                    <Column hAlign="End" width="22rem"><Text text=""/></Column>
+                                    <Column hAlign="End" width="18rem"><Text text=""/></Column>
                                 </columns>
                                 <ColumnListItem>
                                     <cells>
                                         <Text text="{edit>dateLabel}"/>
-                                        <Text text="{edit>time}"/>
+                                        <Text text="{edit>rawTime}"/>
+                                        <Text text="{edit>details}" maxLines="4" wrapping="true"/>
                                         <core:Icon src="sap-icon://accept"
                                                    color="{= ${edit>active} ? 'Positive' : 'Neutral' }"
                                                    visible="{edit>active}"/>
-                                        <Text text="{edit>details}" maxLines="4" wrapping="true"/>
                                         <HBox alignItems="Center">
                                             <core:Icon
                                                 src="{= ${edit>runStatus} === 'success' ? 'sap-icon://sys-enter-2' : ${edit>runStatus} === 'error' ? 'sap-icon://sys-cancel-2' : ${edit>runStatus} === 'running' ? 'sap-icon://pending' : ${edit>runStatus} === 'skipped' ? 'sap-icon://step' : '' }"

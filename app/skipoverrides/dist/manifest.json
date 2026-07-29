@@ -103,8 +103,8 @@
 					"options": {
 						"settings": {
 							"contextPath": "/SkipOverride",
-							"variantManagement": "Page",
-							"hideFilterBar": true,
+							"variantManagement": "None",
+							"hideFilterBar": false,
 							"navigation": {
 								"SkipOverride": {
 									"detail": {

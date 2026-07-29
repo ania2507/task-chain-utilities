@@ -4,11 +4,14 @@ sap.ui.define([
     "sap/m/MessageToast",
     "sap/ui/core/routing/History",
     "sap/ui/model/Filter",
-    "sap/ui/model/FilterOperator"
-], function (Controller, JSONModel, MessageToast, History, Filter, FilterOperator) {
+    "sap/ui/model/FilterOperator",
+    "../model/formatter"
+], function (Controller, JSONModel, MessageToast, History, Filter, FilterOperator, formatter) {
     "use strict";
 
     return Controller.extend("monitoring.controller.TaskChainDetail", {
+
+        formatter: formatter,
 
         formatDateTime: function (sDateTime) {
             if (!sDateTime) return "-";
@@ -406,7 +409,7 @@ sap.ui.define([
                                            run.status === "error" ? "Error" :
                                            run.status === "running" ? "Running" : "Pending",
                                 startTime: run.startTime,
-                                duration: run.durationDisplay || run.duration || "-",
+                                duration: run.durationDisplay || formatter.formatDurationMinutes(run.duration),
                                 retries: 0
                             };
                         });

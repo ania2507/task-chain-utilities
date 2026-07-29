@@ -9,11 +9,7 @@
         <f:title>
             <f:DynamicPageTitle>
                 <f:heading>
-                    <VariantManagement id="variantManagement" selectedKey="standard">
-                        <items>
-                            <VariantItem key="standard" title="Standard" rename="false" remove="false"/>
-                        </items>
-                    </VariantManagement>
+                    <Title text="{i18n>appTitle}" level="H2"/>
                 </f:heading>
                 <f:snappedContent>
                     <HBox wrap="Wrap">
@@ -115,7 +111,7 @@
                     </VBox>
 
                     <!-- Type filter -->
-                    <VBox>
+                    <VBox class="sapUiTinyMarginEnd">
                         <Label text="{i18n>list.filter.type}" labelFor="typeFilterSelect"/>
                         <Select id="typeFilterSelect"
                                 width="160px"
@@ -126,6 +122,18 @@
                             <core:Item key="onDemand" text="{i18n>list.filter.onDemand}"/>
                             <core:Item key="customCalendar" text="{i18n>list.filter.customCalendar}"/>
                             <core:Item key="dsp" text="{i18n>list.filter.dsp}"/>
+                        </Select>
+                    </VBox>
+
+                    <!-- Folder filter -->
+                    <VBox>
+                        <Label text="{i18n>list.filter.folder}" labelFor="folderFilterSelect"/>
+                        <Select id="folderFilterSelect"
+                                width="160px"
+                                selectedKey="{page>/filterFolder}"
+                                change=".onFilterChange"
+                                items="{path: 'page>/folderOptions', templateShareable: false}">
+                            <core:Item key="{page>key}" text="{page>text}"/>
                         </Select>
                     </VBox>
 
@@ -145,12 +153,14 @@
                         <Title text="{= ${page>/filteredCount} + ' Task Chains'}" level="H5"/>
                         <ToolbarSpacer/>
                         <Button icon="sap-icon://refresh" press=".onRefresh" tooltip="{i18n>common.refresh}"/>
+                        <Button icon="sap-icon://tag" text="{i18n>common.manageTags}" press=".onManageTag"/>
                         <Button icon="sap-icon://add" type="Emphasized" text="{i18n>common.addTaskchain}" press=".onAddTaskchain"/>
                     </OverflowToolbar>
                 </headerToolbar>
                 <columns>
                     <Column><Text text="{i18n>col.space}"/></Column>
                     <Column><Text text="{i18n>col.taskchain}"/></Column>
+                    <Column minScreenWidth="Tablet" demandPopin="true"><Text text="{i18n>col.folder}"/></Column>
                     <Column><Text text="{i18n>col.schedule}"/></Column>
                     <Column minScreenWidth="Tablet" demandPopin="true"><Text text="{i18n>col.nextRun}"/></Column>
                     <Column hAlign="Center"><Text text="{i18n>col.type}"/></Column>
@@ -161,6 +171,11 @@
                         <cells>
                             <Text text="{page>spaceId}"/>
                             <ObjectIdentifier title="{page>name}" text="{page>businessName}"/>
+
+                            <HBox alignItems="Center">
+                                <Text text="{= ${page>folder} ? ${page>folder} : '—' }" class="sapUiTinyMarginEnd"/>
+                                <Button icon="sap-icon://tag" type="Transparent" tooltip="Set tag" press=".onEditFolder"/>
+                            </HBox>
 
                             <VBox>
                                 <ObjectStatus text="{i18n>status.scheduled}" state="Success"

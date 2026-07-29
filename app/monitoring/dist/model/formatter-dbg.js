@@ -124,6 +124,25 @@ sap.ui.define([], function () {
         },
 
         /**
+         * Format a duration given in (decimal) minutes as "Xm Ys" (minutes can
+         * exceed 60, no hours component). Used for individual run/step durations
+         * across Monitoring so they read the same way everywhere instead of a mix
+         * of decimal-minutes and ad-hoc "min/sec" strings.
+         * @param {number} fMinutes - Duration in minutes (may be fractional)
+         * @returns {string} Formatted "Xm Ys" duration, or "-" if not available
+         */
+        formatDurationMinutes: function (fMinutes) {
+            if (fMinutes === undefined || fMinutes === null || isNaN(fMinutes)) {
+                return "-";
+            }
+            var nTotalSeconds = Math.round(fMinutes * 60);
+            var m = Math.floor(nTotalSeconds / 60);
+            var s = nTotalSeconds % 60;
+            if (m > 0) return m + "m " + s + "s";
+            return s + "s";
+        },
+
+        /**
          * Format success rate with color coding
          * @param {number} nRate - Success rate percentage
          * @returns {string} UI state

@@ -266,53 +266,118 @@ sap.ui.define([
 
         onDownloadCalendarTemplate: function () {
             var sChain = this._editModel.getProperty("/taskchain") || "TASK_CHAIN_NAME";
+            var sSpaceId = this._editModel.getProperty("/spaceId") || "";
             var that = this;
 
-            function downloadCsvFallback() {
-                var sCsv = [
-                    ["ID", "Chain", "Date", "Time", "Details"].join(","),
-                    [1, sChain, "2026-09-19", "04:00", ""].join(",")
-                ].join("\n");
-                that._downloadBlob(new Blob([sCsv], { type: "text/csv" }), "calendar_template.csv");
-            }
-
-            this._ensureXlsxLoaded().then(function () {
-                that._buildAndDownloadXlsxTemplate(sChain);
+            Promise.all([
+                this._ensureXlsxLoaded(),
+                this._fetchApiStepsForTemplate(sSpaceId, sChain)
+            ]).then(function (aResults) {
+                that._buildAndDownloadXlsxTemplate(sChain, aResults[1]);
             }).catch(function (err) {
                 console.error("[Scheduler] Could not load XLSX library:", err && err.message);
-                downloadCsvFallback();
+                // No CSV fallback: a CSV can only hold the Calendar sheet, not the
+                // Parameters sheet API steps (IBP/SAC) need — silently handing out
+                // an incomplete template would be worse than failing loudly.
+                that.error("Could not generate the Excel template. Please reload the page and try again.");
             });
         },
 
-        _buildAndDownloadXlsxTemplate: function (sChain) {
+        // Best-effort lookup of this task chain's real API steps (IBP/SAC), so the
+        // downloadable template shows actual step names instead of generic
+        // placeholders. Resolves to [] (falls back to placeholders) on any failure —
+        // this must never block the template download.
+        // Resolves { steps, confirmed }. "confirmed" distinguishes "DSP was reachable and
+        // genuinely reports zero IBP/SAC steps" from "the lookup failed/returned nothing
+        // usable" — only the former should suppress the Parameters sheet, since in the
+        // latter case we simply don't know whether the chain has API steps or not.
+        _fetchApiStepsForTemplate: function (sSpaceId, sChain) {
+            if (!sSpaceId || !sChain) return Promise.resolve({ steps: [], confirmed: false });
+            var sUrl = this._getApiBase() + "dsp/taskchain-steps?spaceId=" + encodeURIComponent(sSpaceId)
+                + "&taskchain=" + encodeURIComponent(sChain);
+            return fetch(sUrl, { headers: { "Accept": "application/json" } })
+                .then(function (res) { return res.json(); })
+                .then(function (data) {
+                    if (!data || !data.success || !Array.isArray(data.steps)) {
+                        return { steps: [], confirmed: false };
+                    }
+                    // Same distinction StepParametersPage uses: DSP's own "integration"
+                    // field on the step's request body, populated from its deployment metadata.
+                    var aFiltered = data.steps.filter(function (s) {
+                        return s.integrationType === "ibp" || s.integrationType === "sac";
+                    });
+                    return { steps: aFiltered, confirmed: true };
+                })
+                .catch(function () { return { steps: [], confirmed: false }; });
+        },
+
+        _buildAndDownloadXlsxTemplate: function (sChain, oApiStepsResult) {
             var XLSX = window.XLSX;
             var wb = XLSX.utils.book_new();
 
             // Calendar sheet
             XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-                ["ID", "Chain", "Date", "Time", "Details"],
+                ["ID", "Chain", "Date", "Time (CET)", "Details"],
                 [1, sChain, "2026-09-19", "04:00", ""],
                 [2, sChain, "2026-09-26", "04:00", ""],
                 [3, sChain, "2026-10-10", "04:00", ""]
             ]), "Calendar");
 
-            // Parameters sheet — static example rows.
-            // IBP Step filled → IBP param; IBP Step blank → SAC param.
+            // aApiSteps preserves DSP's own step order (from taskchain-steps) — the
+            // Parameters sheet examples are built by walking it in that same order,
+            // rather than grouping "all IBP then all SAC", so the template matches
+            // how the steps actually appear in the chain.
+            var aApiSteps = (oApiStepsResult && oApiStepsResult.steps) || [];
+
+            // Skip the Parameters sheet entirely when DSP was reachable and confirms this
+            // chain has no IBP/SAC steps — nothing to configure, so a placeholder-only
+            // sheet would just be noise. If the lookup itself failed, keep the sheet (with
+            // generic placeholders) since we don't actually know whether steps exist.
+            if (oApiStepsResult && oApiStepsResult.confirmed && !aApiSteps.length) {
+                var out0 = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+                this._downloadBlob(new Blob([out0], { type: "application/octet-stream" }), "calendar_template.xlsx");
+                return;
+            }
+
+            // Parameters sheet — example rows built from this task chain's real API
+            // steps (IBP/SAC), in DSP step order, when available. When the lookup
+            // failed (so we don't actually know what the chain has), falls back to one
+            // generic example of each integration type as a safe default.
             // "Job Template / Multi Action" overrides what's auto-detected from DSP for
             // that DSP step — leave blank to keep using DSP's auto-detected value.
-            // Replace DSP Step names, IBP Step names and values with your actual configuration.
+            // "Description" is free text for your own reference, not used by the app.
+            // Replace IBP Step names and parameter values with your actual configuration.
+            var sIbpTemplatePlaceholder = "YY1_ZAAGTUIS....";
+            var sSacMultiActionPlaceholder = "t.F:9B9A4A8611.....";
             var aIds = [1, 2, 3];
-            var aParamRows = [["Schedule ID", "DSP Step", "Job Template / Multi Action", "IBP Step", "Parameter", "Value", "HierarchyId"]];
+            var aParamRows = [["Schedule ID", "DSP Step", "Job Template / Multi Action", "Description", "IBP Step", "Parameter", "Value", "HierarchyId"]];
+
+            function pushIbpRows(id, sObjectId, sTpl) {
+                aParamRows.push([id, sObjectId, sTpl, "", "IBP_STEP_NAME_1", "$G_SORG",     "BE40", ""]);
+                aParamRows.push([id, sObjectId, sTpl, "", "IBP_STEP_NAME_2", "$G_FCSTTYPE", "U",    ""]);
+            }
+            function pushSacRows(id, sObjectId, sMa) {
+                aParamRows.push([id, sObjectId, sMa, "", "", "PlanningVersion", "public.Curr_FCST", ""]);
+                aParamRows.push([id, sObjectId, sMa, "", "", "Legal_Entity",    "BE40",              ""]);
+                aParamRows.push([id, sObjectId, sMa, "", "", "Product",         "*",                 "parentId"]);
+                aParamRows.push([id, sObjectId, sMa, "", "", "Profit_Center",   "*",                 "parentId"]);
+                aParamRows.push([id, sObjectId, sMa, "", "", "Date",            "202606",            ""]);
+            }
+
             aIds.forEach(function (id) {
-                // IBP examples
-                aParamRows.push([id, "APITask_IBP", "SAP_IBP_PROC_COPY_OPERATOR", "IBP_STEP_NAME_1", "$G_SORG",      "BE40", ""]);
-                aParamRows.push([id, "APITask_IBP", "SAP_IBP_PROC_COPY_OPERATOR", "IBP_STEP_NAME_2", "$G_FCSTTYPE",  "U",    ""]);
-                // SAC examples (IBP Step blank)
-                aParamRows.push([id, "APITask_SAC", "t.F:A8B06D852F1681322AE35493186B1970", "", "PlanningVersion", "public.Curr_FCST", ""]);
-                aParamRows.push([id, "APITask_SAC", "t.F:A8B06D852F1681322AE35493186B1970", "", "Legal_Entity",    "BE40",              ""]);
-                aParamRows.push([id, "APITask_SAC", "t.F:A8B06D852F1681322AE35493186B1970", "", "Product",         "*",                 "parentId"]);
-                aParamRows.push([id, "APITask_SAC", "t.F:A8B06D852F1681322AE35493186B1970", "", "Profit_Center",   "*",                 "parentId"]);
-                aParamRows.push([id, "APITask_SAC", "t.F:A8B06D852F1681322AE35493186B1970", "", "Date",            "202606",            ""]);
+                if (aApiSteps.length) {
+                    aApiSteps.forEach(function (s) {
+                        if (s.integrationType === "ibp") {
+                            pushIbpRows(id, s.objectId, s.ibpTemplateName || sIbpTemplatePlaceholder);
+                        } else if (s.integrationType === "sac") {
+                            pushSacRows(id, s.objectId, s.sacMultiActionId || sSacMultiActionPlaceholder);
+                        }
+                    });
+                } else {
+                    // Lookup failed — show one generic example of each type.
+                    pushIbpRows(id, "APITask_IBP", sIbpTemplatePlaceholder);
+                    pushSacRows(id, "APITask_SAC", sSacMultiActionPlaceholder);
+                }
             });
             XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aParamRows), "Parameters");
 
@@ -595,13 +660,21 @@ sap.ui.define([
             if (wb.SheetNames.indexOf("Parameters") !== -1) {
                 var wsP = wb.Sheets["Parameters"];
                 var aPRows = XLSX.utils.sheet_to_json(wsP, { header: 1, raw: false });
+                // Columns are resolved by header name, not fixed position, so older
+                // files (missing "Job Template / Multi Action" and/or "Description")
+                // and newer ones both parse correctly. "Description" itself is never
+                // read — it's free text for the user's own reference only.
                 var aHeader = (aPRows[0] || []).map(function (h) { return String(h || "").trim().toLowerCase(); });
-                var bHasOverrideCol = aHeader.indexOf("job template / multi action") !== -1;
-                var iOverrideCol = bHasOverrideCol ? 2 : -1;
-                var iIbpStepCol = bHasOverrideCol ? 3 : 2;
-                var iKeyCol = bHasOverrideCol ? 4 : 3;
-                var iValCol = bHasOverrideCol ? 5 : 4;
-                var iHIdCol = bHasOverrideCol ? 6 : 5;
+                var iOverrideCol = aHeader.indexOf("job template / multi action");
+                var iIbpStepCol = aHeader.indexOf("ibp step");
+                var iKeyCol = aHeader.indexOf("parameter");
+                var iValCol = aHeader.indexOf("value");
+                var iHIdCol = aHeader.indexOf("hierarchyid");
+                // Fallback to the legacy fixed layout if headers are missing entirely.
+                if (iIbpStepCol === -1) iIbpStepCol = iOverrideCol !== -1 ? 3 : 2;
+                if (iKeyCol === -1) iKeyCol = iIbpStepCol + 1;
+                if (iValCol === -1) iValCol = iKeyCol + 1;
+                if (iHIdCol === -1) iHIdCol = iValCol + 1;
                 for (var pi = 1; pi < aPRows.length; pi++) {
                     var rp = aPRows[pi] || [];
                     var sP_SchId   = String(rp[0] || "").trim();
@@ -1025,6 +1098,35 @@ sap.ui.define([
                 try { JSON.parse(d.entryParameters); }
                 catch (e) { this.error("Parameters must be valid JSON: " + e.message); return; }
             }
+            var that = this;
+
+            // Same collision check as the Excel upload path: warn before letting
+            // the user create/move an entry onto the same date+time as another
+            // one already on the calendar.
+            var aAllEntries = this._editModel.getProperty("/calendarEntries") || [];
+            var bCollision = aAllEntries.some(function (e) {
+                if (that._editingUnsavedEntry && e === that._editingUnsavedEntry) return false;
+                if (that._editingEntryId && e.ID === that._editingEntryId) return false;
+                return e.date === d.entryDate && e.rawTime === d.entryTime;
+            });
+            if (bCollision) {
+                MessageBox.warning(
+                    "Another entry already exists on " + this._formatDateLabel(d.entryDate) + " " + d.entryTime
+                    + " for this task chain.\n\nProceed and overwrite the conflicting entry?",
+                    {
+                        actions: [MessageBox.Action.OK, MessageBox.Action.CANCEL],
+                        emphasizedAction: MessageBox.Action.OK,
+                        onClose: function (sAction) {
+                            if (sAction === MessageBox.Action.OK) that._saveCalendarEntryConfirmed(d);
+                        }
+                    }
+                );
+                return;
+            }
+            this._saveCalendarEntryConfirmed(d);
+        },
+
+        _saveCalendarEntryConfirmed: function (d) {
             var that = this;
 
             // Editing an existing (already-saved, already-scheduled) entry still

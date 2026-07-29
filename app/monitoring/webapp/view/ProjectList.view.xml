@@ -11,11 +11,7 @@
         <f:title>
             <f:DynamicPageTitle>
                 <f:heading>
-                    <VariantManagement id="variantManagement" selectedKey="standard">
-                        <items>
-                            <VariantItem key="standard" title="Standard" rename="false" remove="false"/>
-                        </items>
-                    </VariantManagement>
+                    <Title text="{i18n>appTitle}" level="H2"/>
                 </f:heading>
                 <f:snappedContent>
                     <HBox wrap="Wrap">

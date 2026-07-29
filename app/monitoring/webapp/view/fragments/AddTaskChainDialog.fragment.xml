@@ -43,7 +43,7 @@
                     visible="{= !${availableChains>/loading} }"
                     items="{path: 'availableChains>/chainsFiltered', templateShareable: false}"
                     mode="MultiSelect"
-                    selectionChange=".onChainSelectionChange"
+                    selectionChange=".onAvailableChainSelectionChange"
                     noDataText="{i18n>dashboard.noChainsAvailable}">
                     <StandardListItem
                         title="{availableChains>businessName}"

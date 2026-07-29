@@ -5,11 +5,14 @@ sap.ui.define([
     "sap/m/MessageBox",
     "sap/ui/core/routing/History",
     "sap/ui/model/Filter",
-    "sap/ui/model/FilterOperator"
-], function (Controller, JSONModel, MessageToast, MessageBox, History, Filter, FilterOperator) {
+    "sap/ui/model/FilterOperator",
+    "../model/formatter"
+], function (Controller, JSONModel, MessageToast, MessageBox, History, Filter, FilterOperator, formatter) {
     "use strict";
 
     return Controller.extend("monitoring.controller.RunInspector", {
+
+        formatter: formatter,
 
         formatDateTime: function (sDateTime) {
             if (!sDateTime) return "-";
@@ -159,9 +162,7 @@ sap.ui.define([
                     // Calculate duration
                     var sDuration = "-";
                     if (oRun.duration && typeof oRun.duration === "number") {
-                        var mins = Math.floor(oRun.duration);
-                        var secs = Math.round((oRun.duration - mins) * 60);
-                        sDuration = mins + " min " + secs + " sec";
+                        sDuration = formatter.formatDurationMinutes(oRun.duration);
                     } else if (oRun.durationDisplay) {
                         sDuration = oRun.durationDisplay;
                     }
@@ -232,7 +233,7 @@ sap.ui.define([
                     var aFailedSteps = aFailedNodes.map(function(node) {
                         var sDurationDisplay = "-";
                         if (node.duration && typeof node.duration === "number") {
-                            sDurationDisplay = node.duration.toFixed(2) + " min";
+                            sDurationDisplay = formatter.formatDurationMinutes(node.duration);
                         }
                         return {
                             objectId: node.objectId || "Node " + node.nodeId,
