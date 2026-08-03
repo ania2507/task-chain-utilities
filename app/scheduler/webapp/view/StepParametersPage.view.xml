@@ -137,7 +137,7 @@
                                                     press=".onLoadSacMultiAction"
                                                     busy="{edit>/sacLoading}" enabled="{= !${edit>/sacLoading} }"/>
                                         </HBox>
-                                        <Text text="Use &quot;Insert&quot; if this multi action has no mandatory parameters. Use &quot;Load Parameters&quot; to run a quick simulation and discover which parameters SAC requires."
+                                        <Text text="Use &quot;Insert&quot; if this multi action has no mandatory parameters. Use &quot;Load Parameters&quot; to run a real execution to discover which parameters SAC requires."
                                               class="sapUiTinyMarginTop sapUiSmallFontSize"/>
                                     </VBox>
                                 </content>
@@ -255,7 +255,7 @@
                                         enabled="{= !${edit>/sacLoading} }"
                                         class="sapUiTinyMarginBegin"/>
                                 <Button icon="sap-icon://refresh" type="Transparent"
-                                        press=".onLoadSacMultiAction" tooltip="Load Parameters (run a simulation to discover mandatory parameters)"
+                                        press=".onLoadSacMultiAction" tooltip="Load Parameters (runs a real execution to discover mandatory parameters)"
                                         visible="{= !${edit>/viewOnly} }"
                                         busy="{edit>/sacLoading}" enabled="{= !${edit>/sacLoading} }"
                                         class="sapUiTinyMarginBegin"/>

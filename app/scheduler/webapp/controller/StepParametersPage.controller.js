@@ -446,6 +446,23 @@ sap.ui.define([
                 MessageToast.show("Enter a Multi Action ID first");
                 return;
             }
+            var that = this;
+            MessageBox.confirm(
+                "This will run a real execution of multi action \"" + sId + "\" in SAC to discover its "
+                + "parameters. Continue?",
+                {
+                    title: "Run SAC Multi Action?",
+                    actions: [MessageBox.Action.OK, MessageBox.Action.CANCEL],
+                    emphasizedAction: MessageBox.Action.OK,
+                    onClose: function (sAction) {
+                        if (sAction !== MessageBox.Action.OK) return;
+                        that._doLoadSacMultiAction(sId);
+                    }
+                }
+            );
+        },
+
+        _doLoadSacMultiAction: function (sId) {
             var sCurrent = this._editModel.getProperty("/sacMultiActionId") || "";
             if (sId !== sCurrent) {
                 // Switching to a different multi action: drop params tied to the old one so
