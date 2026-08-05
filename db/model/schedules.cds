@@ -32,6 +32,18 @@ entity ScheduledTaskchain : managed {
 }
 
 /**
+ * Catalog of tags a user can assign to a ScheduledTaskchain's `folder` field
+ * (displayed in the UI as "Tag"). Exists as its own entity so a tag can be
+ * created up front — via the Scheduler's "Manage Tags" dialog — before any
+ * task chain uses it, rather than only existing implicitly as a byproduct of
+ * being assigned to at least one chain.
+ */
+entity SchedulerTag : cuid, managed {
+  name : String(100) @title: 'Tag Name';
+}
+annotate SchedulerTag with @assert.unique.name: [name];
+
+/**
  * One-shot scheduling entry for date+time based scheduling
  * (calendar upload, on-demand).
  */

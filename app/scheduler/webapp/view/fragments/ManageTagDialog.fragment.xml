@@ -14,10 +14,42 @@
                     selectedKey="{manageTag>/mode}"
                     class="sapUiSmallMarginBottom">
                     <items>
+                        <SegmentedButtonItem key="create" text="{i18n>manageTag.modeCreate}"/>
                         <SegmentedButtonItem key="rename" text="{i18n>manageTag.modeRename}"/>
                         <SegmentedButtonItem key="assign" text="{i18n>manageTag.modeAssign}"/>
                     </items>
                 </SegmentedButton>
+
+                <!-- Create mode: add tags to the catalog one at a time, independent of any
+                     assignment — each "Add" keeps the dialog open so several tags can be
+                     created in a row, then picked up by name from the Rename/Assign tabs. -->
+                <VBox visible="{= ${manageTag>/mode} === 'create'}">
+                    <Label text="{i18n>manageTag.newTagName}" labelFor="manageTagCreateInput" class="sapUiTinyMarginBottom"/>
+                    <HBox alignItems="Center">
+                        <Input id="manageTagCreateInput" value="{manageTag>/createTagName}"
+                            placeholder="{i18n>manageTag.newTagNamePlaceholder}"
+                            maxLength="40"
+                            submit=".onManageTagCreateAdd" width="20rem" class="sapUiTinyMarginEnd"/>
+                        <Button text="{i18n>common.add}" type="Emphasized" press=".onManageTagCreateAdd"/>
+                    </HBox>
+
+                    <Text text="{i18n>manageTag.existingTagsLabel}" class="sapUiSmallMarginTop sapUiTinyMarginBottom"
+                          visible="{= ${manageTag>/existingTags}.length > 0}"/>
+                    <ScrollContainer height="24rem" width="100%" vertical="true" horizontal="false"
+                          visible="{= ${manageTag>/existingTags}.length > 0}">
+                        <List items="{path: 'manageTag>/existingTags', templateShareable: false}"
+                              mode="Delete" delete=".onManageTagDelete">
+                            <CustomListItem>
+                                <HBox alignItems="Center" class="sapUiTinyMargin">
+                                    <core:Icon src="sap-icon://tag" size="1rem" class="sapUiTinyMarginEnd"/>
+                                    <Text text="{manageTag>text}"/>
+                                </HBox>
+                            </CustomListItem>
+                        </List>
+                    </ScrollContainer>
+                    <Text text="{i18n>manageTag.noTagsYetCreate}" class="sapUiSmallMarginTop"
+                          visible="{= ${manageTag>/existingTags}.length === 0}"/>
+                </VBox>
 
                 <!-- Rename mode: bulk-rename a tag across every task chain that has it -->
                 <VBox visible="{= ${manageTag>/mode} === 'rename'}">
@@ -32,42 +64,43 @@
                     <Text text="{i18n>manageTag.noTags}" visible="{= ${manageTag>/existingTags}.length === 0}" class="sapUiSmallMarginBottom"/>
 
                     <Label text="{i18n>manageTag.toTag}" labelFor="manageTagToInput" class="sapUiTinyMarginBottom"/>
-                    <Input id="manageTagToInput" value="{manageTag>/toTag}" placeholder="{i18n>manageTag.toTagPlaceholder}"/>
+                    <Input id="manageTagToInput" value="{manageTag>/toTag}" placeholder="{i18n>manageTag.toTagPlaceholder}" maxLength="40"/>
                 </VBox>
 
                 <!-- Assign mode: set one tag on a chosen set of task chains -->
                 <VBox visible="{= ${manageTag>/mode} === 'assign'}">
-                    <Label text="{i18n>manageTag.assignTag}" labelFor="manageTagAssignInput" class="sapUiTinyMarginBottom"/>
-                    <Input id="manageTagAssignInput"
-                        value="{manageTag>/assignTag}"
-                        placeholder="{i18n>manageTag.assignTagPlaceholder}"
-                        showSuggestion="true"
+                    <Label text="{i18n>manageTag.assignTag}" labelFor="manageTagAssignSelect" class="sapUiTinyMarginBottom"/>
+                    <Select id="manageTagAssignSelect"
+                        selectedKey="{manageTag>/assignTag}"
+                        forceSelection="false"
                         class="sapUiSmallMarginBottom"
-                        suggestionItems="{path: 'manageTag>/existingTags', templateShareable: false}">
-                        <suggestionItems>
-                            <core:Item text="{manageTag>text}"/>
-                        </suggestionItems>
-                    </Input>
+                        items="{path: 'manageTag>/assignableTags', templateShareable: false}">
+                        <core:Item key="{manageTag>key}" text="{manageTag>text}"/>
+                    </Select>
 
                     <Label text="{i18n>manageTag.assignChains}" class="sapUiTinyMarginBottom"/>
                     <SearchField search=".onManageTagChainSearch" liveChange=".onManageTagChainSearch" class="sapUiTinyMarginBottom"/>
-                    <List id="manageTagChainsList"
-                        mode="MultiSelect"
-                        growing="true"
-                        growingThreshold="100"
-                        items="{path: 'manageTag>/chainsFiltered', templateShareable: false}">
-                        <StandardListItem
-                            title="{manageTag>name}"
-                            description="{manageTag>businessName}"
-                            info="{manageTag>folder}"
-                            selected="{manageTag>selected}"/>
-                    </List>
+                    <ScrollContainer height="24rem" width="100%" vertical="true" horizontal="false">
+                        <List id="manageTagChainsList"
+                            mode="MultiSelect"
+                            items="{path: 'manageTag>/chainsFiltered', templateShareable: false}">
+                            <StandardListItem
+                                title="{manageTag>name}"
+                                description="{manageTag>businessName}"
+                                info="{manageTag>folder}"
+                                selected="{manageTag>selected}"/>
+                        </List>
+                    </ScrollContainer>
                 </VBox>
             </VBox>
         </content>
         <buttons>
-            <Button text="{i18n>common.save}" type="Emphasized" press=".onManageTagSave"/>
-            <Button text="{i18n>common.cancel}" press=".onManageTagCancel"/>
+            <Button text="{i18n>common.save}" type="Emphasized" press=".onManageTagSave"
+                    visible="{= ${manageTag>/mode} !== 'create'}"/>
+            <Button text="{i18n>common.close}" press=".onManageTagCancel"
+                    visible="{= ${manageTag>/mode} === 'create'}"/>
+            <Button text="{i18n>common.cancel}" press=".onManageTagCancel"
+                    visible="{= ${manageTag>/mode} !== 'create'}"/>
         </buttons>
     </Dialog>
 </core:FragmentDefinition>

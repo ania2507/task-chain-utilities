@@ -8,22 +8,19 @@
         contentWidth="20rem">
         <content>
             <VBox class="sapUiSmallMargin">
-                <Label text="Group this task chain under a tag" labelFor="editFolderInput" class="sapUiTinyMarginBottom"/>
-                <Input id="editFolderInput"
-                       value="{folderEdit>/value}"
-                       placeholder="e.g. Project X"
-                       showSuggestion="true"
-                       suggestionItems="{folderEdit>/suggestions}"
-                       submit=".onEditFolderSave">
-                    <suggestionItems>
-                        <core:Item text="{folderEdit>text}"/>
-                    </suggestionItems>
-                </Input>
+                <Label text="Group this task chain under a tag" labelFor="editFolderSelect" class="sapUiTinyMarginBottom"/>
+                <Select id="editFolderSelect"
+                        selectedKey="{folderEdit>/value}"
+                        forceSelection="false"
+                        items="{path: 'folderEdit>/suggestions', templateShareable: false}">
+                    <core:Item key="{folderEdit>key}" text="{folderEdit>text}"/>
+                </Select>
+                <Text text="No tags yet — create one from &quot;Manage Tags&quot; first." class="sapUiTinyMarginTop"
+                      visible="{= ${folderEdit>/suggestions}.length &lt;= 1}"/>
             </VBox>
         </content>
         <footer>
             <OverflowToolbar>
-                <Button text="Clear" press=".onEditFolderClear" visible="{= !!${folderEdit>/current} }"/>
                 <ToolbarSpacer/>
                 <Button text="{i18n>common.cancel}" press=".onEditFolderCancel"/>
                 <Button text="{i18n>common.save}" type="Emphasized" press=".onEditFolderSave"/>

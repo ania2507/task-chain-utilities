@@ -7,6 +7,8 @@ extend service Services with {
 
   entity ScheduledTaskchain as projection on sch.ScheduledTaskchain;
 
+  entity SchedulerTag as projection on sch.SchedulerTag;
+
   entity ScheduleEntry as projection on sch.ScheduleEntry;
 
   entity Schedule as projection on sch.Schedule;

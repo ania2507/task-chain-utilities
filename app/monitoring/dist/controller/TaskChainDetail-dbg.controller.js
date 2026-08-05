@@ -67,7 +67,6 @@ sap.ui.define([
                 }
             }
             
-            // Create initial model
             var oChainDetailModel = new JSONModel({
                 chainId: sChainId,
                 chainName: sChainName,
@@ -310,7 +309,6 @@ sap.ui.define([
             var oLevels = {};
             var oChildren = {};
             
-            // Build adjacency list
             aNodes.forEach(function(n) {
                 oChildren[n.id] = [];
                 oLevels[n.id] = -1;
@@ -321,7 +319,6 @@ sap.ui.define([
                 }
             });
             
-            // Find START node
             var startNode = aNodes.find(function(n) { return n.type === "START"; });
             if (!startNode) {
                 // No START node, use node with no incoming edges
@@ -330,7 +327,6 @@ sap.ui.define([
                 startNode = aNodes.find(function(n) { return !hasIncoming[n.id]; }) || aNodes[0];
             }
             
-            // BFS to assign levels
             var queue = [startNode.id];
             oLevels[startNode.id] = 0;
             

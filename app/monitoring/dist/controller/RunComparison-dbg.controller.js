@@ -234,7 +234,7 @@ sap.ui.define([
                 }
             });
             
-            // Check for duration anomalies (> 50% variance)
+            // Check for duration anomalies (max more than 2x the min, i.e. > 100% variance)
             aSteps.forEach(function (oStep) {
                 var aDurations = Object.values(oStep.runs)
                     .filter(function (r) { return r.duration && r.duration > 0; })

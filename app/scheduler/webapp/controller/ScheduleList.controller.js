@@ -55,11 +55,32 @@ sap.ui.define([
 
         _onListMatched: function () {
             this._pageModel.setProperty("/busy", true);
-            this._loadAdded().then(function () {
+            Promise.all([this._loadAdded(), this._loadTagCatalog()]).then(function () {
                 return this._refreshSchedulesForRows();
             }.bind(this)).finally(function () {
                 this._pageModel.setProperty("/busy", false);
             }.bind(this));
+        },
+
+        /**
+         * Loads the SchedulerTag catalog (the set of tags a chain can be assigned, managed
+         * via "Manage Tags" → Create) into this._aTagCatalog, cached for synchronous reads
+         * from onEditFolder/onManageTag so opening those popovers/dialogs doesn't need its
+         * own round-trip.
+         */
+        _loadTagCatalog: function () {
+            var oModel = this.getModel();
+            if (!oModel) { this._aTagCatalog = []; return Promise.resolve([]); }
+            var that = this;
+            return oModel.bindList("/SchedulerTag").requestContexts(0, 500).then(function (aCtx) {
+                var aTags = aCtx.map(function (c) { return c.getObject(); })
+                    .sort(function (a, b) { return (a.name || "").localeCompare(b.name || ""); });
+                that._aTagCatalog = aTags;
+                return aTags;
+            }).catch(function () {
+                that._aTagCatalog = that._aTagCatalog || [];
+                return that._aTagCatalog;
+            });
         },
 
         // ------------------------------------------------------------
@@ -1517,9 +1538,11 @@ sap.ui.define([
             var row = oCtx.getObject();
             this._oEditingFolderRow = row;
 
-            var aFolderOptions = (this._pageModel.getProperty("/folderOptions") || [])
-                .filter(function (o) { return o.key !== "all" && o.key !== "__none__"; })
-                .map(function (o) { return { text: o.text }; });
+            // Only tags from the catalog can be picked here — creating a new tag now
+            // happens exclusively via "Manage Tags" → Create (see onManageTag below).
+            var aFolderOptions = [{ key: "", text: "— No tag —" }].concat(
+                (this._aTagCatalog || []).map(function (t) { return { key: t.name, text: t.name }; })
+            );
 
             if (!this._oFolderEditModel) {
                 this._oFolderEditModel = new JSONModel({ value: "", current: "", suggestions: [] });
@@ -1543,11 +1566,6 @@ sap.ui.define([
                 }.bind(this));
             }
             this._pEditFolderPopover.then(function (oPop) { oPop.openBy(oBtn); });
-        },
-
-        onEditFolderClear: function () {
-            this._oFolderEditModel.setProperty("/value", "");
-            this.onEditFolderSave();
         },
 
         onEditFolderCancel: function () {
@@ -1583,14 +1601,39 @@ sap.ui.define([
         },
 
         // ------------------------------------------------------------
-        // Manage Tags dialog — bulk operations on top of the same "folder" field
-        // used by the per-row tag button above: rename a tag across every task
-        // chain that has it, or assign a tag to a chosen set of task chains.
+        // Manage Tags dialog — create a tag in the catalog, bulk-rename it across
+        // every task chain that has it, or assign it to a chosen set of task chains.
+        // The per-row tag button above (onEditFolder) only ever picks from this same
+        // catalog — creating a new tag happens exclusively here.
         // ------------------------------------------------------------
+
+        /**
+         * Rebuilds /existingTags (catalog only — used by Rename's "from" dropdown) and
+         * /assignableTags (catalog + an explicit "no tag" sentinel — used by Assign's
+         * dropdown, so a bulk assignment can also bulk-clear the tag) from
+         * this._aTagCatalog. Called after create/delete/rename, whenever the catalog
+         * itself changes underneath the open dialog.
+         */
+        _refreshManageTagOptions: function () {
+            var aExistingTags = (this._aTagCatalog || []).map(function (t) {
+                return { key: t.name, text: t.name };
+            });
+            var aAssignableTags = [{ key: "__none__", text: "— No tag —" }].concat(aExistingTags);
+            this._oManageTagModel.setProperty("/existingTags", aExistingTags);
+            this._oManageTagModel.setProperty("/assignableTags", aAssignableTags);
+            return aExistingTags;
+        },
+
         onManageTag: function () {
             var oView = this.getView();
-            var aExistingTags = (this._pageModel.getProperty("/folderOptions") || [])
-                .filter(function (o) { return o.key !== "all" && o.key !== "__none__"; });
+            var aExistingTags = (this._aTagCatalog || []).map(function (t) {
+                return { key: t.name, text: t.name };
+            });
+            // Assign mode's dropdown also offers an explicit "no tag" choice (sentinel
+            // key, since "" already means "nothing picked yet" for an unset Select) so a
+            // bulk operation can clear the tag off several chains at once, not just set one
+            // — mirroring what the single-row popover (onEditFolder) already allows.
+            var aAssignableTags = [{ key: "__none__", text: "— No tag —" }].concat(aExistingTags);
             var aRows = this._pageModel.getProperty("/rows") || [];
             var aChains = aRows.map(function (r) {
                 return {
@@ -1606,11 +1649,13 @@ sap.ui.define([
                 this._oManageTagModel = new JSONModel({});
             }
             this._oManageTagModel.setData({
-                mode: "rename",
+                mode: aExistingTags.length ? "assign" : "create",
+                createTagName: "",
                 fromTag: aExistingTags.length ? aExistingTags[0].key : "",
                 toTag: "",
                 assignTag: "",
                 existingTags: aExistingTags,
+                assignableTags: aAssignableTags,
                 chainsAll: aChains,
                 chainsFiltered: aChains
             });
@@ -1653,34 +1698,180 @@ sap.ui.define([
             }
         },
 
+        /**
+         * "Add" button in Create Tag mode — unlike Rename/Assign (triggered by the
+         * dialog's own Save button), this deliberately does NOT close the dialog: the
+         * user can add several tags in a row, then switch to Rename/Assign to keep
+         * working with one of them without having to reopen "Manage Tags".
+         */
+        onManageTagCreateAdd: function () {
+            var sName = (this._oManageTagModel.getProperty("/createTagName") || "").trim();
+            if (!sName) { this.toast(this.i18n("msg.enterNewTagName")); return; }
+            var sNameLower = sName.toLowerCase();
+            if ((this._aTagCatalog || []).some(function (t) { return (t.name || "").toLowerCase() === sNameLower; })) {
+                this.toast(this.i18n("msg.tagAlreadyExists"));
+                return;
+            }
+
+            var oModel = this.getModel();
+            if (!oModel) return;
+            var that = this;
+            var oCtx = oModel.bindList("/SchedulerTag").create({ name: sName });
+            oCtx.created().then(function () {
+                return that._loadTagCatalog();
+            }).then(function () {
+                that._refreshManageTagOptions();
+                // Pre-select the freshly created tag so switching to Rename/Assign
+                // picks it up immediately, and clear the input for adding another.
+                that._oManageTagModel.setProperty("/fromTag", sName);
+                that._oManageTagModel.setProperty("/assignTag", sName);
+                that._oManageTagModel.setProperty("/createTagName", "");
+                that.toast(that.i18n("msg.tagCreated", [sName]));
+            }).catch(function (err) {
+                that.error(err && err.message || String(err));
+            });
+        },
+
+        /**
+         * Delete icon on a row in the Create Tag list ("mode=Delete" on the List control).
+         * Always confirms first — wording changes depending on whether any task chain is
+         * currently using the tag, since deleting it also clears their /folder back to "".
+         */
+        onManageTagDelete: function (oEvent) {
+            var oItem = oEvent.getParameter("listItem");
+            var oCtx = oItem && oItem.getBindingContext("manageTag");
+            if (!oCtx) return;
+            var sTagName = oCtx.getProperty("key");
+            if (!sTagName) return;
+
+            var aRows = this._pageModel.getProperty("/rows") || [];
+            var aMatches = aRows.filter(function (r) { return r.folder === sTagName; });
+
+            var that = this;
+            var fnDoDelete = function () {
+                that._deleteTagFromCatalog(sTagName)
+                    .then(function () { return that._bulkUpdateFolder(aMatches, ""); })
+                    .then(function () { return that._loadTagCatalog(); })
+                    .then(function () {
+                        var aExistingTags = that._refreshManageTagOptions();
+                        if (that._oManageTagModel.getProperty("/fromTag") === sTagName) {
+                            that._oManageTagModel.setProperty("/fromTag", aExistingTags.length ? aExistingTags[0].key : "");
+                        }
+                        if (that._oManageTagModel.getProperty("/assignTag") === sTagName) {
+                            that._oManageTagModel.setProperty("/assignTag", "");
+                        }
+                        that.toast(that.i18n("msg.tagDeleted", [sTagName]));
+                    }).catch(function (err) {
+                        that.error(err && err.message || String(err));
+                    });
+            };
+
+            var sMessage = aMatches.length
+                ? this.i18n("msg.confirmDeleteTag", [sTagName, aMatches.length])
+                : this.i18n("msg.confirmDeleteTagUnused", [sTagName]);
+            MessageBox.confirm(sMessage, {
+                title: this.i18n("manageTag.deleteTitle"),
+                onClose: function (sAction) {
+                    if (sAction !== MessageBox.Action.OK) return;
+                    fnDoDelete();
+                }
+            });
+        },
+
+        /**
+         * Deletes the SchedulerTag catalog row itself (identified by its OData key).
+         * Called before clearing the tag off any chains that reference it, so a failure
+         * here leaves both the catalog and the chains untouched.
+         */
+        _deleteTagFromCatalog: function (sTagName) {
+            var oModel = this.getModel();
+            var oTag = (this._aTagCatalog || []).filter(function (t) { return t.name === sTagName; })[0];
+            if (!oModel || !oTag) return Promise.resolve();
+            var oList = oModel.bindList("/SchedulerTag", undefined, undefined, [
+                new Filter("ID", FilterOperator.EQ, oTag.ID)
+            ]);
+            return oList.requestContexts(0, 1).then(function (aCtx) {
+                if (aCtx && aCtx[0]) return aCtx[0].delete();
+            });
+        },
+
+        /**
+         * Renames the SchedulerTag catalog row itself (identified by its OData key, not
+         * by name — name is what's changing). Called before the bulk chain update so a
+         * failure here leaves neither the catalog nor the chains renamed.
+         */
+        _renameTagInCatalog: function (sFromTag, sToTag) {
+            var oModel = this.getModel();
+            var oTag = (this._aTagCatalog || []).filter(function (t) { return t.name === sFromTag; })[0];
+            if (!oModel || !oTag) return Promise.resolve();
+            var oList = oModel.bindList("/SchedulerTag", undefined, undefined, [
+                new Filter("ID", FilterOperator.EQ, oTag.ID)
+            ]);
+            return oList.requestContexts(0, 1).then(function (aCtx) {
+                if (aCtx && aCtx[0]) {
+                    aCtx[0].setProperty("name", sToTag);
+                    return oModel.submitBatch(oModel.getUpdateGroupId());
+                }
+            });
+        },
+
         _saveManageTagRename: function () {
             var sFromTag = this._oManageTagModel.getProperty("/fromTag");
             var sToTag = (this._oManageTagModel.getProperty("/toTag") || "").trim();
             if (!sFromTag) { this.toast(this.i18n("msg.selectFromTag")); return; }
             if (!sToTag) { this.toast(this.i18n("msg.enterToTag")); return; }
             if (sToTag === sFromTag) { this.toast(this.i18n("msg.sameTagName")); return; }
+            // Case-insensitive duplicate check, excluding the tag being renamed itself —
+            // renaming "Actual" to "ACTUAL" (recasing) is fine, renaming it to collide with
+            // a genuinely different existing tag ("Forecast" -> "FORECAST") is not.
+            var sToTagLower = sToTag.toLowerCase();
+            var sFromTagLower = sFromTag.toLowerCase();
+            if ((this._aTagCatalog || []).some(function (t) {
+                var sLower = (t.name || "").toLowerCase();
+                return sLower === sToTagLower && sLower !== sFromTagLower;
+            })) {
+                this.toast(this.i18n("msg.tagAlreadyExists"));
+                return;
+            }
 
+            // A tag can exist in the catalog with zero chains currently using it (created
+            // via "Create Tag" and never assigned) — renaming it is still valid, it just
+            // skips the bulk chain update and confirmation below.
             var aRows = this._pageModel.getProperty("/rows") || [];
             var aMatches = aRows.filter(function (r) { return r.folder === sFromTag; });
-            if (!aMatches.length) { this.toast(this.i18n("msg.selectFromTag")); return; }
 
             var that = this;
-            MessageBox.confirm(this.i18n("msg.confirmRenameTag", [sFromTag, sToTag, aMatches.length]), {
-                onClose: function (sAction) {
-                    if (sAction !== MessageBox.Action.OK) return;
-                    that._bulkUpdateFolder(aMatches, sToTag).then(function () {
+            var fnDoRename = function () {
+                that._renameTagInCatalog(sFromTag, sToTag)
+                    .then(function () { return that._bulkUpdateFolder(aMatches, sToTag); })
+                    .then(function () { return that._loadTagCatalog(); })
+                    .then(function () {
                         if (that._pManageTagDialog) that._pManageTagDialog.then(function (oDialog) { oDialog.close(); });
                         that.toast(that.i18n("msg.tagRenamed", [sToTag, aMatches.length]));
                     }).catch(function (err) {
                         that.error(err && err.message || String(err));
                     });
-                }
-            });
+            };
+
+            if (aMatches.length) {
+                MessageBox.confirm(this.i18n("msg.confirmRenameTag", [sFromTag, sToTag, aMatches.length]), {
+                    onClose: function (sAction) {
+                        if (sAction !== MessageBox.Action.OK) return;
+                        fnDoRename();
+                    }
+                });
+            } else {
+                fnDoRename();
+            }
         },
 
         _saveManageTagAssign: function () {
             var sTag = (this._oManageTagModel.getProperty("/assignTag") || "").trim();
             if (!sTag) { this.toast(this.i18n("msg.enterAssignTag")); return; }
+            // "__none__" is the "— No tag —" sentinel — a real, selectable choice for
+            // bulk-clearing (distinct from "", which means "nothing picked yet"). The
+            // actual stored value for "no tag" is always "".
+            var sActualTag = sTag === "__none__" ? "" : sTag;
 
             var that = this;
             var aChains = this._oManageTagModel.getProperty("/chainsAll") || [];
@@ -1691,9 +1882,12 @@ sap.ui.define([
             var aRows = this._pageModel.getProperty("/rows") || [];
             var aMatches = aRows.filter(function (r) { return aSelectedKeys.indexOf(that._rowKey(r.spaceId, r.name)) !== -1; });
 
-            this._bulkUpdateFolder(aMatches, sTag).then(function () {
+            this._bulkUpdateFolder(aMatches, sActualTag).then(function () {
                 if (that._pManageTagDialog) that._pManageTagDialog.then(function (oDialog) { oDialog.close(); });
-                that.toast(that.i18n("msg.tagAssigned", [sTag, aMatches.length]));
+                var sMsg = sActualTag
+                    ? that.i18n("msg.tagAssigned", [sActualTag, aMatches.length])
+                    : that.i18n("msg.tagCleared", [aMatches.length]);
+                that.toast(sMsg);
             }).catch(function (err) {
                 that.error(err && err.message || String(err));
             });

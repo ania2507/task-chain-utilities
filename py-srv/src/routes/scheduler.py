@@ -21,6 +21,7 @@ def _svc():
 
 
 @bp.route("/sync", methods=["POST"])
+@flask_access_validation(required_scope="admin")
 def sync():
     """Reload all active schedules from DB and rebuild APScheduler jobs."""
     try:
@@ -85,6 +86,7 @@ def set_traffic_light():
 
 
 @bp.route("/run-now/<schedule_id>", methods=["POST"])
+@flask_access_validation(required_scope="admin")
 def run_now(schedule_id: str):
     try:
         body = request.get_json(silent=True) or {}
@@ -98,6 +100,7 @@ def run_now(schedule_id: str):
 
 
 @bp.route("/run-now-adhoc", methods=["POST"])
+@flask_access_validation(required_scope="admin")
 def run_now_adhoc():
     """Trigger a DSP task chain immediately without a persisted Schedule row."""
     try:
@@ -122,6 +125,7 @@ def run_now_adhoc():
 
 
 @bp.route("/schedule-once", methods=["POST"])
+@flask_access_validation(required_scope="admin")
 def schedule_once():
     """Schedule a DSP task chain for a single firing at the given datetime."""
     try:
@@ -144,6 +148,7 @@ def schedule_once():
 
 
 @bp.route("/schedule-once", methods=["DELETE"])
+@flask_access_validation(required_scope="admin")
 def cancel_schedule_once():
     """Remove a once-off APScheduler job by spaceId + taskchain + runAt."""
     from datetime import datetime
@@ -195,6 +200,7 @@ def cancel_schedule_once():
 
 
 @bp.route("/preview", methods=["GET"])
+@flask_access_validation()
 def preview():
     cron_expr = (request.args.get("cron") or "").strip()
     tz = request.args.get("tz") or "Europe/Rome"
@@ -211,6 +217,7 @@ def preview():
 
 
 @bp.route("/jobs", methods=["GET"])
+@flask_access_validation()
 def list_jobs():
     """Return APScheduler's current in-memory job set (debug)."""
     try:
@@ -240,6 +247,7 @@ def list_jobs():
 
 
 @bp.route("/active-taskchains", methods=["GET"])
+@flask_access_validation()
 def list_active_taskchains():
     """Return the in-memory "already running" guard state (debug).
 
@@ -267,6 +275,7 @@ def list_active_taskchains():
 
 
 @bp.route("/active-taskchains/<path:taskchain>", methods=["DELETE"])
+@flask_access_validation(required_scope="admin")
 def clear_active_taskchain(taskchain):
     """Manually clear the "already running" guard for a taskchain (debug/unblock)."""
     try:

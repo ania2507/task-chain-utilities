@@ -6,9 +6,8 @@ sap.ui.define([
     "sap/m/MessageToast",
     "sap/ui/model/Filter",
     "sap/ui/model/FilterOperator",
-    "sap/ui/model/Sorter",
-    "sap/ui/core/routing/History"
-], function (BaseController, Fragment, JSONModel, MessageBox, MessageToast, Filter, FilterOperator, Sorter, History) {
+    "sap/ui/model/Sorter"
+], function (BaseController, Fragment, JSONModel, MessageBox, MessageToast, Filter, FilterOperator, Sorter) {
     "use strict";
 
     return BaseController.extend("scheduler.controller.CustomCalendarPage", {
@@ -194,13 +193,12 @@ sap.ui.define([
         },
 
         onNavBack: function () {
-            var oHistory = History.getInstance();
-            var sPrev = oHistory.getPreviousHash();
-            if (sPrev !== undefined) {
-                window.history.go(-1);
-            } else {
-                this.getRouter().navTo("scheduleList", {}, true);
-            }
+            // Custom Calendar is only ever entered from the Scheduler list, so navigate
+            // there directly (replacing history) rather than popping raw browser history —
+            // the latter only undoes one hash change at a time, and this page routinely
+            // accumulates several (Step Parameters round-trips, uploads, edits), which left
+            // a single "back" needing to be pressed multiple times to actually leave.
+            this.getRouter().navTo("scheduleList", {}, true);
         },
 
         onOpenOnDemand: function () {
