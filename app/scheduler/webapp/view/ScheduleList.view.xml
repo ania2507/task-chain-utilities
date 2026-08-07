@@ -153,6 +153,7 @@
                         <Title text="{= ${page>/filteredCount} + ' Task Chains'}" level="H5"/>
                         <ToolbarSpacer/>
                         <Button icon="sap-icon://refresh" press=".onRefresh" tooltip="{i18n>common.refresh}"/>
+                        <Button icon="sap-icon://action-settings" press=".onOpenSettingsDialog" tooltip="{i18n>common.settings}"/>
                         <Button icon="sap-icon://tag" text="{i18n>common.manageTags}" press=".onManageTag"/>
                         <Button icon="sap-icon://add" type="Emphasized" text="{i18n>common.addTaskchain}" press=".onAddTaskchain"/>
                     </OverflowToolbar>

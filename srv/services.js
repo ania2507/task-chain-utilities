@@ -613,25 +613,6 @@ module.exports = cds.service.impl(async function () {
                 };
             });
 
-            // === DIAGNOSTICA: breakdown per space ===
-            const breakdown = {};
-            const sample = {};
-            for (const tc of taskchains) {
-                const key = tc.spaceId || '(empty #spaceName)';
-                breakdown[key] = (breakdown[key] || 0) + 1;
-                if (!sample[key]) sample[key] = tc.name;
-            }
-            console.log('[DIAG] Taskchain count per #spaceName:', JSON.stringify(breakdown));
-            console.log('[DIAG] Sample taskchain per space:', JSON.stringify(sample));
-
-            // Cerca specificamente 1TC_FI00_IBP_03
-            const targetRow = rows.find(r => r.name === '1TC_FI00_IBP_03');
-            if (targetRow) {
-                console.log('[DIAG] 1TC_FI00_IBP_03 rawJson:', targetRow.rawJson);
-            } else {
-                console.log('[DIAG] 1TC_FI00_IBP_03 NOT FOUND in view 3VR_DEPL_METADATA_01');
-            }
-
             console.log(`✅ Fetched ${taskchains.length} taskchains from DSP HANA (3VR_DEPL_METADATA_01)`);
             return taskchains;
         } catch (e) {

@@ -19,6 +19,8 @@ from typing import Any, Dict, List, Optional
 
 from src.config import Config
 
+from ._hana_connect import connect_with_retry
+
 logger = logging.getLogger(__name__)
 
 
@@ -79,7 +81,7 @@ class ScheduleRepository:
         }
         if c.get("schema"):
             params["currentschema"] = c["schema"]
-        return dbapi.connect(**params)
+        return connect_with_retry(lambda: dbapi.connect(**params))
 
     # ------------------------------------------------------------------
     def insert_run(

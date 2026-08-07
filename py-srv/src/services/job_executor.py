@@ -17,7 +17,7 @@ import logging
 import threading
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from ..integrations.base import BaseJobClient, IntegrationType, JobReference, JobStatus
@@ -113,7 +113,7 @@ class JobExecutor:
             ref=ref,
             params=params,
             status=JobStatus.PENDING,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
 
         with self._lock:
@@ -161,7 +161,7 @@ class JobExecutor:
             ref=ref,
             params={},
             status=JobStatus.UNKNOWN,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
         with self._lock:
             self._executions[execution_id] = execution
@@ -195,7 +195,7 @@ class JobExecutor:
 
         with self._lock:
             execution.status = new_status
-            execution.last_checked = datetime.utcnow()
+            execution.last_checked = datetime.now(timezone.utc)
             execution.remote_details = remote_status
 
         return {
@@ -223,7 +223,7 @@ class JobExecutor:
 
         with self._lock:
             execution.status = JobStatus.CANCELLED
-            execution.last_checked = datetime.utcnow()
+            execution.last_checked = datetime.now(timezone.utc)
 
         return {"execution_id": execution_id, **result}
 

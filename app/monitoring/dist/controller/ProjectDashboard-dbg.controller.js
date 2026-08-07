@@ -131,29 +131,43 @@ sap.ui.define([
         },
 
         /**
-         * Stash the currently selected chain filter (if any) for this project, so a
-         * subsequent return to the dashboard (e.g. browser back from Run Inspector or
-         * Task Chain Detail) can restore it instead of resetting to "all chains".
+         * Stash the currently selected chain filter and time period (fixed or custom) for
+         * this project, so a subsequent return to the dashboard (e.g. browser back from
+         * Run Inspector or Task Chain Detail) can restore both instead of resetting to
+         * "all chains" / "Last 24 Hours" — a fresh dashboard model always starts at those
+         * defaults, since _loadProjectData rebuilds it from scratch on every navigation in.
          */
         _stashChainFilterState: function (sProjectId) {
             var oDashboardModel = this.getView().getModel("dashboard");
             if (!oDashboardModel) return;
-            var aSelectedChains = oDashboardModel.getProperty("/selectedChains") || [];
             var oComp = this.getOwnerComponent();
-            oComp._chainFilterState = aSelectedChains.length
-                ? { projectId: sProjectId, selectedChains: aSelectedChains }
-                : null;
+            oComp._chainFilterState = {
+                projectId: sProjectId,
+                selectedChains: oDashboardModel.getProperty("/selectedChains") || [],
+                selectedTimePeriodKey: oDashboardModel.getProperty("/selectedTimePeriodKey") || "24h",
+                customDateFrom: oDashboardModel.getProperty("/customDateFrom") || null,
+                customDateTo: oDashboardModel.getProperty("/customDateTo") || null
+            };
         },
 
         /**
-         * Re-apply a previously stashed chain filter (see _stashChainFilterState) for
-         * this project, including re-selecting the matching rows in the Task Chains list.
+         * Re-apply a previously stashed chain filter and time period (see
+         * _stashChainFilterState) for this project, including re-selecting the matching
+         * rows in the Task Chains list.
          */
         _restoreChainFilterState: function (sProjectId, oDashboardModel) {
             var oComp = this.getOwnerComponent();
             var oState = oComp._chainFilterState;
             if (!oState || oState.projectId !== sProjectId) return;
             oComp._chainFilterState = null;
+
+            // Restore the period first — _applyChainFilter below reads the currently
+            // selected period (via the Select's two-way-bound /selectedTimePeriodKey) to
+            // recompute the chart/KPIs, so it needs to already reflect what the user had
+            // chosen rather than the "24h" default a freshly built model starts with.
+            oDashboardModel.setProperty("/selectedTimePeriodKey", oState.selectedTimePeriodKey);
+            oDashboardModel.setProperty("/customDateFrom", oState.customDateFrom);
+            oDashboardModel.setProperty("/customDateTo", oState.customDateTo);
 
             var aSelectedChains = oState.selectedChains;
             oDashboardModel.setProperty("/selectedChains", aSelectedChains);

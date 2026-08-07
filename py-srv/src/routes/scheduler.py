@@ -33,7 +33,7 @@ def sync():
 
 
 @bp.route("/traffic-light", methods=["GET"])
-@flask_access_validation()
+@flask_access_validation(required_scope="admin")
 def get_traffic_light():
     """Return the current TrafficLightStatus for a given (spaceId, taskchain).
 
@@ -59,7 +59,7 @@ def get_traffic_light():
 
 
 @bp.route("/traffic-light", methods=["POST"])
-@flask_access_validation()
+@flask_access_validation(required_scope="admin")
 def set_traffic_light():
     """Upsert the TrafficLightStatus for a given (spaceId, taskchain).
 
@@ -200,7 +200,7 @@ def cancel_schedule_once():
 
 
 @bp.route("/preview", methods=["GET"])
-@flask_access_validation()
+@flask_access_validation(required_scope="admin")
 def preview():
     cron_expr = (request.args.get("cron") or "").strip()
     tz = request.args.get("tz") or "Europe/Rome"
@@ -217,7 +217,7 @@ def preview():
 
 
 @bp.route("/jobs", methods=["GET"])
-@flask_access_validation()
+@flask_access_validation(required_scope="admin")
 def list_jobs():
     """Return APScheduler's current in-memory job set (debug)."""
     try:
@@ -247,7 +247,7 @@ def list_jobs():
 
 
 @bp.route("/active-taskchains", methods=["GET"])
-@flask_access_validation()
+@flask_access_validation(required_scope="admin")
 def list_active_taskchains():
     """Return the in-memory "already running" guard state (debug).
 

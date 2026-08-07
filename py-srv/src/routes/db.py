@@ -19,7 +19,7 @@ bp = Blueprint("db", __name__)
 
 
 @bp.route("/taskchains", methods=["GET"])
-@flask_access_validation()
+@flask_access_validation(required_scope="admin")
 def db_taskchains_endpoint():
     """Return taskchains from DSP via REST API (BTP Destination Service)."""
     try:

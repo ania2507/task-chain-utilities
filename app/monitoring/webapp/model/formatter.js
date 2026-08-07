@@ -26,13 +26,14 @@ sap.ui.define([], function () {
                     month: "2-digit",
                     year: "numeric",
                     hour: "2-digit",
-                    minute: "2-digit"
+                    minute: "2-digit",
+                    timeZone: "Europe/Rome"
                 });
             } catch (e) {
                 return sDateTime;
             }
         },
-        
+
         /**
          * Format status to UI state
          * @param {string} sStatus - The status value
@@ -186,7 +187,8 @@ sap.ui.define([], function () {
                 month: "2-digit",
                 year: "numeric",
                 hour: "2-digit",
-                minute: "2-digit"
+                minute: "2-digit",
+                timeZone: "Europe/Rome"
             });
         },
 
@@ -203,7 +205,8 @@ sap.ui.define([], function () {
             var oDate = vTimestamp instanceof Date ? vTimestamp : new Date(vTimestamp);
             return oDate.toLocaleTimeString("it-IT", {
                 hour: "2-digit",
-                minute: "2-digit"
+                minute: "2-digit",
+                timeZone: "Europe/Rome"
             });
         },
 

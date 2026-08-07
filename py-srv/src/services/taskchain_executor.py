@@ -10,7 +10,7 @@ import json
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, Optional
 
@@ -38,6 +38,20 @@ _ACTIVE_TASKCHAINS_LOCK = threading.Lock()
 _ACTIVE_TASKCHAIN_MAX_SECONDS = 3 * 3600  # 3 hours
 _ACTIVE_TASKCHAIN_POLL_SECONDS = 30
 
+# _executions eviction (see TaskchainExecutor._evict_expired_executions). Two
+# rules, because not every execution kind ever reaches a terminal status in
+# this dict: wait/skip/dummy do (their own runner writes COMPLETED/FAILED
+# back here), so they're evicted shortly after completion. Real DSP
+# executions launched via execute_async_dsp/retry_dsp are created PENDING and
+# never updated afterwards - _watch_taskchain_active_flag polls DSP directly
+# but only clears _ACTIVE_TASKCHAINS, not this dict - and get_status() always
+# re-queries DSP live for those anyway (see get_status_dsp), so the entry is
+# inert bookkeeping once created. _EXECUTIONS_MAX_AGE_SECONDS is the
+# safety-net ceiling that evicts any entry regardless of status once no
+# legitimate poll could still be in flight.
+_EXECUTIONS_TERMINAL_TTL_SECONDS = 7200  # 2 hours after completed_at
+_EXECUTIONS_MAX_AGE_SECONDS = 24 * 3600  # 24 hours since created_at, any status
+
 
 class TaskchainStatus(Enum):
     PENDING = "PENDING"
@@ -53,6 +67,7 @@ class TaskchainExecution:
     status: TaskchainStatus
     payload: Dict[str, Any]
     created_at: datetime
+    completed_at: Optional[datetime] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -60,6 +75,7 @@ class TaskchainExecution:
             "taskchain_name": self.taskchain_name,
             "status": self.status.value,
             "created_at": self.created_at.isoformat(),
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
         }
 
 
@@ -75,6 +91,38 @@ class TaskchainExecutor:
             logger.warning("TaskchainExecutor using simulated DSP execution (DSP_SIMULATE=true)")
         else:
             logger.info("TaskchainExecutor initialized (DSP via BTP Destination)")
+
+    def _evict_expired_executions(self) -> None:
+        """Drop expired entries from self._executions. Must be called with
+        self._lock already held. See the _EXECUTIONS_* constants for why
+        there are two separate rules.
+
+        The age-based safety net (rule 2) only applies to real DSP execution_ids
+        (no wait__/dummy__/skip__ prefix): those are the ones that get stuck at
+        PENDING forever in this dict regardless of how long the real DSP run
+        actually takes (which can well exceed the safety-net window - DSP
+        remains the authoritative source for them either way, see
+        get_status_dsp). wait/dummy/skip have no such external fallback, so
+        they're only ever evicted after actually reaching a terminal status -
+        never while still PENDING/RUNNING, no matter how old."""
+        now = datetime.now(timezone.utc)
+        expired = []
+        for execution_id, ex in self._executions.items():
+            if ex.status in (TaskchainStatus.COMPLETED, TaskchainStatus.FAILED):
+                if (
+                    ex.completed_at is not None
+                    and (now - ex.completed_at).total_seconds() > _EXECUTIONS_TERMINAL_TTL_SECONDS
+                ):
+                    expired.append(execution_id)
+                continue
+            if execution_id.startswith(("wait__", "dummy__", "skip__")):
+                continue
+            if ex.status != TaskchainStatus.PENDING:
+                continue  # never age out a RUNNING entry by time alone
+            if (now - ex.created_at).total_seconds() > _EXECUTIONS_MAX_AGE_SECONDS:
+                expired.append(execution_id)
+        for execution_id in expired:
+            self._executions.pop(execution_id, None)
 
     @staticmethod
     def store_pending_step_params(taskchain: str, params: Dict[str, Any], space_id: str = "") -> None:
@@ -178,15 +226,16 @@ class TaskchainExecutor:
 
     def execute_async_dsp(self, spaceid: str, taskchain_name: str, payload: Dict[str, Any]) -> str:
         if self._simulate:
-            execution_id = self.make_execution_id(spaceid, datetime.utcnow().strftime("%Y%m%d%H%M%S%f"))
+            execution_id = self.make_execution_id(spaceid, datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f"))
             with self._lock:
                 self._executions[execution_id] = TaskchainExecution(
                     execution_id=execution_id,
                     taskchain_name=taskchain_name,
                     status=TaskchainStatus.PENDING,
                     payload=payload,
-                    created_at=datetime.utcnow(),
+                    created_at=datetime.now(timezone.utc),
                 )
+                self._evict_expired_executions()
 
             def _runner():
                 try:
@@ -199,11 +248,13 @@ class TaskchainExecutor:
                     with self._lock:
                         if execution_id in self._executions:
                             self._executions[execution_id].status = TaskchainStatus.COMPLETED
+                            self._executions[execution_id].completed_at = datetime.now(timezone.utc)
                 except Exception:
                     logger.exception("Simulated DSP execution failed")
                     with self._lock:
                         if execution_id in self._executions:
                             self._executions[execution_id].status = TaskchainStatus.FAILED
+                            self._executions[execution_id].completed_at = datetime.now(timezone.utc)
 
             threading.Thread(target=_runner, daemon=True).start()
             return execution_id
@@ -249,8 +300,9 @@ class TaskchainExecutor:
                 taskchain_name=taskchain_name,
                 status=TaskchainStatus.PENDING,
                 payload=payload,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
             )
+            self._evict_expired_executions()
 
         self._watch_taskchain_active_flag(taskchain_name, execution_id)
 
@@ -290,8 +342,9 @@ class TaskchainExecutor:
                 taskchain_name=taskchain_name,
                 status=TaskchainStatus.PENDING,
                 payload={},
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
             )
+            self._evict_expired_executions()
 
         self._watch_taskchain_active_flag(taskchain_name, execution_id)
 
@@ -348,8 +401,9 @@ class TaskchainExecutor:
                 taskchain_name="__wait__",
                 status=TaskchainStatus.PENDING,
                 payload=wait_payload,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
             )
+            self._evict_expired_executions()
 
         def _runner():
             try:
@@ -360,11 +414,13 @@ class TaskchainExecutor:
                 with self._lock:
                     if execution_id in self._executions:
                         self._executions[execution_id].status = TaskchainStatus.COMPLETED
+                        self._executions[execution_id].completed_at = datetime.now(timezone.utc)
             except Exception:
                 logger.exception("Async wait failed")
                 with self._lock:
                     if execution_id in self._executions:
                         self._executions[execution_id].status = TaskchainStatus.FAILED
+                        self._executions[execution_id].completed_at = datetime.now(timezone.utc)
 
         threading.Thread(target=_runner, daemon=True).start()
         return execution_id
@@ -375,13 +431,16 @@ class TaskchainExecutor:
         dummy_payload.setdefault("kind", "dummy")
 
         with self._lock:
+            now = datetime.now(timezone.utc)
             self._executions[execution_id] = TaskchainExecution(
                 execution_id=execution_id,
                 taskchain_name=taskchain_name or "__dummy__",
                 status=TaskchainStatus.COMPLETED,
                 payload=dummy_payload,
-                created_at=datetime.utcnow(),
+                created_at=now,
+                completed_at=now,
             )
+            self._evict_expired_executions()
 
         return execution_id
 
@@ -408,8 +467,9 @@ class TaskchainExecutor:
                 taskchain_name=taskchain_name,
                 status=TaskchainStatus.PENDING,
                 payload=skip_payload,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
             )
+            self._evict_expired_executions()
 
         def _runner():
             try:
@@ -442,12 +502,14 @@ class TaskchainExecutor:
                 with self._lock:
                     if execution_id in self._executions:
                         self._executions[execution_id].status = final_status
+                        self._executions[execution_id].completed_at = datetime.now(timezone.utc)
             except Exception as e:
                 logger.exception("Skip check async failed")
                 skip_payload["error"] = str(e)
                 with self._lock:
                     if execution_id in self._executions:
                         self._executions[execution_id].status = TaskchainStatus.FAILED
+                        self._executions[execution_id].completed_at = datetime.now(timezone.utc)
 
         threading.Thread(target=_runner, daemon=True).start()
         return execution_id
@@ -491,6 +553,17 @@ class TaskchainExecutor:
     def get_status(self, execution_id: str) -> Dict[str, Any]:
         with self._lock:
             ex = self._executions.get(execution_id)
+
+        if ex is None and execution_id.startswith(("wait__", "dummy__", "skip__")):
+            # These kinds have no external system to fall back on (unlike a real
+            # DSP execution_id, which get_status_dsp below can always re-query
+            # live) - once evicted by _evict_expired_executions, the only honest
+            # answer is "no longer known", not whatever get_status_dsp would make
+            # of an ID that was never a real DSP space/logId pair to begin with.
+            raise ValueError(
+                f"Unknown or expired execution_id '{execution_id}' "
+                f"(completed executions are retained for {_EXECUTIONS_TERMINAL_TTL_SECONDS // 3600}h)"
+            )
 
         if ex and ex.payload.get("kind") == "wait":
             return {

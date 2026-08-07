@@ -17,6 +17,7 @@ POST /v1/jobs/ibp/template    – read IBP template metadata (helper)
 from __future__ import annotations
 
 import logging
+import os
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -32,7 +33,9 @@ bp = Blueprint("jobs", __name__)
 @flask_access_validation(required_scope="admin")
 def debug_ibp_connection():
     """Debug: show what credentials the IBP Destination Service resolves."""
-    import os
+    if os.environ.get("ENABLE_DEBUG_ENDPOINTS", "false").lower() != "true":
+        return jsonify({"error": "Not found"}), 404
+
     from ..integrations.ibp.destination import IBPDestinationClient
     dest_name = os.environ.get("IBP_DESTINATION_NAME", "")
     if not dest_name:
@@ -1083,6 +1086,8 @@ def read_ibp_template_steps():
         if not steps:
             resp["_debug_keys"] = list(data.keys()) if isinstance(data, dict) else repr(type(data))
             resp["_debug_raw"] = data
+        if os.environ.get("ENABLE_DEBUG_ENDPOINTS", "false").lower() != "true":
+            resp = {k: v for k, v in resp.items() if not k.startswith("_debug_")}
         return jsonify(resp), 200
     except Exception:
         logger.exception("Error reading IBP template steps for %s", template_name)

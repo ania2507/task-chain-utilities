@@ -455,9 +455,10 @@ sap.ui.define([
             if (!sDateTime) return "-";
             try {
                 var oDate = new Date(sDateTime);
-                return oDate.toLocaleString("en-GB", { 
+                return oDate.toLocaleString("en-GB", {
                     day: "2-digit", month: "short", year: "numeric",
-                    hour: "2-digit", minute: "2-digit"
+                    hour: "2-digit", minute: "2-digit",
+                    timeZone: "Europe/Rome"
                 });
             } catch (e) {
                 return sDateTime;

@@ -10,6 +10,8 @@ from typing import Optional
 from src.config import Config
 from src.exceptions import RuleExecutionError
 
+from ._hana_connect import connect_with_retry
+
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +66,7 @@ class HanaRuleRepository(RuleRepository):
         if self._credentials.get("schema"):
             conn_params["currentschema"] = self._credentials["schema"]
 
-        return dbapi.connect(**conn_params)
+        return connect_with_retry(lambda: dbapi.connect(**conn_params))
 
     def get_code(self, ruleid: str) -> Optional[str]:
         try:
@@ -231,7 +233,7 @@ class DspHanaQueryExecutor:
             "encrypt": self._credentials.get("encrypt", True),
         }
 
-        return dbapi.connect(**conn_params)
+        return connect_with_retry(lambda: dbapi.connect(**conn_params))
 
     def query(self, sql: str, params: tuple = None) -> list:  # type: ignore
         sql_upper = sql.strip().upper()

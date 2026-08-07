@@ -50,6 +50,11 @@ sap.ui.define([
             });
             this.getView().setModel(this._pageModel, "page");
 
+            // Group-by (see onSortApply) needs no custom setup here: sap.m.ListBase
+            // renders a default GroupHeaderListItem (title = group value) for any Sorter
+            // with group:true on the items binding — there's no groupHeaderFactory control
+            // API to configure (it's a binding-info parameter, not a settable property).
+
             this.getRouter().getRoute("scheduleList").attachPatternMatched(this._onListMatched, this);
         },
 
@@ -339,7 +344,11 @@ sap.ui.define([
         formatDate: function (v) {
             if (!v) return "";
             var d = (v instanceof Date) ? v : new Date(v);
-            return isNaN(d.getTime()) ? String(v) : d.toLocaleString();
+            return isNaN(d.getTime()) ? String(v) : d.toLocaleString("it-IT", {
+                day: "2-digit", month: "2-digit", year: "numeric",
+                hour: "2-digit", minute: "2-digit",
+                timeZone: "Europe/Rome"
+            });
         },
 
         formatScheduleText: function (v) { return v || ""; },
@@ -388,6 +397,177 @@ sap.ui.define([
 
         onRefresh: function () {
             this._refreshSchedulesForRows();
+        },
+
+        // ------------------------------------------------------------
+        // Sort — sap.m.Table has no clickable column headers, so sorting is offered via
+        // a custom multi-criteria dialog (add/remove/reorder sort columns, asc/desc per
+        // row), applied as an ordered array of Sorters to the table's binding.
+        // ------------------------------------------------------------
+        _allSortColumns: function () {
+            return [
+                { key: "spaceId", text: this.i18n("col.space") },
+                { key: "businessName", text: this.i18n("col.taskchain") },
+                { key: "folder", text: this.i18n("col.folder") },
+                { key: "nextRunAt", text: this.i18n("col.nextRun") },
+                { key: "typeLabel", text: this.i18n("col.type") }
+            ];
+        },
+
+        /**
+         * Derives the dialog's row view-model from a plain [{key, descending}, ...] array:
+         * each row's dropdown only offers columns not already used by another row (plus
+         * its own current column), and canMoveUp/canMoveDown/canRemove reflect its
+         * position — recomputed from scratch after every add/remove/reorder/column change
+         * rather than patched in place, since all of those can affect every row's options.
+         */
+        _buildSortModelData: function (aCriteria) {
+            var aColumns = this._allSortColumns();
+            var aUsedKeys = aCriteria.map(function (c) { return c.key; });
+            return aCriteria.map(function (c, i) {
+                var aOptions = aColumns.filter(function (col) {
+                    return col.key === c.key || aUsedKeys.indexOf(col.key) === -1;
+                });
+                return {
+                    key: c.key,
+                    descending: !!c.descending,
+                    options: aOptions,
+                    canMoveUp: i > 0,
+                    canMoveDown: i < aCriteria.length - 1,
+                    canRemove: aCriteria.length > 1
+                };
+            });
+        },
+
+        // Group-by choices for the Group tab, in RadioButtonGroup order — index 0 ("None")
+        // is never applied as a Sorter, it just means "no grouping".
+        _groupByKeys: function () {
+            return ["none", "spaceId", "folder", "typeLabel"];
+        },
+
+        onOpenSettingsDialog: function () {
+            var oView = this.getView();
+            var aCriteria = this._aSortCriteria || [{ key: "spaceId", descending: false }];
+            var sGroupBy = this._sGroupBy || "none";
+            if (!this._oSortModel) {
+                this._oSortModel = new JSONModel({});
+            }
+            this._oSortModel.setData({
+                tab: "sort",
+                criteria: this._buildSortModelData(aCriteria),
+                maxCriteria: this._allSortColumns().length,
+                groupIndex: this._groupByKeys().indexOf(sGroupBy)
+            });
+
+            if (!this._pSortDialog) {
+                this._pSortDialog = Fragment.load({
+                    id: oView.getId(),
+                    name: "scheduler.view.fragments.SortSettingsDialog",
+                    controller: this
+                }).then(function (oDialog) {
+                    oView.addDependent(oDialog);
+                    oDialog.setModel(this._oSortModel, "sortSettings");
+                    return oDialog;
+                }.bind(this));
+            }
+            this._pSortDialog.then(function (oDialog) { oDialog.open(); });
+        },
+
+        // Column dropdown changed on some row — its own `key` is already updated by the
+        // two-way binding; recompute every row's `options` so the newly picked column
+        // disappears from sibling dropdowns and any column it replaced reappears.
+        onSortCriterionChange: function () {
+            var aCriteria = this._oSortModel.getProperty("/criteria");
+            this._oSortModel.setProperty("/criteria", this._buildSortModelData(aCriteria));
+        },
+
+        // SegmentedButton's selectedKey is a read-only expression binding (derived from
+        // /descending), so the asc/desc toggle needs an explicit write-back here.
+        onSortDirectionChange: function (oEvent) {
+            var oCtx = oEvent.getSource().getBindingContext("sortSettings");
+            if (!oCtx) return;
+            var sKey = oEvent.getParameter("item").getKey();
+            oCtx.getModel().setProperty(oCtx.getPath() + "/descending", sKey === "desc");
+        },
+
+        _getSortRowIndex: function (oEvent) {
+            var oCtx = oEvent.getSource().getBindingContext("sortSettings");
+            if (!oCtx) return -1;
+            return parseInt(oCtx.getPath().split("/").pop(), 10);
+        },
+
+        onSortMoveUp: function (oEvent) {
+            var i = this._getSortRowIndex(oEvent);
+            if (i <= 0) return;
+            var aCriteria = this._oSortModel.getProperty("/criteria");
+            var tmp = aCriteria[i - 1];
+            aCriteria[i - 1] = aCriteria[i];
+            aCriteria[i] = tmp;
+            this._oSortModel.setProperty("/criteria", this._buildSortModelData(aCriteria));
+        },
+
+        onSortMoveDown: function (oEvent) {
+            var i = this._getSortRowIndex(oEvent);
+            var aCriteria = this._oSortModel.getProperty("/criteria");
+            if (i < 0 || i >= aCriteria.length - 1) return;
+            var tmp = aCriteria[i + 1];
+            aCriteria[i + 1] = aCriteria[i];
+            aCriteria[i] = tmp;
+            this._oSortModel.setProperty("/criteria", this._buildSortModelData(aCriteria));
+        },
+
+        onSortRemoveCriterion: function (oEvent) {
+            var i = this._getSortRowIndex(oEvent);
+            var aCriteria = this._oSortModel.getProperty("/criteria");
+            if (i < 0 || aCriteria.length <= 1) return;
+            aCriteria.splice(i, 1);
+            this._oSortModel.setProperty("/criteria", this._buildSortModelData(aCriteria));
+        },
+
+        onSortAddCriterion: function () {
+            var aCriteria = this._oSortModel.getProperty("/criteria");
+            var aUsedKeys = aCriteria.map(function (c) { return c.key; });
+            var oNextCol = this._allSortColumns().filter(function (c) {
+                return aUsedKeys.indexOf(c.key) === -1;
+            })[0];
+            if (!oNextCol) return;
+            aCriteria.push({ key: oNextCol.key, descending: false });
+            this._oSortModel.setProperty("/criteria", this._buildSortModelData(aCriteria));
+        },
+
+        onSortReset: function () {
+            this._oSortModel.setProperty("/criteria", this._buildSortModelData([{ key: "spaceId", descending: false }]));
+            this._oSortModel.setProperty("/groupIndex", 0);
+        },
+
+        onSortCancel: function () {
+            if (this._pSortDialog) this._pSortDialog.then(function (oDialog) { oDialog.close(); });
+        },
+
+        onSortApply: function () {
+            var aCriteria = this._oSortModel.getProperty("/criteria").map(function (c) {
+                return { key: c.key, descending: c.descending };
+            });
+            var sGroupBy = this._groupByKeys()[this._oSortModel.getProperty("/groupIndex")] || "none";
+
+            this._aSortCriteria = aCriteria;
+            this._sGroupBy = sGroupBy;
+
+            // The group Sorter must come first — a duplicate manual sort on the same
+            // field would be harmless but redundant, so it's dropped from the rest.
+            // If the user also has a sort criterion on the grouped field, reuse its
+            // direction so groups honor the chosen Ascending/Descending order too.
+            var aSorters = [];
+            if (sGroupBy !== "none") {
+                var oGroupCriterion = aCriteria.filter(function (c) { return c.key === sGroupBy; })[0];
+                aSorters.push(new Sorter(sGroupBy, oGroupCriterion ? oGroupCriterion.descending : false, true));
+            }
+            aCriteria.filter(function (c) { return c.key !== sGroupBy; }).forEach(function (c) {
+                aSorters.push(new Sorter(c.key, c.descending));
+            });
+
+            this.byId("taskchainsTable").getBinding("items").sort(aSorters);
+            if (this._pSortDialog) this._pSortDialog.then(function (oDialog) { oDialog.close(); });
         },
 
         _updateSummary: function () {

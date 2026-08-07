@@ -1,15 +1,14 @@
-Flask>=2.0.0
-flask-cors
+Flask>=2.0.0,<4.0.0
+flask-cors>=6.0.0,<7.0.0
 python-dotenv
 requests
-cfenv
+cfenv==0.5.3
 sap-xssec
-fastapi==0.114.2
-PyJWT
+PyJWT>=2.0.0,<3.0.0
+python-dateutil
 # Optional (used when bound to HANA / DSP HANA)
 hdbcli
-pytest
 # Scheduler
-apscheduler>=3.10
+apscheduler>=3.10,<4.0.0
 croniter>=2.0
 tzdata

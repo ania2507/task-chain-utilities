@@ -66,7 +66,7 @@ sap.ui.define([
 
         onAppointmentSelect: function (oEvt) {
             var oApp = oEvt.getParameter("appointment");
-            if (oApp) this.toast(oApp.getTitle() + "\n" + oApp.getStartDate().toLocaleString());
+            if (oApp) this.toast(oApp.getTitle() + "\n" + oApp.getStartDate().toLocaleString("it-IT", { timeZone: "Europe/Rome" }));
         }
     });
 });

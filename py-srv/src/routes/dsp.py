@@ -489,7 +489,7 @@ def diagnose_dsp():
 
 
 @bp.route("/debug-businessnames", methods=["GET"])
-@flask_access_validation(required_scope="read")
+@flask_access_validation(required_scope="admin")
 def debug_businessnames():
     """Debug: inspect where business names are stored for a task chain's steps.
 
@@ -497,6 +497,9 @@ def debug_businessnames():
     - spaceId   (required)
     - taskchain (required)
     """
+    if os.environ.get("ENABLE_DEBUG_ENDPOINTS", "false").lower() != "true":
+        return jsonify({"error": "Not found"}), 404
+
     import json as _json
     from flask import current_app
 
@@ -588,7 +591,7 @@ def debug_businessnames():
 
 
 @bp.route("/debug-step-metadata", methods=["GET"])
-@flask_access_validation(required_scope="read")
+@flask_access_validation(required_scope="admin")
 def debug_step_metadata():
     """Return full deployment metadata + raw DAG node for a given objectId / taskchain.
 
@@ -597,6 +600,9 @@ def debug_step_metadata():
     - taskchain (optional) – also show the raw node definition from the taskchain DAG
     - spaceId   (optional)
     """
+    if os.environ.get("ENABLE_DEBUG_ENDPOINTS", "false").lower() != "true":
+        return jsonify({"error": "Not found"}), 404
+
     import json as _json
     from flask import current_app
 
@@ -821,7 +827,7 @@ def delete_data_marked():
 
 
 @bp.route("/tasklog-messages", methods=["GET"])
-@flask_access_validation(required_scope="read")
+@flask_access_validation(required_scope="admin")
 def get_tasklog_messages():
     """Get log messages for a specific task execution.
     
@@ -879,7 +885,7 @@ def get_tasklog_messages():
 
 
 @bp.route("/taskchain-run-nodes", methods=["GET"])
-@flask_access_validation(required_scope="read")
+@flask_access_validation(required_scope="admin")
 def get_taskchain_run_nodes():
     """Get node execution details for a task chain run.
     
@@ -994,7 +1000,7 @@ def get_taskchain_run_nodes():
 
 
 @bp.route("/taskchain-dag", methods=["GET"])
-@flask_access_validation(required_scope="read")
+@flask_access_validation(required_scope="admin")
 def get_taskchain_dag():
     """Get DAG structure for a task chain.
     
@@ -1573,7 +1579,7 @@ def get_taskchain_dag():
 
 
 @bp.route("/taskchain-schedules", methods=["GET"])
-@flask_access_validation(required_scope="read")
+@flask_access_validation(required_scope="admin")
 def get_taskchain_schedules():
     """Return native DSP task chain schedules.
 
@@ -1594,7 +1600,7 @@ def get_taskchain_schedules():
     so that the UI can render gracefully.
     """
     from flask import current_app
-    from datetime import date, datetime as _dt
+    from datetime import date, datetime as _dt, timezone as _utc
 
     view_name = os.environ.get("DSP_SCHEDULES_VIEW", "ORCHESTRATION.3VR_DWC_TASK_SCHEDULES_01")
 
@@ -1684,7 +1690,7 @@ def get_taskchain_schedules():
                 tz = ZoneInfo(tz_name) if tz_name else ZoneInfo("UTC")
             except Exception:
                 tz = None
-            now = _dt.now(tz) if tz else _dt.utcnow()
+            now = _dt.now(tz) if tz else _dt.now(_utc)
             expr = str(cron_expr).strip()
             # DSP sometimes uses 6-field cron (seconds first: "0 0 6 * * *").
             # croniter expects 5 fields — strip the leading seconds field.
@@ -1721,21 +1727,33 @@ def get_taskchain_schedules():
             return None
         try:
             from datetime import timedelta as _td, timezone as _utc
+            from dateutil.relativedelta import relativedelta as _rd
             # Normalise the ISO string (remove trailing .000 before Z)
             start_str_clean = start_str.replace(".000Z", "+00:00").replace("Z", "+00:00")
             start_dt = _dt.fromisoformat(start_str_clean)
             now = _dt.now(_utc.utc)
             if freq_type in ("DAILY", "DAY", "DAYS"):
                 delta = _td(days=interval_val)
+                nxt = start_dt
+                while nxt <= now:
+                    nxt += delta
             elif freq_type in ("WEEKLY", "WEEK", "WEEKS"):
                 delta = _td(weeks=interval_val)
+                nxt = start_dt
+                while nxt <= now:
+                    nxt += delta
             elif freq_type in ("MONTHLY", "MONTH", "MONTHS"):
-                delta = _td(days=30 * interval_val)
+                # Recompute from the original start_dt each step (not nxt += relativedelta
+                # in a loop) so the day-of-month doesn't progressively clamp downward once
+                # a short month (e.g. February) is crossed - e.g. a schedule starting Jan 31
+                # should land on Mar 31 / Apr 30, not get stuck on the 28th forever.
+                n = 1
+                nxt = start_dt + _rd(months=interval_val * n)
+                while nxt <= now:
+                    n += 1
+                    nxt = start_dt + _rd(months=interval_val * n)
             else:
                 return None
-            nxt = start_dt
-            while nxt <= now:
-                nxt += delta
             return nxt.isoformat()
         except Exception:
             return None
@@ -1761,7 +1779,7 @@ def get_taskchain_schedules():
             time_parts = str(at_time).strip().split(":")
             run_hour = int(time_parts[0])
             run_min = int(time_parts[1]) if len(time_parts) > 1 else 0
-            now = _dt.now(tz) if tz else _dt.utcnow()
+            now = _dt.now(tz) if tz else _dt.now(_utc)
             # Start candidate at today at the run time
             candidate = now.replace(hour=run_hour, minute=run_min, second=0, microsecond=0)
             delta_days = int(interval or 1)
@@ -1772,9 +1790,9 @@ def get_taskchain_schedules():
                 if candidate <= now:
                     candidate = candidate + __import__("datetime").timedelta(weeks=delta_days)
             elif freq_upper in ("MONTHLY", "MONTH", "MONTHS", "M"):
-                # Approximate: add 30 days per interval
                 if candidate <= now:
-                    candidate = candidate + __import__("datetime").timedelta(days=30 * delta_days)
+                    from dateutil.relativedelta import relativedelta as _rd2
+                    candidate = candidate + _rd2(months=delta_days)
             else:
                 return None
             return candidate.isoformat()
@@ -1833,7 +1851,7 @@ def get_taskchain_schedules():
 
 
 @bp.route("/taskchain-steps", methods=["GET"])
-@flask_access_validation(required_scope="read")
+@flask_access_validation(required_scope="admin")
 def get_taskchain_steps():
     """Return the distinct steps (objectId + businessName) for a task chain.
 
@@ -2089,7 +2107,7 @@ def get_taskchain_steps():
 
 
 @bp.route("/taskchain-runs", methods=["GET", "POST"])
-@flask_access_validation(required_scope="read")
+@flask_access_validation(required_scope="admin")
 def get_taskchain_runs():
     """Get recent task chain execution runs from DSP.
     
@@ -2223,7 +2241,7 @@ def delete_data_physical():
 
 
 @bp.route("/task-global-vars", methods=["GET"])
-@flask_access_validation(required_scope="read")
+@flask_access_validation(required_scope="admin")
 def get_task_global_vars():
     """Return global variable definitions ($G_*) for a DSP task.
 
