@@ -1250,8 +1250,9 @@ sap.ui.define([
                     that._updateSummary();
                     that._applyPastFilter();
                     if (aSaved.length) {
-                        // Delete from server + cancel APScheduler jobs in background
-                        that._cancelSchedulerJobs(aSaved).catch(function () {});
+                        // Deleting the ScheduleEntry row is enough on its own: the
+                        // CAP layer's before/after DELETE hooks already clean up
+                        // any linked external Job Scheduling service schedule.
                         that._deleteEntriesByIds(aIds).catch(function (err) {
                             console.warn("[Scheduler] delete all failed:", err && err.message);
                         });
@@ -1272,23 +1273,6 @@ sap.ui.define([
                 });
             });
             return Promise.all(aPromises);
-        },
-
-        _cancelSchedulerJobs: function (aEntries) {
-            var that = this;
-            var d = this._editModel.getData();
-            var sSpace = d.spaceId;
-            var sChain = d.taskchain;
-            if (!sSpace || !sChain) return Promise.resolve();
-            var aFuture = (aEntries || []).filter(function (e) { return !e.isPast; });
-            return Promise.all(aFuture.map(function (e) {
-                var sRunAt = e.date + "T" + (e.rawTime || "00:00") + ":00";
-                return fetch(that._getApiBase() + "scheduler/schedule-once", {
-                    method: "DELETE",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ spaceId: sSpace, taskchain: sChain, runAt: sRunAt })
-                }).catch(function () {});
-            }));
         },
 
         onRemoveCalendarEntry: function (oEvt) {
@@ -1315,7 +1299,6 @@ sap.ui.define([
                     var oList = oModel.bindList("/ScheduleEntry", undefined, undefined, [
                         new Filter("ID", FilterOperator.EQ, o.ID)
                     ]);
-                    that._cancelSchedulerJobs([o]).catch(function () {});
                     oList.requestContexts(0, 1).then(function (aCtx) {
                         if (!aCtx.length) return;
                         return aCtx[0].delete();

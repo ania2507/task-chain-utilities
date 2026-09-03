@@ -1095,41 +1095,9 @@ sap.ui.define([
             this._openKindDialog();
         },
 
-        // ------------------------------------------------------------
-        // On Demand dialog: choose Run Now / Run At + step parameters
-        // ------------------------------------------------------------
-        _openOnDemandDialog: function () {
-            var oView = this.getView();
-            if (!this._pOnDemandDialog) {
-                this._pOnDemandDialog = Fragment.load({
-                    id: oView.getId(),
-                    name: "scheduler.view.fragments.OnDemandDialog",
-                    controller: this
-                }).then(function (oDialog) {
-                    oView.addDependent(oDialog);
-                    oDialog.setModel(this._editModel, "edit");
-                    return oDialog;
-                }.bind(this)).catch(function (e) {
-                    console.error("[Scheduler] OnDemandDialog load failed", e);
-                    MessageToast.show("OnDemandDialog load failed: " + (e && e.message || e));
-                });
-            } else {
-                this._pOnDemandDialog.then(function (oDialog) {
-                    oDialog.setModel(this._editModel, "edit");
-                }.bind(this));
-            }
-            this._pOnDemandDialog.then(function (oDialog) { oDialog.open(); });
-        },
-
-        onCloseOnDemandDialog: function () {
-            if (this._pOnDemandDialog) this._pOnDemandDialog.then(function (d) { d.close(); });
-            this._pendingRow = null;
-        },
-
         onConfigureStepParameters: function () {
             var d = this._editModel.getData();
-            // Close any open dialog (OnDemand/CustomCalendar) before navigating away
-            if (this._pOnDemandDialog) this._pOnDemandDialog.then(function (x) { x.close(); });
+            // Close any open dialog (CustomCalendar) before navigating away
             if (this._pCustomCalendarDialog) this._pCustomCalendarDialog.then(function (x) { x.close(); });
             this.getRouter().navTo("stepParameters", {
                 "?query": {
@@ -1145,54 +1113,6 @@ sap.ui.define([
 
         onCloseStepParameters: function () {
             if (this._pStepDialog) this._pStepDialog.then(function (d) { d.close(); });
-        },
-
-        onConfirmOnDemand: function () {
-            var d = this._editModel.getData();
-            var row = this._pendingRow;
-            if (!row) { this.onCloseOnDemandDialog(); return; }
-
-            var parameters = null;
-            if (d.parameters && String(d.parameters).trim()) {
-                try { parameters = JSON.parse(d.parameters); }
-                catch (e) { this.error("Step parameters must be valid JSON: " + e.message); return; }
-            }
-
-            var payload = {
-                spaceId: d.spaceId,
-                taskchain: d.taskchain,
-                parameters: parameters
-            };
-
-            if (d.onDemandModeIndex === 0) {
-                this.callScheduler("/run-now-adhoc", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                }).then(function () {
-                    this.toast(this.i18n("msg.runTriggered", [d.name || d.taskchain]));
-                    this.onCloseOnDemandDialog();
-                }.bind(this)).catch(function (err) {
-                    this.error(err.message || String(err));
-                }.bind(this));
-            } else {
-                if (!d.onDemandDate || !d.onDemandTime) {
-                    this.error("Please choose date and time");
-                    return;
-                }
-                payload.runAt = d.onDemandDate + "T" + d.onDemandTime + ":00";
-                this.callScheduler("/schedule-once", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                }).then(function () {
-                    this.toast(this.i18n("msg.created", [d.name || d.taskchain]));
-                    this.onCloseOnDemandDialog();
-                    this._refreshSchedulesForRows();
-                }.bind(this)).catch(function (err) {
-                    this.error(err.message || String(err));
-                }.bind(this));
-            }
         },
 
         // ------------------------------------------------------------
@@ -1448,6 +1368,7 @@ sap.ui.define([
             this._editModel.setProperty("/entryTime", "04:00");
             this._editModel.setProperty("/entryActive", true);
             this._editModel.setProperty("/entryParameters", "");
+            this._editModel.setProperty("/busy", false);
             this._openCalendarEntryDialog();
         },
 
@@ -1461,6 +1382,7 @@ sap.ui.define([
             this._editModel.setProperty("/entryTime", o.rawTime || (o.time || "").replace(/\s*CET.*$/i, ""));
             this._editModel.setProperty("/entryActive", !!o.active);
             this._editModel.setProperty("/entryParameters", o.parameters || "");
+            this._editModel.setProperty("/busy", false);
             this._openCalendarEntryDialog();
         },
 
@@ -1505,6 +1427,7 @@ sap.ui.define([
             }
             var oModel = this.getModel();
             var that = this;
+            this._editModel.setProperty("/busy", true);
             if (this._editingEntryId) {
                 // Update via deep-binding path
                 var oList = oModel.bindList("/ScheduleEntry", undefined, undefined, [
@@ -1519,9 +1442,11 @@ sap.ui.define([
                     oCtx.setProperty("parameters", d.entryParameters || "");
                     return oModel.submitBatch(oModel.getUpdateGroupId());
                 }).then(function () {
+                    that._editModel.setProperty("/busy", false);
                     that.onCloseCalendarEntryDialog();
                     that._loadCalendarEntries();
                 }).catch(function (err) {
+                    that._editModel.setProperty("/busy", false);
                     that.error(err.message || String(err));
                 });
             } else {
@@ -1536,9 +1461,11 @@ sap.ui.define([
                     parameters: d.entryParameters || ""
                 });
                 oCtx2.created().then(function () {
+                    that._editModel.setProperty("/busy", false);
                     that.onCloseCalendarEntryDialog();
                     that._loadCalendarEntries();
                 }).catch(function (err) {
+                    that._editModel.setProperty("/busy", false);
                     that.error(err.message || String(err));
                 });
             }
@@ -1616,31 +1543,13 @@ sap.ui.define([
                 this.error("No active entries to schedule");
                 return;
             }
-            var that = this;
-            var aPromises = aEntries.map(function (e) {
-                var params = null;
-                if (e.parameters && String(e.parameters).trim()) {
-                    try { params = JSON.parse(e.parameters); } catch (_) { params = null; }
-                }
-                var payload = {
-                    spaceId: d.spaceId,
-                    taskchain: d.taskchain,
-                    runAt: e.date + "T" + (e.rawTime || (e.time || "").replace(/\s*CET.*$/i, "")) + ":00",
-                    parameters: params
-                };
-                return that.callScheduler("/schedule-once", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                });
-            });
-            Promise.all(aPromises).then(function () {
-                that.toast(aEntries.length + " calendar entries scheduled for " + (d.name || d.taskchain));
-                that.onCloseCustomCalendarDialog();
-                that._refreshSchedulesForRows();
-            }).catch(function (err) {
-                that.error(err.message || String(err));
-            });
+            // Nothing left to register: _persistCalendarEntries() already wrote
+            // each row on upload (see onCalendarFileSelect), and the CAP layer
+            // schedules it from there. Calling /schedule-once here too would
+            // double-register the same fires.
+            this.toast(aEntries.length + " calendar entries scheduled for " + (d.name || d.taskchain));
+            this.onCloseCustomCalendarDialog();
+            this._refreshSchedulesForRows();
         },
 
         _openNewScheduleForRow: function (row, sKind) {

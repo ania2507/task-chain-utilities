@@ -1,8 +1,9 @@
-"""Scheduler service - APScheduler-based orchestrator for one-shot date triggers.
+"""Scheduler service - orchestrates one-shot date triggers, delegating to SAP
+Job Scheduling service when configured, or an in-process scheduler otherwise.
 
 Loads active ScheduleEntry rows from the HDI container at startup and registers
-one APScheduler date job per entry.  Each job, when fired, dispatches to the
-DSP executor and writes a ScheduleRun record.
+one job per entry. Each job, when fired, dispatches to the DSP executor and
+writes a ScheduleRun record.
 
 The CAP layer notifies us via POST /v1/scheduler/sync whenever ScheduleEntry
 rows change, so we re-read the table and rebuild the job set.
@@ -29,12 +30,23 @@ except Exception:
     ZoneInfo = None  # type: ignore
 
 from ..repository.schedule_repository import ScheduleRepository
+from ..integrations.jobscheduler import JobSchedulerClient
 
 logger = logging.getLogger(__name__)
 
+# Names of the two SAP Job Scheduling service "Jobs" this app owns (each Job
+# groups one or more per-row Schedules under a single action endpoint). Only
+# used when a JobSchedulerClient is configured - see __init__.
+# No hyphens - the service rejects job names with "Invalid Job Name -
+# Unallowed characters" (confirmed against the live service; only
+# alphanumeric/underscore names are accepted).
+_JS_JOB_NAME_ENTRY = "taskchain_calendar_entry"
+_JS_JOB_NAME_TRAFFIC_LIGHT = "taskchain_traffic_light_check"
+_JS_CALLBACK_PATH = "/v1/scheduler/jobscheduler-callback"
+
 
 class SchedulerService:
-    """APScheduler facade for taskchain scheduling."""
+    """Scheduling facade for taskchain runs."""
 
     def __init__(
         self,
@@ -42,12 +54,23 @@ class SchedulerService:
         taskchain_executor=None,
         job_executor=None,
         db_query_executor=None,
+        job_scheduler_client: Optional[JobSchedulerClient] = None,
+        callback_base_url: Optional[str] = None,
     ):
         self._repo = repo
         self._tc_exec = taskchain_executor
         self._job_exec = job_executor
         self._db_query = db_query_executor
         self._lock = threading.Lock()
+
+        # When set, calendar entries and traffic-light checks are delegated to
+        # SAP Job Scheduling service instead of the in-process scheduler (see
+        # _register_entries()/_register_traffic_light_schedules()). The 60s
+        # completion polling always stays in-process: the service's 5-min
+        # minimum granularity can't cover it.
+        self._job_scheduler = job_scheduler_client
+        self._callback_base_url = (callback_base_url or "").rstrip("/")
+        self._js_job_ids: Dict[str, int] = {}
 
         # Per-(spaceId, taskchain) in-memory queueing: prevents two scheduled
         # fires of the SAME task chain from launching concurrently in DSP.
@@ -56,7 +79,7 @@ class SchedulerService:
         # instead of launching immediately; it's dequeued and launched once
         # the running execution reaches a terminal state (see _fire/_advance_
         # taskchain_queue). In-memory only — lost on a py-srv restart, same
-        # limitation as the rest of the APScheduler job store.
+        # limitation as the rest of the in-process job store.
         self._queue_lock = threading.Lock()
         self._running_taskchains: set = set()
         self._pending_queue: Dict[str, List[Dict[str, Any]]] = {}
@@ -72,7 +95,7 @@ class SchedulerService:
 
     # ------------------------------------------------------------------
     def sync(self) -> Dict[str, Any]:
-        """Reload CalendarEntry + Schedule rows and (re)build APScheduler jobs.
+        """Reload CalendarEntry + Schedule rows and (re)build the job set.
 
         Deliberately non-destructive: a job is only removed here if its backing
         DB row was deleted or deactivated. It is never removed just because its
@@ -115,11 +138,92 @@ class SchedulerService:
                 except Exception:
                     pass
 
+            # Clean up external schedules whose row was deactivated since the
+            # last sync - list_active_entries()/list_active_schedules() above
+            # only return active rows, so this is the only pass that sees them.
+            if self._job_scheduler:
+                self._prune_orphaned_job_scheduler_entries(valid_entry_ids)
+                self._prune_orphaned_job_scheduler_schedules(valid_tl_ids)
+
             logger.info("Scheduler sync complete: %d calendar entries, %d traffic light schedules", loaded, loaded_tl)
             return {"status": "ok", "loaded": loaded, "loaded_traffic_lights": loaded_tl, "errors": errors}
 
+    def _prune_orphaned_job_scheduler_entries(self, valid_entry_ids: Optional[set]) -> None:
+        if valid_entry_ids is None:
+            return  # registration failed this round - see sync()'s comment above
+        try:
+            job_id = self._ensure_js_job(_JS_JOB_NAME_ENTRY)
+        except Exception:
+            logger.exception("Could not resolve Job Scheduling service job for entries; skipping prune")
+            return
+        for row in self._repo.list_entries_with_job_scheduler_id():
+            job_key = f"entry::{row['ID']}"
+            if job_key in valid_entry_ids:
+                continue
+            self._job_scheduler.delete_schedule(job_id, row["JOBSCHEDULERSCHEDULEID"])
+            self._repo.set_entry_job_scheduler_id(row["ID"], None)
+
+    def _prune_orphaned_job_scheduler_schedules(self, valid_tl_ids: Optional[set]) -> None:
+        if valid_tl_ids is None:
+            return
+        try:
+            job_id = self._ensure_js_job(_JS_JOB_NAME_TRAFFIC_LIGHT)
+        except Exception:
+            logger.exception("Could not resolve Job Scheduling service job for traffic lights; skipping prune")
+            return
+        for row in self._repo.list_schedules_with_job_scheduler_id():
+            job_key = f"tl::{row['ID']}"
+            if job_key in valid_tl_ids:
+                continue
+            self._job_scheduler.delete_schedule(job_id, row["JOBSCHEDULERSCHEDULEID"])
+            self._repo.set_schedule_job_scheduler_id(row["ID"], None)
+
+    def delete_external_schedule(self, kind: str, schedule_id: str) -> None:
+        """Delete one SAP Job Scheduling service schedule immediately, by ID.
+
+        Used when a ScheduleEntry/Schedule row is hard-deleted on the CAP side:
+        once the row is gone, sync()'s reconciliation pass has no row left to
+        read jobSchedulerScheduleId from, so it can never discover and clean up
+        that external schedule on its own - the delete has to be told about it
+        explicitly, before the row disappears. No-op if the Job Scheduling
+        service isn't configured (nothing external to delete) or `schedule_id`
+        is falsy.
+        """
+        if not self._job_scheduler or not schedule_id:
+            return
+        job_name = _JS_JOB_NAME_ENTRY if kind == "entry" else _JS_JOB_NAME_TRAFFIC_LIGHT
+        try:
+            job_id = self._ensure_js_job(job_name)
+            self._job_scheduler.delete_schedule(job_id, schedule_id)
+        except Exception:
+            logger.exception(
+                "delete_external_schedule failed (kind=%s, schedule_id=%s)", kind, schedule_id
+            )
+
+    def _ensure_js_job(self, name: str) -> int:
+        """Resolve (and cache) the SAP Job Scheduling service jobId for `name`,
+        creating the Job on first use. Raises if the client isn't configured or
+        the app's own callback base URL couldn't be determined."""
+        cached = self._js_job_ids.get(name)
+        if cached is not None:
+            return cached
+        if not self._callback_base_url:
+            raise RuntimeError(
+                "Job Scheduling service client is configured but no callback base URL "
+                "was provided (VCAP_APPLICATION application_uris missing?)"
+            )
+        action_url = f"{self._callback_base_url}{_JS_CALLBACK_PATH}"
+        job_id = self._job_scheduler.find_or_create_job(
+            name=name,
+            description=f"task-chain-utilities: {name}",
+            action_url=action_url,
+            http_method="POST",
+        )
+        self._js_job_ids[name] = job_id
+        return job_id
+
     def _register_entries(self) -> tuple[int, set]:
-        """Register one-shot APScheduler jobs for active ScheduleEntry rows.
+        """Register one-shot jobs for active ScheduleEntry rows.
 
         Returns (count actually (re)scheduled, set of job IDs for every row
         that's still a legitimate active entry — including ones whose time
@@ -167,15 +271,40 @@ class SchedulerService:
                     "parameters": json.dumps(params) if params else None,
                     "details": e.get("details"),
                 }
-                self._scheduler.add_job(
-                    self._fire,
-                    trigger="date",
-                    run_date=run_at,
-                    id=job_id,
-                    kwargs={"entry_id": entry_id, "manual": False, "entry": sch},
-                    replace_existing=True,
-                    misfire_grace_time=300,
-                )
+
+                if self._job_scheduler:
+                    # Already delegated to the external service on a prior sync -
+                    # leave it alone rather than churn a fresh schedule on every
+                    # sync() call. If the row's date/time was edited after the
+                    # external schedule was created, the edit path is responsible
+                    # for clearing jobSchedulerScheduleId to force recreation here.
+                    if not e.get("jobSchedulerScheduleId"):
+                        js_job_id = self._ensure_js_job(_JS_JOB_NAME_ENTRY)
+                        schedule_id = self._job_scheduler.create_schedule(
+                            js_job_id,
+                            description=(
+                                f"{taskchain} @ {space_id} ({entry_id})"
+                                + (f" - {e['details']}" if e.get("details") else "")
+                            ),
+                            data={"kind": "entry", "entry_id": entry_id, "entry": sch},
+                            # isoformat(), not strftime() - the service expects
+                            # ISO-8601 with an explicit UTC offset to disambiguate
+                            # the timezone; a bare "%Y-%m-%d %H:%M:%S" would print
+                            # run_at's local wall-clock time with no way to tell
+                            # the service which zone that's in.
+                            time_=run_at.isoformat(),
+                        )
+                        self._repo.set_entry_job_scheduler_id(entry_id, schedule_id)
+                else:
+                    self._scheduler.add_job(
+                        self._fire,
+                        trigger="date",
+                        run_date=run_at,
+                        id=job_id,
+                        kwargs={"entry_id": entry_id, "manual": False, "entry": sch},
+                        replace_existing=True,
+                        misfire_grace_time=300,
+                    )
                 count += 1
             except Exception:
                 logger.exception("Failed to register schedule entry %s", e.get("ID"))
@@ -217,16 +346,56 @@ class SchedulerService:
 
                 job_id = f"tl::{s['ID']}"
                 valid_ids.add(job_id)
-                self._scheduler.add_job(
-                    self._fire_traffic_light,
-                    trigger="interval",
-                    minutes=check_interval_min,
-                    timezone=tz,
-                    id=job_id,
-                    kwargs={"schedule": s},
-                    replace_existing=True,
-                    misfire_grace_time=300,
-                )
+
+                if self._job_scheduler:
+                    # See _register_entries() for why an already-linked row is
+                    # left untouched here instead of recreated on every sync().
+                    if not s.get("jobSchedulerScheduleId"):
+                        js_check_interval = check_interval_min
+                        if js_check_interval < 5:
+                            logger.warning(
+                                "Traffic light schedule %s requests a %d-minute check "
+                                "interval; SAP Job Scheduling service standard plan has a "
+                                "5-minute minimum, clamping to 5.", s["ID"], js_check_interval,
+                            )
+                            js_check_interval = 5
+                        js_job_id = self._ensure_js_job(_JS_JOB_NAME_TRAFFIC_LIGHT)
+                        schedule_id = self._job_scheduler.create_schedule(
+                            js_job_id,
+                            description=(
+                                f"{taskchain} @ {space_id} ({s['ID']})"
+                                + (f" - {s['description']}" if s.get("description") else "")
+                            ),
+                            # _fire_traffic_light() only reads ID/spaceId/taskchain/
+                            # isActive/parameters from `schedule` - send just those
+                            # instead of the raw repo row `s`, which can carry
+                            # non-JSON-serializable datetime values in nextRunAt/
+                            # lastRunAt (fine as in-process job kwargs, not fine
+                            # over HTTP).
+                            data={
+                                "kind": "traffic_light",
+                                "schedule": {
+                                    "ID": s.get("ID"),
+                                    "spaceId": s.get("spaceId"),
+                                    "taskchain": s.get("taskchain"),
+                                    "isActive": s.get("isActive"),
+                                    "parameters": s.get("parameters"),
+                                },
+                            },
+                            repeat_interval=f"{js_check_interval} minutes",
+                        )
+                        self._repo.set_schedule_job_scheduler_id(s["ID"], schedule_id)
+                else:
+                    self._scheduler.add_job(
+                        self._fire_traffic_light,
+                        trigger="interval",
+                        minutes=check_interval_min,
+                        timezone=tz,
+                        id=job_id,
+                        kwargs={"schedule": s},
+                        replace_existing=True,
+                        misfire_grace_time=300,
+                    )
                 count += 1
             except Exception:
                 logger.exception("Failed to register traffic light schedule %s", s.get("ID"))
@@ -448,6 +617,15 @@ class SchedulerService:
           job is removed and the Schedule row is deleted).
         """
         if not auto_reset:
+            # Fetch the external schedule id *before* deleting the row - this
+            # delete happens straight from py-srv (not through the CAP layer),
+            # so the before/after DELETE hooks in srv/schedules.js never fire
+            # here and would otherwise leave the Job Scheduling service
+            # schedule orphaned, ticking forever.
+            if self._job_scheduler:
+                js_schedule_id = self._repo.get_schedule_job_scheduler_id(schedule_id)
+                if js_schedule_id:
+                    self.delete_external_schedule("traffic_light", js_schedule_id)
             try:
                 self._repo.delete_schedule(schedule_id)
             except Exception:
@@ -468,8 +646,8 @@ class SchedulerService:
     def run_now(self, schedule_id: str, schedule_payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Immediately fire a Traffic Lights schedule, bypassing the semaphore check.
 
-        Looks up the Schedule row by ID (from the in-memory APScheduler job kwargs
-        if available, or from the provided payload), then calls _fire_traffic_light
+        Looks up the Schedule row by ID (from the in-memory job kwargs if
+        available, or from the provided payload), then calls _fire_traffic_light
         with semaphore check disabled so the chain fires regardless of current status.
         """
         schedule: Optional[Dict[str, Any]] = schedule_payload
@@ -515,43 +693,6 @@ class SchedulerService:
             "details": details,
         }
         return self._fire(entry_id=entry["ID"], manual=True, entry=entry)
-
-    # ------------------------------------------------------------------
-    def schedule_once(self, space_id: str, taskchain: str, run_at_iso: str,
-                      parameters: Optional[Dict[str, Any]] = None,
-                      tz: str = "Europe/Rome",
-                      details: Optional[str] = None) -> Dict[str, Any]:
-        """Register a one-shot APScheduler job at the given local datetime."""
-        if not self._scheduler:
-            raise RuntimeError("Scheduler is disabled (APScheduler not installed)")
-        try:
-            run_at = datetime.fromisoformat(run_at_iso)
-        except Exception as e:
-            raise ValueError(f"Invalid runAt '{run_at_iso}': {e}")
-        if run_at.tzinfo is None and ZoneInfo:
-            run_at = run_at.replace(tzinfo=ZoneInfo(tz))
-
-        entry_id = f"once::{space_id}::{taskchain}::{run_at.isoformat()}"
-        job_id = f"entry::{entry_id}"
-        entry = {
-            "ID": entry_id,
-            "targetType": "DSP",
-            "spaceId": space_id,
-            "taskchain": taskchain,
-            "parameters": json.dumps(parameters) if parameters else None,
-            "details": details,
-        }
-
-        self._scheduler.add_job(
-            self._fire,
-            trigger="date",
-            run_date=run_at,
-            id=job_id,
-            kwargs={"entry_id": entry_id, "manual": False, "entry": entry},
-            replace_existing=True,
-            misfire_grace_time=300,
-        )
-        return {"status": "scheduled", "job_id": job_id, "run_at": run_at.isoformat()}
 
     # ------------------------------------------------------------------
     def _fire(self, entry_id: str, manual: bool = False, entry: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

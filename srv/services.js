@@ -5,7 +5,7 @@ module.exports = cds.service.impl(async function () {
     const { RuleTable, RuleTaskchainLink, Taskchain, TaskchainStep, TaskchainSpace, SkipOverride } = this.entities;
 
     // schedules.js was never wired up before — its ScheduleEntry/Schedule
-    // after-CRUD handlers (which notify py-srv to resync APScheduler jobs)
+    // after-CRUD handlers (which notify py-srv to resync scheduled jobs)
     // exported a `function(srv)` but nothing ever called it with a live
     // service instance, so the whole notify-on-save mechanism was dead code.
     registerScheduleHandlers(this);

@@ -58,6 +58,11 @@ entity ScheduleEntry : cuid, managed {
   details     : LargeString  @title: 'Details'; // free-text notes, e.g. filters applied
   source      : String(20)   default 'calendar' @title: 'Source'; // 'calendar' | 'onDemand'
   runs        : Association to many ScheduleRun on runs.scheduleEntry = $self;
+  // ID of the corresponding schedule on SAP Job Scheduling service (when the
+  // fire is delegated to that service instead of the in-process scheduler).
+  // Needed to update/delete the external schedule when this row changes.
+  // Null when the Job Scheduling service isn't configured (in-process fallback).
+  jobSchedulerScheduleId : String(100) @title: 'Job Scheduler Schedule ID';
 }
 
 /**
@@ -82,6 +87,9 @@ entity Schedule : cuid, managed {
   nextRunAt      : Timestamp    @title: 'Next Run At';
   lastRunAt      : Timestamp    @title: 'Last Run At';
   lastRunStatus  : String(20)   @title: 'Last Run Status'; // triggered|skipped|error
+  // ID of the corresponding schedule on SAP Job Scheduling service (see
+  // ScheduleEntry.jobSchedulerScheduleId for the same mechanism).
+  jobSchedulerScheduleId : String(100) @title: 'Job Scheduler Schedule ID';
 }
 
 /**

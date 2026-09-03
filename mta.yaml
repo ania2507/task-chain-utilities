@@ -163,6 +163,7 @@ modules:
   - name: task-chain-utilities-db
   - name: task-chain-utilities-destination
   - name: cross-container-service-1
+  - name: task-chain-utilities-jobscheduler
   provides:
   - name: py-srv-api
     properties:
@@ -171,7 +172,7 @@ modules:
     buildpacks:
     - nodejs_buildpack
     - python_buildpack
-    command: python app.py
+    command: gunicorn --workers 1 --bind 0.0.0.0:$PORT app:app
     disk-quota: 1024M
     memory: 512M
   build-parameters:
@@ -190,6 +191,9 @@ modules:
     - .env
     - .git/
     - '*.log'
+    - tests/
+    - conftest.py
+    - .pytest_cache/
 - name: task-chain-utilities
   type: approuter.nodejs
   path: app/router
@@ -275,6 +279,10 @@ resources:
     service-name: dsp-hana
   properties:
     the-service-name: ${service-name}
+- name: task-chain-utilities-jobscheduler
+  type: org.cloudfoundry.existing-service
+  parameters:
+    service-name: CF_JobScheduling
 parameters:
   deploy_mode: html5-repo
   enable-parallel-deployments: true

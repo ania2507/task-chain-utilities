@@ -1,7 +1,7 @@
 /**
  * Handlers for CalendarEntry / Schedule / ScheduleRun.
  *
- * The scheduling engine lives in py-srv (APScheduler).  Whenever a
+ * The scheduling engine lives in py-srv. Whenever a
  * CalendarEntry or Schedule is created / updated / deleted we POST to
  * /v1/scheduler/sync so py-srv reloads the active jobs.
  */
@@ -40,7 +40,7 @@ module.exports = function (srv) {
     const { ScheduleEntry, Schedule } = srv.entities;
 
     // Resync after any persistence-affecting event. py-srv holds the actual
-    // APScheduler jobs in memory — if this notification is lost (e.g. py-srv
+    // jobs in memory — if this notification is lost (e.g. py-srv
     // mid-restart during a deploy), the CRUD still succeeds but the entry
     // silently never gets (re-)scheduled. Retry a few times with a short
     // backoff before giving up, since these outages are typically seconds-long.
@@ -84,4 +84,87 @@ module.exports = function (srv) {
 
     srv.after(['CREATE', 'UPDATE', 'DELETE'], ScheduleEntry, notifySyncAfterCommit);
     srv.after(['CREATE', 'UPDATE', 'DELETE'], Schedule, notifySyncAfterCommit);
+
+    // --- SAP Job Scheduling service bookkeeping ------------------------
+    //
+    // When py-srv delegates a row's firing to SAP Job Scheduling service
+    // (see scheduler_service.py), it stamps jobSchedulerScheduleId on that
+    // row and, from then on, leaves an already-linked row alone on sync() —
+    // recreating the external schedule on every sync would burn API calls
+    // and rate limits for no reason. That means an edit made here has to
+    // proactively force recreation, and a hard delete has to proactively
+    // tell py-srv to remove the now-orphaned external schedule, since once
+    // the row is gone py-srv's own reconciliation has no row left to read
+    // jobSchedulerScheduleId from.
+
+    // Capture the row's current jobSchedulerScheduleId before it's overwritten
+    // (UPDATE) or removed (DELETE) — afterwards there's no row left to read
+    // the *old* id from. The row's other columns are never at risk here: CAP's
+    // UPDATE is a partial merge (untouched columns keep their stored value),
+    // and py-srv always rebuilds the schedule from the current full row at
+    // sync() time — only the stale external scheduleId itself needs rescuing.
+    async function captureJobSchedulerId(Entity, req) {
+        try {
+            const row = await SELECT.one.from(Entity)
+                .columns('jobSchedulerScheduleId')
+                .where({ ID: req.data.ID });
+            req._jobSchedulerScheduleId = row && row.jobSchedulerScheduleId;
+        } catch (e) {
+            console.warn('[scheduler] failed to read jobSchedulerScheduleId before write:', e.message);
+        }
+    }
+
+    // Any update clears the link (after stashing the old id above) so the
+    // next sync() recreates the external schedule with fresh data, regardless
+    // of which field was actually edited.
+    async function captureThenClearJobSchedulerId(Entity, req) {
+        await captureJobSchedulerId(Entity, req);
+        req.data.jobSchedulerScheduleId = null;
+    }
+    srv.before('UPDATE', ScheduleEntry, (req) => captureThenClearJobSchedulerId(ScheduleEntry, req));
+    srv.before('UPDATE', Schedule, (req) => captureThenClearJobSchedulerId(Schedule, req));
+
+    srv.before('DELETE', ScheduleEntry, (req) => captureJobSchedulerId(ScheduleEntry, req));
+    srv.before('DELETE', Schedule, (req) => captureJobSchedulerId(Schedule, req));
+
+    async function notifyExternalDelete(kind, scheduleId, req) {
+        if (!scheduleId) return;
+        const auth = getAuthHeader(req);
+        const headers = auth ? { Authorization: auth } : {};
+        try {
+            await callPy('/v1/scheduler/jobscheduler-delete', 'POST', { kind, scheduleId }, headers);
+        } catch (e) {
+            console.warn(`[scheduler] jobscheduler-delete notification failed (kind=${kind}):`, e.message);
+        }
+    }
+    srv.after('DELETE', ScheduleEntry, (_data, req) => {
+        // Braces, no return: unlike notifySync above, notifyExternalDelete's
+        // own promise must NOT be returned here. CAP's context.emit() awaits
+        // every 'succeeded' listener's return value before responding to the
+        // client (see @sap/cds lib/req/context.js) - an implicit-return arrow
+        // (`() => fn()`) hands that promise back and makes the client wait on
+        // this network round-trip; a braced body returns undefined instead,
+        // keeping this truly fire-and-forget.
+        req.on('succeeded', () => { notifyExternalDelete('entry', req._jobSchedulerScheduleId, req); });
+    });
+    srv.after('DELETE', Schedule, (_data, req) => {
+        req.on('succeeded', () => { notifyExternalDelete('traffic_light', req._jobSchedulerScheduleId, req); });
+    });
+
+    // Same cleanup on UPDATE: without this, the old external schedule (from
+    // before the edit) would never be deleted — just silently orphaned, since
+    // its id was already cleared from the row before py-srv ever saw it.
+    srv.after('UPDATE', ScheduleEntry, (_data, req) => {
+        // Braces, no return: unlike notifySync above, notifyExternalDelete's
+        // own promise must NOT be returned here. CAP's context.emit() awaits
+        // every 'succeeded' listener's return value before responding to the
+        // client (see @sap/cds lib/req/context.js) - an implicit-return arrow
+        // (`() => fn()`) hands that promise back and makes the client wait on
+        // this network round-trip; a braced body returns undefined instead,
+        // keeping this truly fire-and-forget.
+        req.on('succeeded', () => { notifyExternalDelete('entry', req._jobSchedulerScheduleId, req); });
+    });
+    srv.after('UPDATE', Schedule, (_data, req) => {
+        req.on('succeeded', () => { notifyExternalDelete('traffic_light', req._jobSchedulerScheduleId, req); });
+    });
 };

@@ -356,14 +356,9 @@ sap.ui.define([
                     that.toast(that.i18n("msg.created", [d.name || d.taskchain]));
                     clearStepParamsState();
                     that.onNavBack();
-                    // Fire scheduler registration in background — does not block navigation
-                    that.callScheduler("/schedule-once", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify(payload)
-                    }).catch(function (err) {
-                        console.warn("[OnDemand] scheduler /schedule-once failed:", err.message || err);
-                    });
+                    // No direct /schedule-once call: the ScheduleEntry row just
+                    // persisted above is enough - the CAP layer schedules it on
+                    // commit. Calling /schedule-once too would double-register it.
                 }).catch(function (err) {
                     that._editModel.setProperty("/busy", false);
                     that.error(err.message || String(err));

@@ -6,3 +6,4 @@ using from './model/taskchains';
 using from './model/skip_overrides';
 using from './model/monitoring';
 using from './model/schedules';
+using from './model/settings';

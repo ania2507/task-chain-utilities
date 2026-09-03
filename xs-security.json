@@ -4,7 +4,10 @@
   "scopes": [
     {
       "name": "$XSAPPNAME.admin",
-      "description": "Admin access to manage rules"
+      "description": "Admin access to manage rules",
+      "grant-as-authority-to-apps": [
+        "$XSSERVICENAME(CF_JobScheduling)"
+      ]
     }
   ],
   "attributes": [],

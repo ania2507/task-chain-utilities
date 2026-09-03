@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from flask import Flask
 
@@ -21,11 +21,14 @@ from .routes.jobs import bp as jobs_bp
 from .routes.meta import bp as meta_bp
 from .routes.rules import bp as rules_bp
 from .routes.scheduler import bp as scheduler_bp
+from .routes.settings import bp as settings_bp
 from .routes.tasks import bp as tasks_bp
 from .services import TaskchainExecutor, TaskchainRoutingService
 from .services.job_executor import JobExecutor
 from .services.scheduler_service import SchedulerService
 from .repository.schedule_repository import ScheduleRepository
+from .repository.app_settings_repository import AppSettingsRepository
+from .integrations.jobscheduler import JobSchedulerClient
 
 
 def _init_components() -> Tuple[Any, Any, RuleEngine, TaskchainRoutingService, TaskchainExecutor]:
@@ -58,6 +61,24 @@ def _init_components() -> Tuple[Any, Any, RuleEngine, TaskchainRoutingService, T
     routing_service = TaskchainRoutingService(repository, engine)
     taskchain_executor = TaskchainExecutor(db_query_executor)
     return repository, db_query_executor, engine, routing_service, taskchain_executor
+
+
+def _self_base_url() -> Optional[str]:
+    """Return this app's own public base URL (e.g. for SAP Job Scheduling
+    service callbacks), read from Cloud Foundry's VCAP_APPLICATION. None
+    locally / if not bound to CF."""
+    import json as _json
+
+    vcap_app = os.environ.get("VCAP_APPLICATION")
+    if not vcap_app:
+        return None
+    try:
+        uris = _json.loads(vcap_app).get("application_uris") or []
+    except Exception:
+        return None
+    if not uris:
+        return None
+    return f"https://{uris[0]}"
 
 
 def _init_job_executor() -> JobExecutor:
@@ -173,9 +194,16 @@ def create_app() -> Flask:
     repository, db_query_executor, engine, routing_service, taskchain_executor = _init_components()
     job_executor = _init_job_executor()
 
-    # Scheduler service (APScheduler).  Safe to instantiate even if DB/APS unavailable;
+    # Scheduler service. Safe to instantiate even if the DB is unavailable;
     # `sync()` will simply load zero jobs.
     schedule_repo = None
+    job_scheduler_client = JobSchedulerClient.from_env()
+    if job_scheduler_client and not _self_base_url():
+        logging.getLogger(__name__).warning(
+            "jobscheduler service bound but VCAP_APPLICATION.application_uris is "
+            "unavailable - falling back to the in-process scheduler for entries/traffic lights"
+        )
+        job_scheduler_client = None
     try:
         schedule_repo = ScheduleRepository()
         scheduler_service = SchedulerService(
@@ -183,6 +211,8 @@ def create_app() -> Flask:
             taskchain_executor=taskchain_executor,
             job_executor=job_executor,
             db_query_executor=db_query_executor,
+            job_scheduler_client=job_scheduler_client,
+            callback_base_url=_self_base_url(),
         )
         try:
             scheduler_service.sync()
@@ -201,6 +231,7 @@ def create_app() -> Flask:
         "job_executor": job_executor,
         "scheduler_service": scheduler_service,
         "schedule_repo": schedule_repo,
+        "app_settings_repo": AppSettingsRepository(),
     }
 
     app.register_blueprint(meta_bp)
@@ -212,5 +243,6 @@ def create_app() -> Flask:
     app.register_blueprint(db_bp, url_prefix="/v1/db")
     app.register_blueprint(dsp_bp, url_prefix="/v1/dsp")
     app.register_blueprint(scheduler_bp, url_prefix="/v1/scheduler")
+    app.register_blueprint(settings_bp, url_prefix="/v1/settings")
 
     return app

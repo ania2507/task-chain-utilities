@@ -294,6 +294,19 @@ def launch_job():
 
     executor = _get_executor()
 
+    # IBP job ownership is an environment property (one technical user per
+    # landscape, not per taskchain), so it's resolved here from the AppSetting
+    # table (key "IBP_JOB_USER") rather than hardcoded in each DSP API task's
+    # request body - keeps that JSON identical across DEV/PROD, and lets the
+    # value be corrected without a redeploy. Only overrides when a row is
+    # actually found, so a payload that already supplies job_user keeps
+    # working if the setting isn't configured.
+    if integration == "ibp":
+        settings_repo = current_app.extensions.get("taskchain", {}).get("app_settings_repo")
+        ibp_job_user = settings_repo.get("IBP_JOB_USER") if settings_repo else None
+        if ibp_job_user:
+            payload["job_user"] = ibp_job_user
+
     # If DSP's API task passes "taskchain" in the body, look up step params that
     # were registered when the scheduler triggered that task chain run and inject
     # them into the IBP launch as the "parameters" list (key/value → name/values).

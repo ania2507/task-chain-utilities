@@ -1,7 +1,7 @@
 <core:FragmentDefinition
     xmlns="sap.m"
     xmlns:core="sap.ui.core">
-    <Dialog title="{i18n>calendar.entryDialog.title}" contentWidth="420px">
+    <Dialog title="{i18n>calendar.entryDialog.title}" contentWidth="420px" busy="{edit>/busy}">
         <content>
             <VBox class="sapUiSmallMargin">
                 <Label text="{i18n>calendar.col.date}" required="true"/>

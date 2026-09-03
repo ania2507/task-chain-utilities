@@ -20,10 +20,60 @@ def _svc():
     return svc
 
 
+@bp.route("/jobscheduler-callback", methods=["POST"])
+@flask_access_validation(required_scope="admin")
+def jobscheduler_callback():
+    """Action endpoint invoked by SAP Job Scheduling service when a schedule fires.
+
+    The request body is exactly the `data` payload given to
+    JobSchedulerClient.create_schedule() when the schedule was created (see
+    SchedulerService._register_entries() / _register_traffic_light_schedules()).
+    Authenticated the same way as every other route here: the service's
+    technical client carries the `admin` scope via the `grant-as-authority-to-apps`
+    entry in xs-security.json.
+    """
+    payload = request.get_json(silent=True) or {}
+    kind = payload.get("kind")
+    try:
+        if kind == "entry":
+            result = _svc()._fire(payload.get("entry_id"), manual=False, entry=payload.get("entry"))
+        elif kind == "traffic_light":
+            result = _svc()._fire_traffic_light(payload.get("schedule") or {})
+        else:
+            logger.warning("jobscheduler_callback: unknown or missing kind %r", kind)
+            return jsonify({"error": f"unknown kind '{kind}'"}), 400
+        return jsonify(result)
+    except Exception as e:
+        logger.exception("jobscheduler_callback failed (kind=%s)", kind)
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/jobscheduler-delete", methods=["POST"])
+@flask_access_validation(required_scope="admin")
+def jobscheduler_delete():
+    """Delete one SAP Job Scheduling service schedule immediately, called by
+    the CAP layer right after a ScheduleEntry/Schedule row is hard-deleted
+    (see srv/schedules.js) - sync()'s own reconciliation can't find a deleted
+    row to read its jobSchedulerScheduleId from, so this is the only way that
+    schedule ever gets cleaned up.
+    """
+    payload = request.get_json(silent=True) or {}
+    kind = payload.get("kind")
+    schedule_id = payload.get("scheduleId")
+    if kind not in ("entry", "traffic_light") or not schedule_id:
+        return jsonify({"error": "expected {kind: 'entry'|'traffic_light', scheduleId: '...'}"}), 400
+    try:
+        _svc().delete_external_schedule(kind, schedule_id)
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        logger.exception("jobscheduler_delete failed (kind=%s, scheduleId=%s)", kind, schedule_id)
+        return jsonify({"error": str(e)}), 500
+
+
 @bp.route("/sync", methods=["POST"])
 @flask_access_validation(required_scope="admin")
 def sync():
-    """Reload all active schedules from DB and rebuild APScheduler jobs."""
+    """Reload all active schedules from DB and rebuild the job set."""
     try:
         result = _svc().sync()
         return jsonify(result)
@@ -124,81 +174,6 @@ def run_now_adhoc():
         return jsonify({"error": str(e)}), 500
 
 
-@bp.route("/schedule-once", methods=["POST"])
-@flask_access_validation(required_scope="admin")
-def schedule_once():
-    """Schedule a DSP task chain for a single firing at the given datetime."""
-    try:
-        body = request.get_json(silent=True) or {}
-        space_id = body.get("spaceId")
-        taskchain = body.get("taskchain")
-        run_at = body.get("runAt")
-        parameters = body.get("parameters")
-        tz = body.get("timezone") or "Europe/Rome"
-        details = body.get("details")
-        if not space_id or not taskchain or not run_at:
-            return jsonify({"error": "spaceId, taskchain and runAt are required"}), 400
-        result = _svc().schedule_once(space_id, taskchain, run_at, parameters, tz, details)
-        return jsonify(result)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        logger.exception("schedule-once failed")
-        return jsonify({"error": str(e)}), 500
-
-
-@bp.route("/schedule-once", methods=["DELETE"])
-@flask_access_validation(required_scope="admin")
-def cancel_schedule_once():
-    """Remove a once-off APScheduler job by spaceId + taskchain + runAt."""
-    from datetime import datetime
-    try:
-        from zoneinfo import ZoneInfo
-    except ImportError:
-        ZoneInfo = None
-    try:
-        body = request.get_json(force=True, silent=True) or {}
-        space_id = (body.get("spaceId") or "").strip()
-        taskchain = (body.get("taskchain") or "").strip()
-        run_at_iso = (body.get("runAt") or "").strip()
-        if not space_id or not taskchain or not run_at_iso:
-            return jsonify({"error": "spaceId, taskchain, runAt required"}), 400
-
-        svc = _svc()
-        sched = getattr(svc, "_scheduler", None)
-        if not sched:
-            return jsonify({"status": "no_scheduler", "removed": []}), 200
-
-        removed = []
-        try:
-            run_at = datetime.fromisoformat(run_at_iso)
-            if run_at.tzinfo is None and ZoneInfo:
-                run_at = run_at.replace(tzinfo=ZoneInfo("Europe/Rome"))
-            job_id = f"entry::once::{space_id}::{taskchain}::{run_at.isoformat()}"
-            sched.remove_job(job_id)
-            removed.append(job_id)
-        except Exception:
-            pass
-
-        if not removed:
-            # Fallback: scan for jobs matching space+chain+time prefix (handles tz format differences)
-            prefix = f"entry::once::{space_id}::{taskchain}::"
-            run_at_prefix = run_at_iso[:16]  # YYYY-MM-DDTHH:MM
-            for job in sched.get_jobs():
-                if job.id.startswith(prefix) and run_at_prefix in job.id:
-                    try:
-                        sched.remove_job(job.id)
-                        removed.append(job.id)
-                    except Exception:
-                        pass
-
-        logger.info("cancel_schedule_once: removed=%s", removed)
-        return jsonify({"status": "ok", "removed": removed})
-    except Exception as e:
-        logger.exception("cancel_schedule_once failed")
-        return jsonify({"error": str(e)}), 500
-
-
 @bp.route("/preview", methods=["GET"])
 @flask_access_validation(required_scope="admin")
 def preview():
@@ -219,7 +194,7 @@ def preview():
 @bp.route("/jobs", methods=["GET"])
 @flask_access_validation(required_scope="admin")
 def list_jobs():
-    """Return APScheduler's current in-memory job set (debug)."""
+    """Return the in-process scheduler's current job set (debug)."""
     try:
         svc = _svc()
         sched = getattr(svc, "_scheduler", None)

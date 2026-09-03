@@ -133,7 +133,8 @@ class ScheduleRepository:
         if self._use_mem:
             return []
         sql = (
-            f"SELECT ID, SPACEID, TASKCHAIN, RUNDATE, RUNTIME, TIMEZONE, ACTIVE, PARAMETERS, DETAILS "
+            f"SELECT ID, SPACEID, TASKCHAIN, RUNDATE, RUNTIME, TIMEZONE, ACTIVE, PARAMETERS, DETAILS, "
+            f"JOBSCHEDULERSCHEDULEID "
             f"FROM {SCHEDULE_ENTRY_TBL} "
             f"WHERE ACTIVE = TRUE AND RUNDATE >= CURRENT_DATE"
         )
@@ -154,6 +155,35 @@ class ScheduleRepository:
             except Exception:
                 pass
 
+    def list_entries_with_job_scheduler_id(self) -> List[Dict[str, Any]]:
+        """Return (ID, jobSchedulerScheduleId) for ALL ScheduleEntry rows (active
+        or not) that still have an external schedule linked - used by sync()
+        to find and delete schedules whose row was deactivated/deleted since
+        the last sync (list_active_entries() alone would never surface them,
+        since it only returns currently-active rows)."""
+        if self._use_mem:
+            return []
+        sql = (
+            f"SELECT ID, ACTIVE, RUNDATE, JOBSCHEDULERSCHEDULEID FROM {SCHEDULE_ENTRY_TBL} "
+            f"WHERE JOBSCHEDULERSCHEDULEID IS NOT NULL"
+        )
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(sql)
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+            cur.close()
+            return rows
+        except Exception as e:
+            logger.warning("list_entries_with_job_scheduler_id failed: %s", e)
+            return []
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
     # ------------------------------------------------------------------
     # Schedule - cron-based traffic lights schedules
     # ------------------------------------------------------------------
@@ -164,7 +194,7 @@ class ScheduleRepository:
         sql = (
             f"SELECT ID, NAME, DESCRIPTION, TARGETTYPE, SPACEID, TASKCHAIN, "
             f"JOBTEMPLATE, PARAMETERS, CRONEXPRESSION, TIMEZONE, ISACTIVE, "
-            f"NEXTRUNAT, LASTRUNAT, LASTRUNSTATUS "
+            f"NEXTRUNAT, LASTRUNAT, LASTRUNSTATUS, JOBSCHEDULERSCHEDULEID "
             f"FROM {SCHEDULE_TBL} "
             f"WHERE ISACTIVE = TRUE"
         )
@@ -179,6 +209,54 @@ class ScheduleRepository:
         except Exception as e:
             logger.warning("list_active_schedules failed: %s", e)
             return []
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def list_schedules_with_job_scheduler_id(self) -> List[Dict[str, Any]]:
+        """Same as list_entries_with_job_scheduler_id() but for Schedule (Traffic
+        Light) rows."""
+        if self._use_mem:
+            return []
+        sql = (
+            f"SELECT ID, ISACTIVE, JOBSCHEDULERSCHEDULEID FROM {SCHEDULE_TBL} "
+            f"WHERE JOBSCHEDULERSCHEDULEID IS NOT NULL"
+        )
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(sql)
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+            cur.close()
+            return rows
+        except Exception as e:
+            logger.warning("list_schedules_with_job_scheduler_id failed: %s", e)
+            return []
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def get_schedule_job_scheduler_id(self, schedule_id: str) -> Optional[str]:
+        """Return the jobSchedulerScheduleId for one Schedule row, or None -
+        used to clean up the external schedule before deleting the row."""
+        if self._use_mem:
+            return None
+        sql = f"SELECT JOBSCHEDULERSCHEDULEID FROM {SCHEDULE_TBL} WHERE ID = ?"
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(sql, (schedule_id,))
+            row = cur.fetchone()
+            cur.close()
+            return row[0] if row else None
+        except Exception as e:
+            logger.warning("get_schedule_job_scheduler_id failed: %s", e)
+            return None
         finally:
             try:
                 conn.close()
@@ -227,6 +305,44 @@ class ScheduleRepository:
             cur.close()
         except Exception as e:
             logger.warning("delete_schedule failed: %s", e)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def set_entry_job_scheduler_id(self, entry_id: str, job_scheduler_schedule_id: Optional[str]) -> None:
+        """Persist (or clear) the SAP Job Scheduling service schedule ID for a ScheduleEntry row."""
+        if self._use_mem:
+            return
+        sql = f"UPDATE {SCHEDULE_ENTRY_TBL} SET JOBSCHEDULERSCHEDULEID = ? WHERE ID = ?"
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(sql, (job_scheduler_schedule_id, entry_id))
+            conn.commit()
+            cur.close()
+        except Exception as e:
+            logger.warning("set_entry_job_scheduler_id failed: %s", e)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def set_schedule_job_scheduler_id(self, schedule_id: str, job_scheduler_schedule_id: Optional[str]) -> None:
+        """Persist (or clear) the SAP Job Scheduling service schedule ID for a Schedule (Traffic Light) row."""
+        if self._use_mem:
+            return
+        sql = f"UPDATE {SCHEDULE_TBL} SET JOBSCHEDULERSCHEDULEID = ? WHERE ID = ?"
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(sql, (job_scheduler_schedule_id, schedule_id))
+            conn.commit()
+            cur.close()
+        except Exception as e:
+            logger.warning("set_schedule_job_scheduler_id failed: %s", e)
         finally:
             try:
                 conn.close()
@@ -415,6 +531,7 @@ def _row_to_entry(row: Dict[str, Any]) -> Dict[str, Any]:
         "active": bool(row.get("ACTIVE")),
         "parameters": row.get("PARAMETERS"),
         "details": row.get("DETAILS"),
+        "jobSchedulerScheduleId": row.get("JOBSCHEDULERSCHEDULEID"),
     }
 
 
@@ -434,6 +551,7 @@ def _row_to_schedule(row: Dict[str, Any]) -> Dict[str, Any]:
         "nextRunAt": row.get("NEXTRUNAT"),
         "lastRunAt": row.get("LASTRUNAT"),
         "lastRunStatus": row.get("LASTRUNSTATUS"),
+        "jobSchedulerScheduleId": row.get("JOBSCHEDULERSCHEDULEID"),
     }
 
 
