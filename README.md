@@ -26,6 +26,7 @@ Legacy DSP direct access (CLI and direct HANA credentials) has been removed.
 - XSUAA for authentication and authorization.
 - Destination Service for managed outbound connections.
 - HDI container service instance `orchestrator_hdi_cont_noprod`.
+- SAP Job Scheduling Service (`CF_JobScheduling`, standard plan) — schedules calendar entries and Traffic Lights checks with HA/multi-instance safety (see §5.5).
 
 ### 2.3 Environment Variables
 
@@ -60,7 +61,11 @@ In Cloud Foundry, most of these are bound automatically via `mta.yaml` service b
 | `DEST_SERVICE_URL` / `DEST_TOKEN_URL` / `DEST_CLIENT_ID` / `DEST_CLIENT_SECRET` | Local-dev fallback for the Destination Service's own OAuth client, used by `dsp`/`sac`/`ibp` integrations when no `VCAP_SERVICES` destination binding is present. | — |
 | `IBP_HOST` / `IBP_USER` / `IBP_PASSWORD` / `IBP_VERIFY_SSL` | Local-dev fallback for direct IBP connectivity, bypassing the Destination Service. | — |
 | `SAC_HOST` / `SAC_TOKEN_URL` / `SAC_CLIENT_ID` / `SAC_CLIENT_SECRET` / `SAC_VERIFY_SSL` | Local-dev fallback for direct SAC connectivity, bypassing the Destination Service. | — |
-| `VCAP_SERVICES` | Platform-injected service bindings (HANA, Destination, DSP/SAC/IBP UPS). Present automatically on CF; not set manually. | — |
+| `VCAP_SERVICES` | Platform-injected service bindings (HANA, Destination, DSP/SAC/IBP UPS, `jobscheduler`). Present automatically on CF; not set manually. | — |
+
+The SAP Job Scheduling client (`JobSchedulerClient.from_env()`) has no dedicated local-dev env vars — it reads its credentials directly from the `jobscheduler` entry in `VCAP_SERVICES`. Locally (no CF binding) it's simply unavailable and `SchedulerService` falls back to the in-process scheduler transparently (see §5.5).
+
+Per-landscape config values that should be editable without a redeploy (currently just `IBP_JOB_USER`) are **not** env vars — they live in the `AppSetting` HANA table, read via `GET /v1/settings` (see §5.4, §7.2).
 
 ### 2.4 Logical Flow
 
@@ -127,6 +132,19 @@ If destination auth type is OAuth2SAMLBearerAssertion, a propagated user token o
 
 IBP operations are invoked via destination `IBP_APPJOB_MANAGEMENT`.
 
+The technical user that owns jobs launched via `POST /v1/jobs/launch` (`job_user` in the request body) is landscape-specific and no longer hardcoded in each DSP API Task: when the integration is `ibp`, `routes/jobs.py` reads it at request time from the `AppSetting` table (row `IBP_JOB_USER`, see §5.5) and injects it into the payload only if a value is found — otherwise the request proceeds without it, unchanged from the old hardcoded behavior.
+
+### 5.5 Job Scheduling Integration
+
+Calendar entries and Traffic Lights checks are scheduled through the SAP Job Scheduling Service (`CF_JobScheduling`, standard plan) instead of purely in-process, to avoid missed/duplicated runs when the `py-srv` app scales to multiple instances.
+
+- `py-srv/src/integrations/jobscheduler/client.py` (`JobSchedulerClient`): OAuth2 client-credentials against the service's own XSUAA, then REST calls to create/find a Job and create/delete Schedules on it. Requires `admin` scope's `grant-as-authority-to-apps: ["$XSSERVICENAME(CF_JobScheduling)"]` in `xs-security.json` (must reference the real CF service instance name, not the MTA resource alias).
+- `SchedulerService` (`py-srv/src/services/scheduler_service.py`) delegates entry/traffic-light registration to `JobSchedulerClient` when it's available (bound + `VCAP_APPLICATION.application_uris` resolvable for the callback URL); otherwise it falls back to the in-process scheduler, so local `cds watch` keeps working unchanged.
+- Each Job Scheduling schedule's action calls back into this app: `POST /v1/scheduler/jobscheduler-callback` (fires the entry/traffic-light check) and `POST /v1/scheduler/jobscheduler-delete` (used to clean up a one-shot schedule after it fires, e.g. Traffic Lights with "after run" auto-reset disabled).
+- `ScheduleEntry`/`Schedule` (`db/model/schedules.cds`) carry a `jobSchedulerScheduleId` used to map back to the external schedule for updates/deletes; `srv/schedules.js` hooks (`captureJobSchedulerId`, `notifyExternalDelete`) keep it in sync on UPDATE/DELETE.
+- Known constraints hit during integration: job names reject hyphens (use underscores), job-creation payloads require an explicit `"schedules": []`, and the minimum schedule granularity is 5 minutes.
+- The in-process 60s completion-polling loop and gunicorn's single worker (`--workers 1`, see §8) are **not** covered by this migration — a frozen/blocked polling loop remains an open residual risk by design.
+
 ## 6. Security Model
 
 - Authentication: XSUAA.
@@ -147,6 +165,8 @@ IBP operations are invoked via destination `IBP_APPJOB_MANAGEMENT`.
 - Provides orchestration and integration endpoints.
 - Encapsulates external system clients and execution logic.
 - Handles task-chain run/status workflows and integration diagnostics.
+- `GET /v1/settings` (`routes/settings.py`, `admin` scope): read-only listing of the `AppSetting` table (`name`, `value`, `description`) — rows are written directly against HANA, not through this app (see §5.4, §5.5).
+- `POST /v1/scheduler/jobscheduler-callback` / `POST /v1/scheduler/jobscheduler-delete` (`routes/scheduler.py`): callback targets invoked by the Job Scheduling Service itself, not meant for direct/manual use (see §5.5).
 
 ## 8. Build and Deployment
 
@@ -176,6 +196,8 @@ Expected result:
 - `task-chain-utilities-srv` started
 - `task-chain-utilities-py-srv` started
 - `task-chain-utilities-db-deployer` stopped (normal after deploy)
+
+`py-srv` runs under gunicorn in every environment (`Procfile` / `mta.yaml` module `command`: `gunicorn --workers 1 --bind 0.0.0.0:$PORT app:app`), not Flask's own dev server — a single worker is used because completion-polling and in-process fallback scheduling rely on shared in-memory state (see §5.5).
 
 ## 9. Operations Runbook
 
@@ -212,6 +234,8 @@ Resolution options:
 - CAP for service facade and UI contract.
 - Python for orchestration and external integrations.
 4. Remove legacy DSP direct HANA/CLI integration paths.
+5. Delegate entry/Traffic-Lights scheduling to the SAP Job Scheduling Service for HA/multi-instance safety, with a transparent fallback to in-process scheduling when the service isn't bound (local dev) — see §5.5.
+6. Store small per-landscape config values that should be editable without a redeploy (e.g. `IBP_JOB_USER`) in the generic `AppSetting` HANA table instead of env vars — see §5.4.
 
 ## 11. Business Logic Notes
 
@@ -229,7 +253,7 @@ On save (`before SAVE`), the request is rejected with a 400 if another row alrea
 Two independent fields, both on `db/model/schedules.cds` entity `TrafficLightStatus`:
 
 - **`status`** (execution semaphore): `ready` → `running` → `completed`/`error`. `ready` is only ever set by the external system; the scheduler only launches the task chain when `status = 'ready'`. After launching it sets `running`, then always resolves to `completed`/`error` once the run finishes (never left stuck on `running`).
-- **`initialState`** (Lifecycle Enable/Disable toggle, independent of the semaphore above): `GREEN` (enabled) | `RED` (disabled). Defaults to `GREEN` on creation; can be toggled manually from the Lifecycle panel in the UI; also updated by the "After each run" policy (`scheduler_service.py: _apply_after_run_policy`) once a run finishes — if `autoReset` is enabled, `initialState` is set to the configured `autoResetState` (`GREEN` or `RED`); if `autoReset` is disabled, the Traffic Lights schedule is instead deleted entirely (one-shot behavior).
+- **`initialState`** (Lifecycle Enable/Disable toggle, independent of the semaphore above): `GREEN` (enabled) | `RED` (disabled). Defaults to `GREEN` on creation; can be toggled manually from the Lifecycle panel in the UI; also updated by the "After each run" policy (`scheduler_service.py: _apply_after_run_policy`) once a run finishes — if `autoReset` is enabled, `initialState` is set to the configured `autoResetState` (`GREEN` or `RED`); if `autoReset` is disabled, the Traffic Lights schedule is instead deleted entirely (one-shot behavior). When the schedule was registered on the Job Scheduling Service (§5.5), this deletion path also looks up and deletes the corresponding external schedule (`delete_external_schedule`) before removing the DB row — skipping this would otherwise leave an orphaned recurring schedule still firing every 5 minutes.
 - **`GREY` is not a persisted value** — it's a UI-only display state (`TrafficLightsPage.controller.js`) shown whenever `status === 'running'`, regardless of `initialState`. It means "Running", not "on hold".
 
 ### 11.3 Rule Engine Contract (`py-srv/src/engine/rule_engine.py`)
