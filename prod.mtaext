@@ -1,0 +1,16 @@
+_schema-version: "3.2"
+ID: task-chain-utilities.prod
+extends: task-chain-utilities
+version: 1.0.0
+
+modules:
+- name: task-chain-utilities-db-deployer
+  requires:
+  - name: task-chain-utilities-db
+    properties:
+      TARGET_CONTAINER: orchestrator_hdi_cont_prod
+
+resources:
+- name: task-chain-utilities-db
+  parameters:
+    service-name: orchestrator_hdi_cont_prod
