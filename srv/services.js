@@ -595,7 +595,18 @@ module.exports = cds.service.impl(async function () {
                 } catch (e) {
                     payload = {};
                 }
-                const rawSpace = payload['#spaceName']
+                // object_path_identifier ha la forma "sap.dwc.taskChain:<SPACE>\<objectName>":
+                // il nome leggibile dello spazio è già presente nel payload stesso, senza bisogno
+                // di risolverlo tramite 3VR_SPACE_SCHEMAS_01. Usarlo come fonte primaria evita il
+                // fallback al codice tecnico grezzo quando quella vista non ha una riga per lo
+                // spazio (es. lo spazio Orchestration stesso, per le sue taskchain "orchestrator").
+                let spaceFromObjectPath = '';
+                if (typeof payload.object_path_identifier === 'string') {
+                    const afterColon = payload.object_path_identifier.split(':')[1] || '';
+                    spaceFromObjectPath = afterColon.split('\\')[0] || '';
+                }
+                const rawSpace = spaceFromObjectPath
+                              || payload['#spaceName']
                               || payload.spaceName
                               || payload.spaceId
                               || payload.space_id
