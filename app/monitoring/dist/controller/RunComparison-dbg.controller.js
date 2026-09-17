@@ -402,8 +402,8 @@ sap.ui.define([
                 new Text({ text: formatter.formatDurationMinutes(oStep.avgDuration) }),
                 new VBox({
                     items: [
-                        new ObjectStatus({ 
-                            text: (oStep.durationVariance || 0).toFixed(2) + " min",
+                        new ObjectStatus({
+                            text: formatter.formatDurationMinutes(oStep.durationVariance || 0),
                             state: sVarianceState
                         }),
                         new Text({ 
@@ -428,8 +428,8 @@ sap.ui.define([
                                 text: oRunData.status, 
                                 state: sState
                             }),
-                            new Text({ 
-                                text: (oRunData.duration || 0).toFixed(2) + " min",
+                            new Text({
+                                text: formatter.formatDurationMinutes(oRunData.duration || 0),
                                 wrapping: false
                             }).addStyleClass("sapUiTinyMarginTop")
                         ]
