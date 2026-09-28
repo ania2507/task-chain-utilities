@@ -165,15 +165,38 @@
                                         visible="{= !${edit>/viewOnly} }"
                                         busy="{edit>/ibpLoading}" enabled="{= !${edit>/ibpLoading} }"
                                         class="sapUiTinyMarginBegin"/>
-                                <Button icon="sap-icon://clear-all" type="Transparent"
-                                        press=".onClearIbpTemplateOverride" tooltip="Clear override and use DSP auto-detection"
-                                        visible="{= !${edit>/viewOnly} &amp;&amp; !!${edit>/ibpTemplateNameIsOverride} }"
-                                        class="sapUiTinyMarginBegin"/>
+                            </HBox>
+                            <!-- Job Name: pre-filled from the template's own description (IBP's
+                                 default), but editable — whatever's here at save time becomes
+                                 the job name IBP shows in its own job history at launch. -->
+                            <HBox alignItems="Center" class="sapUiSmallMarginBegin sapUiTinyMarginBottom"
+                                  visible="{= !${edit>/viewOnly} }">
+                                <Label text="Job Name:" width="7rem"/>
+                                <Input value="{edit>/ibpTemplateDescription}" width="32rem"
+                                       maxLength="120"
+                                       change=".onIbpJobTextChange"
+                                       placeholder="Job name shown in IBP's job history"/>
                             </HBox>
                             <Title text="{edit>/ibpTemplateDescription}" level="H5"
                                    textAlign="Left" width="100%"
-                                   visible="{= !!${edit>/ibpTemplateDescription} }"
+                                   visible="{= !!${edit>/ibpTemplateDescription} &amp;&amp; !!${edit>/viewOnly} }"
                                    class="sapUiSmallMarginBegin sapUiTinyMarginBottom"/>
+                            <!-- "Usa Default" applies to the whole job template (every step in
+                                 its sequence shares one parameter budget), not to whichever
+                                 single step happens to be selected on the left below — so it's
+                                 shown here, at template level, rather than inside the per-step
+                                 params panel. -->
+                            <MessageStrip type="Warning" showIcon="true"
+                                          class="sapUiSmallMarginBegin sapUiTinyMarginBottom"
+                                          visible="{edit>/ibpParamsLocked}"
+                                          text="This job template is too large to support custom parameters. Use Default has been switched on automatically and cannot be turned off for this template."/>
+                            <HBox alignItems="Center" class="sapUiSmallMarginBegin sapUiSmallMarginBottom"
+                                  visible="{= !${edit>/viewOnly} }">
+                                <Switch state="{edit>/ibpUseDefaults}" change=".onToggleIbpUseDefaults"
+                                        enabled="{= !${edit>/ibpParamsLocked} }"
+                                        customTextOn="On" customTextOff="Off"/>
+                                <Label text="Usa Default (IBP fills every parameter itself — no custom values sent)" class="sapUiTinyMarginBegin"/>
+                            </HBox>
                             <l:Splitter height="480px">
                                 <!-- Left: job template steps list -->
                                 <Panel headerText="Job Template Steps" width="auto">
@@ -208,14 +231,14 @@
                                                     <Text text="{edit>key}"/>
                                                     <Text text="{edit>description}" class="sapUiSmallFontSize"/>
                                                     <Input value="{edit>value}" width="100%"
-                                                           editable="{= !${edit>/viewOnly} }"/>
+                                                           editable="{= !${edit>/viewOnly} &amp;&amp; !${edit>/ibpUseDefaults} }"/>
                                                     <Button icon="sap-icon://delete" type="Transparent"
                                                             press=".onDeleteIbpStepParam" tooltip="Delete"
-                                                            visible="{= !${edit>/viewOnly} }"/>
+                                                            visible="{= !${edit>/viewOnly} &amp;&amp; !${edit>/ibpUseDefaults} }"/>
                                                 </cells>
                                             </ColumnListItem>
                                         </Table>
-                                        <VBox class="sapUiSmallMarginTop" visible="{= !${edit>/viewOnly} }">
+                                        <VBox class="sapUiSmallMarginTop" visible="{= !${edit>/viewOnly} &amp;&amp; !${edit>/ibpUseDefaults} }">
                                             <HBox alignItems="Center" class="sapUiTinyMarginBottom">
                                                 <Label text="Key:" width="9rem"/>
                                                 <Input value="{edit>/newIbpParam/key}" width="20rem" placeholder="param key"
@@ -258,10 +281,6 @@
                                         press=".onLoadSacMultiAction" tooltip="Load Parameters (runs a real execution to discover mandatory parameters)"
                                         visible="{= !${edit>/viewOnly} }"
                                         busy="{edit>/sacLoading}" enabled="{= !${edit>/sacLoading} }"
-                                        class="sapUiTinyMarginBegin"/>
-                                <Button icon="sap-icon://clear-all" type="Transparent"
-                                        press=".onClearSacMultiActionOverride" tooltip="Clear override and use DSP auto-detection"
-                                        visible="{= !${edit>/viewOnly} &amp;&amp; !!${edit>/sacMultiActionIdIsOverride} }"
                                         class="sapUiTinyMarginBegin"/>
                             </HBox>
                             <Text text="{= ${edit>/sacMultiActionName} ? 'Resolved name: ' + ${edit>/sacMultiActionName} : '' }"

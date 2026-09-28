@@ -59,11 +59,19 @@ sap.ui.define([
         },
 
         _onListMatched: function () {
+            // The route can double-match right after the app opens (Fiori Launchpad
+            // hash normalization can re-dispatch the same match), which would race
+            // two overlapping loads on /page/rows and /page/busy. Ignore the
+            // duplicate; a legitimate re-entry always happens after the previous
+            // load has already finished.
+            if (this._bListLoading) return;
+            this._bListLoading = true;
             this._pageModel.setProperty("/busy", true);
             Promise.all([this._loadAdded(), this._loadTagCatalog()]).then(function () {
                 return this._refreshSchedulesForRows();
             }.bind(this)).finally(function () {
                 this._pageModel.setProperty("/busy", false);
+                this._bListLoading = false;
             }.bind(this));
         },
 

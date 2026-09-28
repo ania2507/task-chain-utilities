@@ -215,10 +215,12 @@ class IBPJobClient(BaseJobClient):
 
         Required ``params`` keys:
             • ``template_name``  – e.g. ``"SAP_IBP_PROC_COPY_OPERATOR"``
-            • ``job_text``       – human-readable job name
             • ``job_user``       – SAP user that owns the scheduled job
 
         Optional:
+            • ``job_text``       – human-readable job name; when omitted/blank,
+              auto-derived from the template's own description (or its technical
+              name if that can't be resolved)
             • ``parameters``     – list of param dicts (see ``_build_param_values_json``)
             • ``test_mode``      – bool (default ``False``)
         """
@@ -238,13 +240,16 @@ class IBPJobClient(BaseJobClient):
         if not job_user:
             raise ValueError("IBP: 'job_user' is required")
 
-        # JobText always mirrors the template being launched, so IBP's job history
-        # shows at a glance which template ran — regardless of what (if anything)
-        # was supplied for job_text. Prefer the template's own human-readable
-        # description over its technical name; fall back to the technical name
-        # if the description can't be resolved. JobText's MaxLength is 120
-        # (confirmed via the service $metadata), matching JobTemplateText's own limit.
-        job_text = self.get_template_description(template_name) or template_name
+        # JobText mirrors the template being launched by default, so IBP's job
+        # history shows at a glance which template ran — unless the caller supplies
+        # an explicit custom name (job_text), which always wins (see the Step
+        # Parameters UI's "Job Name" field / __ibpJobTextOverride in jobs.py).
+        # Prefer the template's own human-readable description over its technical
+        # name when falling back; JobText's MaxLength is 120 (confirmed via the
+        # service $metadata), matching JobTemplateText's own limit.
+        job_text = _as_str(params.get("job_text")).strip()
+        if not job_text:
+            job_text = self.get_template_description(template_name) or template_name
         job_text = job_text[:120]
 
         param_json = _build_param_values_json(job_parameters) if job_parameters else ""
@@ -307,7 +312,7 @@ class IBPJobClient(BaseJobClient):
             # neither COMPLETED nor FAILED and DSP polls it as "running" forever.
             if step_status == JobStatus.UNKNOWN and step_app_rc not in (None, "", 0, "0"):
                 step_status = JobStatus.FAILED
-            logger.warning(
+            logger.debug(
                 "[DIAG][ibp-status] job=%s:%s raw_job_status=%r step_number=%r raw_step_status=%r "
                 "mapped_step_status=%s app_rc=%r",
                 job_name, job_run_count, raw_status, step.get("StepNumber"),
@@ -338,7 +343,7 @@ class IBPJobClient(BaseJobClient):
             step_info["logs"] = logs
             steps.append(step_info)
             if logs:
-                logger.warning("[DIAG][ibp-status] job=%s:%s step_logs=%s", job_name, job_run_count, logs)
+                logger.debug("[DIAG][ibp-status] job=%s:%s step_logs=%s", job_name, job_run_count, logs)
 
         # The top-level JobStatus can lag behind (e.g. stay RUNNING/UNKNOWN) even
         # after a step has aborted on a bad parameter value, since IBP doesn't

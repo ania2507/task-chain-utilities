@@ -752,7 +752,7 @@ class SchedulerService:
         if queue_key:
             remote_id = result.get("remote_id")
             if remote_id and result.get("status") == "success":
-                self._watch_taskchain_completion(queue_key, remote_id)
+                self._watch_taskchain_completion(queue_key, taskchain, remote_id)
             else:
                 self._advance_taskchain_queue(queue_key)
 
@@ -772,7 +772,7 @@ class SchedulerService:
             logger.info("Dequeuing next fire for %s: entry_id=%s", queue_key, next_item["entry_id"])
             self._fire(next_item["entry_id"], next_item["manual"], next_item["entry"])
 
-    def _watch_taskchain_completion(self, queue_key: str, remote_id: str) -> None:
+    def _watch_taskchain_completion(self, queue_key: str, taskchain_name: str, remote_id: str) -> None:
         """Poll a fired DSP execution; once it reaches a terminal state, free the
         (spaceId, taskchain) slot and launch the next queued fire, if any."""
         if not self._scheduler or not self._tc_exec:
@@ -786,12 +786,18 @@ class SchedulerService:
             trigger="interval",
             seconds=60,
             id=watch_job_id,
-            kwargs={"queue_key": queue_key, "remote_id": remote_id, "watch_job_id": watch_job_id},
+            kwargs={
+                "queue_key": queue_key,
+                "taskchain_name": taskchain_name,
+                "remote_id": remote_id,
+                "watch_job_id": watch_job_id,
+            },
             replace_existing=True,
             misfire_grace_time=120,
         )
 
-    def _check_taskchain_completion(self, queue_key: str, remote_id: str, watch_job_id: str) -> None:
+    def _check_taskchain_completion(self, queue_key: str, taskchain_name: str, remote_id: str,
+                                     watch_job_id: str) -> None:
         """Interval tick: check if the currently-running execution for `queue_key`
         has finished; if so, free the slot and dequeue the next pending fire."""
         try:
@@ -808,6 +814,26 @@ class SchedulerService:
             self._scheduler.remove_job(watch_job_id)
         except Exception:
             pass
+
+        # This poll just got the authoritative "the run is truly over" signal
+        # for remote_id - use it to also release TaskchainExecutor's separate
+        # _ACTIVE_TASKCHAINS guard for the same taskchain, instead of waiting on
+        # its own independent ~30s-interval watcher to notice on its own. The
+        # two guards track the same underlying DSP execution but poll
+        # independently and can fall out of sync - this is what left a queued
+        # fire stuck rejecting with "already running" after the run it was
+        # waiting on had, in fact, already finished. Only clear if the guard is
+        # still pointing at this exact execution, so a legitimately newer run
+        # that already reclaimed the slot is never touched.
+        try:
+            from ..services import taskchain_executor as _tce
+            with _tce._ACTIVE_TASKCHAINS_LOCK:
+                current = _tce._ACTIVE_TASKCHAINS.get(taskchain_name)
+                if current and current[0] == remote_id:
+                    _tce._ACTIVE_TASKCHAINS.pop(taskchain_name, None)
+        except Exception:
+            logger.warning("Could not clear _ACTIVE_TASKCHAINS guard for '%s'", taskchain_name)
+
         self._advance_taskchain_queue(queue_key)
 
     def _insert_run(self, entry_id: str, triggered_at: str, finished_at: str, status: str,

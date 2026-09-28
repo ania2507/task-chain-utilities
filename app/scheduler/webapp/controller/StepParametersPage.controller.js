@@ -47,6 +47,9 @@ sap.ui.define([
                 selectedIbpStepIdx: null,
                 selectedIbpStepName: "",
                 selectedIbpStepParams: [],
+                ibpParamsLocked: false,
+                ibpParamCount: 0,
+                ibpMaxParamCount: 0,
                 newIbpParam: _newParam(),
                 sacMultiActionId: "",
                 sacMultiActionIdInput: "",
@@ -106,6 +109,9 @@ sap.ui.define([
                 selectedIbpStepIdx: null,
                 selectedIbpStepName: "",
                 selectedIbpStepParams: [],
+                ibpParamsLocked: false,
+                ibpParamCount: 0,
+                ibpMaxParamCount: 0,
                 newIbpParam: _newParam(),
                 sacMultiActionId: "",
                 sacMultiActionIdInput: "",
@@ -135,6 +141,7 @@ sap.ui.define([
             })
                 .then(function (res) { return res.json(); })
                 .then(function (data) {
+                    that._applyIbpParamSizeGuard(data, /*bShowMessage*/ true);
                     var aSteps = [];
                     if (Array.isArray(data.steps)) {
                         aSteps = data.steps.map(function (s) {
@@ -198,8 +205,14 @@ sap.ui.define([
                                     objectId: n.objectId || "",
                                     description: n.description || "",
                                     applicationId: n.applicationId || "",
-                                    ibpTemplateName: n.ibpTemplateName || "",
-                                    sacMultiActionId: n.sacMultiActionId || "",
+                                    // No DSP auto-detection for the IBP job template or the SAC
+                                    // multi action anymore - both are always set directly in this
+                                    // app (see onSelectIbpTemplate / the template search, and
+                                    // onInsertSacMultiAction / onLoadSacMultiAction), never
+                                    // inherited from DSP's own step config. Parameters/sequences
+                                    // still come live from IBP/SAC once an ID is known - unchanged.
+                                    ibpTemplateName: "",
+                                    sacMultiActionId: "",
                                     integrationType: n.integrationType || "",
                                     objectType: n.objectType || "",
                                     isSkipStep: !!n.isSkipStep,
@@ -231,8 +244,8 @@ sap.ui.define([
                                         objectId: s.objectId || "",
                                         description: "",
                                         applicationId: s.applicationId || "",
-                                        ibpTemplateName: s.ibpTemplateName || "",
-                                        sacMultiActionId: s.sacMultiActionId || "",
+                                        ibpTemplateName: "", // no DSP auto-detection - see comment above
+                                        sacMultiActionId: "", // no DSP auto-detection - see comment above
                                         integrationType: s.integrationType || "",
                                         objectType: s.objectType || "",
                                         isSkipStep: !!s.isSkipStep,
@@ -245,16 +258,9 @@ sap.ui.define([
                         });
                 })
                 .then(function (aSteps) {
-                    // Freeze the DSP-auto-detected template name as each step's immutable
-                    // baseline before _applyParamsJsonToSteps can overlay a saved override —
-                    // this is what "Clear override" reverts to.
-                    var aBaselined = (aSteps || []).map(function (s) {
-                        return Object.assign({}, s, {
-                            dspDetectedIbpTemplateName: s.ibpTemplateName || "",
-                            dspDetectedSacMultiActionId: s.sacMultiActionId || ""
-                        });
-                    });
-                    that._editModel.setProperty("/steps", aBaselined);
+                    // Neither IBP job templates nor SAC multi actions are auto-detected
+                    // from DSP anymore - both are always set directly in this app.
+                    that._editModel.setProperty("/steps", aSteps || []);
                     that._applyParamsJsonToSteps();
                     // Read back from the model (not the stale aSteps closure) so a restored
                     // override is honored by the preload loop below.
@@ -277,9 +283,9 @@ sap.ui.define([
         _preloadIbpStepsForDspStep: function (iDspIdx, sTemplate, sStepName) {
             var that = this;
             // Resolve the template description in the background too — this preload
-            // path runs for steps whose template came from DSP auto-detection or from
-            // a saved/Excel-imported override, neither of which goes through the
-            // value-help dialog that would otherwise populate the description.
+            // path runs for steps whose template came from a saved/Excel-imported
+            // override, which doesn't go through the value-help dialog that would
+            // otherwise populate the description.
             this._resolveIbpTemplateDescription(sTemplate).then(function (sDescription) {
                 if (!sDescription) return;
                 var aSteps = that._editModel.getProperty("/steps") || [];
@@ -299,6 +305,7 @@ sap.ui.define([
                 .then(function (res) { return res.json(); })
                 .then(function (data) {
                     if (data.error) return;
+                    var bLockedPreload = that._applyIbpParamSizeGuard(data, /*bShowMessage*/ false, iDspIdx);
                     // Consume _restoredIbpParams here (inside the .then) so that
                     // _doLoadIbpSteps triggered by the user clicking a step before
                     // this response arrives can still read and consume it first.
@@ -312,6 +319,11 @@ sap.ui.define([
                     var oExistingByKey = that._resolveRestoredParamsMap(oRestored, data.steps);
                     var aStepKeys = that._buildIbpStepKeys(data.steps);
                     var aIbpSteps = (Array.isArray(data.steps) ? data.steps : []).map(function (s, i) {
+                        // Locked template: force an empty param list (see the fuller
+                        // explanation on the equivalent check in _doLoadIbpSteps below).
+                        if (bLockedPreload) {
+                            return Object.assign({}, s, { params: [] });
+                        }
                         var aExisting = oExistingByKey[aStepKeys[i]] || [];
                         var aParams = aExisting;
                         if (!aParams.length && Array.isArray(s.globalVars) && s.globalVars.length) {
@@ -421,15 +433,10 @@ sap.ui.define([
                             that._editModel.setProperty("/steps/" + oCur.idx + "/params", aParams);
                         }
                     }
-                    // Mirror the (possibly manually-entered) multiaction ID and override
-                    // status onto the persistent step object so they survive step-switching
-                    // and feed into _buildSaveOutput — mirrors the IBP template pattern.
+                    // Mirror the (manually-entered) multiaction ID onto the persistent step
+                    // object so it survives step-switching and feeds into _buildSaveOutput.
                     if (oCur) {
-                        var sDetected = oCur.step.dspDetectedSacMultiActionId || "";
-                        var bIsOverride = sSacId !== sDetected;
                         that._editModel.setProperty("/steps/" + oCur.idx + "/sacMultiActionId", sSacId);
-                        that._editModel.setProperty("/steps/" + oCur.idx + "/sacMultiActionIdIsOverride", bIsOverride);
-                        that._editModel.setProperty("/sacMultiActionIdIsOverride", bIsOverride);
                     }
                     that._editModel.setProperty("/sacLoading", false);
                 })
@@ -499,31 +506,8 @@ sap.ui.define([
             this._editModel.setProperty("/sacNoParameters", false);
             this._editModel.setProperty("/sacParamSchemaUnavailable", false);
             if (oCur) {
-                var sDetected = oCur.step.dspDetectedSacMultiActionId || "";
-                var bIsOverride = sId !== sDetected;
                 this._editModel.setProperty("/steps/" + oCur.idx + "/sacMultiActionId", sId);
-                this._editModel.setProperty("/steps/" + oCur.idx + "/sacMultiActionIdIsOverride", bIsOverride);
-                this._editModel.setProperty("/sacMultiActionIdIsOverride", bIsOverride);
             }
-        },
-
-        onClearSacMultiActionOverride: function () {
-            if (this._editModel.getProperty("/viewOnly")) return;
-            var oCur = this._currentStep();
-            if (!oCur) return;
-            var sDetected = oCur.step.dspDetectedSacMultiActionId || "";
-            this._editModel.setProperty("/steps/" + oCur.idx + "/sacMultiActionId", sDetected);
-            this._editModel.setProperty("/steps/" + oCur.idx + "/sacMultiActionIdIsOverride", false);
-            this._editModel.setProperty("/steps/" + oCur.idx + "/params", []);
-            this._editModel.setProperty("/sacMultiActionId", sDetected);
-            this._editModel.setProperty("/sacMultiActionIdInput", sDetected);
-            this._editModel.setProperty("/sacMultiActionIdIsOverride", false);
-            this._editModel.setProperty("/sacMultiActionName", "");
-            this._editModel.setProperty("/selectedStepParams", []);
-            this._editModel.setProperty("/sacParamSchema", []);
-            this._editModel.setProperty("/sacNoParameters", false);
-            this._editModel.setProperty("/sacParamSchemaUnavailable", false);
-            if (sDetected) { this._loadSacParameters(sDetected); }
         },
 
         onSacKeyValueHelp: function () {
@@ -650,25 +634,39 @@ sap.ui.define([
                     if (!allParams || !allParams.length) return;
                     bChanged = true;
 
-                    // Restore manual IBP-template-name / SAC-multiaction overrides, if stashed,
-                    // giving them precedence over whatever DSP just auto-detected for this step.
+                    // Restore the saved IBP job template name, if stashed (this is the only
+                    // source now - no DSP auto-detection to fall back to or override).
                     var oIbpOverrideRow = allParams.filter(function (p) {
                         return p.key === "__ibpTemplateNameOverride";
                     })[0];
                     if (oIbpOverrideRow && oIbpOverrideRow.value) {
-                        step = Object.assign({}, step, {
-                            ibpTemplateName: oIbpOverrideRow.value,
-                            ibpTemplateNameIsOverride: true
-                        });
+                        step = Object.assign({}, step, { ibpTemplateName: oIbpOverrideRow.value });
+                    }
+                    // Restore the (possibly user-edited) job name - takes priority over
+                    // the auto-fetched template description (see _doLoadIbpSteps /
+                    // _preloadIbpStepsForDspStep, which only auto-fetch when this is empty).
+                    var oJobTextOverrideRow = allParams.filter(function (p) {
+                        return p.key === "__ibpJobTextOverride";
+                    })[0];
+                    if (oJobTextOverrideRow && oJobTextOverrideRow.value) {
+                        step = Object.assign({}, step, { ibpTemplateDescription: oJobTextOverrideRow.value });
                     }
                     var oSacOverrideRow = allParams.filter(function (p) {
                         return p.key === "__sacMultiActionIdOverride";
                     })[0];
                     if (oSacOverrideRow && oSacOverrideRow.value) {
-                        step = Object.assign({}, step, {
-                            sacMultiActionId: oSacOverrideRow.value,
-                            sacMultiActionIdIsOverride: true
-                        });
+                        step = Object.assign({}, step, { sacMultiActionId: oSacOverrideRow.value });
+                    }
+                    // Excel bulk-import rows that specify only a job template with no
+                    // individual parameter values carry this sentinel — default that
+                    // step to "Usa Default" (unless the template turns out to be over
+                    // the size threshold, which forces it regardless and disables the
+                    // toggle; below threshold the user can still switch it back off).
+                    var oUseDefaultsRow = allParams.filter(function (p) {
+                        return p.key === "__ibpUseDefaults";
+                    })[0];
+                    if (oUseDefaultsRow && oUseDefaultsRow.value === "true") {
+                        step = Object.assign({}, step, { ibpUseDefaults: true });
                     }
 
                     // Any "__"-prefixed key is internal bookkeeping (recomputed fresh at save
@@ -760,6 +758,15 @@ sap.ui.define([
             this._editModel.setProperty("/ibpTemplateNameInput", oStep.ibpTemplateName || "");
             this._editModel.setProperty("/ibpTemplateNameIsOverride", !!oStep.ibpTemplateNameIsOverride);
             this._editModel.setProperty("/ibpTemplateDescription", oStep.ibpTemplateDescription || "");
+            // Restore this step's own param-size-guard state (set the last time its
+            // template was loaded, or by an Excel import's __ibpUseDefaults sentinel)
+            // BEFORE _doLoadIbpSteps below can overwrite it - that call only resets
+            // ibpUseDefaults when it finds no prior value, so setting it here first
+            // means an already-known "Usa Default" choice survives switching steps.
+            this._editModel.setProperty("/ibpParamsLocked", !!oStep.ibpParamsLocked);
+            this._editModel.setProperty("/ibpParamCount", oStep.ibpParamCount || 0);
+            this._editModel.setProperty("/ibpMaxParamCount", oStep.ibpMaxParamCount || 0);
+            this._editModel.setProperty("/ibpUseDefaults", !!oStep.ibpUseDefaults);
             this._editModel.setProperty("/ibpSteps", aCachedIbpSteps);
             this._editModel.setProperty("/ibpLoading", false);
             this._editModel.setProperty("/selectedIbpStepIdx", null);
@@ -870,26 +877,6 @@ sap.ui.define([
             this._doLoadIbpSteps(sTemplate);
         },
 
-        onClearIbpTemplateOverride: function () {
-            if (this._editModel.getProperty("/viewOnly")) return;
-            var oCur = this._currentStep();
-            if (!oCur) return;
-            var sDetected = oCur.step.dspDetectedIbpTemplateName || "";
-            this._editModel.setProperty("/steps/" + oCur.idx + "/ibpTemplateName", sDetected);
-            this._editModel.setProperty("/steps/" + oCur.idx + "/ibpTemplateNameIsOverride", false);
-            this._editModel.setProperty("/steps/" + oCur.idx + "/ibpSteps", []);
-            this._editModel.setProperty("/ibpTemplateName", sDetected);
-            this._editModel.setProperty("/ibpTemplateNameInput", sDetected);
-            this._editModel.setProperty("/ibpTemplateNameIsOverride", false);
-            this._editModel.setProperty("/ibpTemplateDescription", "");
-            this._editModel.setProperty("/steps/" + oCur.idx + "/ibpTemplateDescription", "");
-            this._editModel.setProperty("/ibpSteps", []);
-            this._editModel.setProperty("/selectedIbpStepIdx", null);
-            this._editModel.setProperty("/selectedIbpStepName", "");
-            this._editModel.setProperty("/selectedIbpStepParams", []);
-            if (sDetected) { this._doLoadIbpSteps(sDetected); }
-        },
-
         // Resolve an IBP template's description from the template catalog cache. The
         // cache is normally populated by opening the value-help search dialog, but a
         // manually typed/inserted template name (the override flow, or one loaded
@@ -962,6 +949,8 @@ sap.ui.define([
                         MessageToast.show("IBP error: " + data.error);
                         return;
                     }
+                    var bLockedForLoad = that._applyIbpParamSizeGuard(data, /*bShowMessage*/ true,
+                        oCurForRestore ? oCurForRestore.idx : null);
                     // Store global vars ($G_*) at template level for the match code
                     var aTemplateGlobalVars = data.globalVars || [];
                     that._editModel.setProperty("/ibpGlobalVars", aTemplateGlobalVars);
@@ -978,6 +967,13 @@ sap.ui.define([
                     }
                     var aFreshKeys = that._buildIbpStepKeys(data.steps);
                     var aSteps = (Array.isArray(data.steps) ? data.steps : []).map(function (s, i) {
+                        // Locked templates always launch with zero parameters, and editing
+                        // is disabled - so a leftover active param here could never be
+                        // cleared by the user and would permanently block onSave's guard.
+                        // Force an empty list regardless of where params would have come from.
+                        if (bLockedForLoad) {
+                            return Object.assign({}, s, { params: [] });
+                        }
                         var aExisting = oExistingByKey[aFreshKeys[i]] || [];
                         var aParams = aExisting;
                         // Pre-populate only from step-level globalVars (extracted per-step
@@ -1009,14 +1005,9 @@ sap.ui.define([
                     var oCur = that._currentStep();
                     if (oCur) {
                         that._editModel.setProperty("/steps/" + oCur.idx + "/ibpSteps", aSteps);
-                        // Diff against the DSP-detected baseline to determine override status,
-                        // and mirror both onto the persistent step object so they survive
-                        // step-switching and feed into _buildSaveOutput.
-                        var sDetected = oCur.step.dspDetectedIbpTemplateName || "";
-                        var bIsOverride = sTemplate !== sDetected;
+                        // No DSP baseline to diff against - the template name set here is
+                        // simply what this step uses, always persisted (see _buildSaveOutput).
                         that._editModel.setProperty("/steps/" + oCur.idx + "/ibpTemplateName", sTemplate);
-                        that._editModel.setProperty("/steps/" + oCur.idx + "/ibpTemplateNameIsOverride", bIsOverride);
-                        that._editModel.setProperty("/ibpTemplateNameIsOverride", bIsOverride);
                         that._editModel.setProperty("/steps/" + oCur.idx + "/ibpTemplateDescription",
                             that._editModel.getProperty("/ibpTemplateDescription") || "");
                     }
@@ -1105,16 +1096,10 @@ sap.ui.define([
                 .catch(function () {});
         },
 
-        // The same IBP operator name (e.g. an /IBP/HCI_DI step reused twice) can appear
-        // more than once in a template's sequence — "order" (the step's 1-based position,
-        // stable across repeated fetches of the same unchanged template) disambiguates them.
-        // The same IBP operator name can repeat at different positions in a template's
-        // sequence. Disambiguate by "occurrence index" — how many earlier entries in
-        // the list already had this same name (0-based) — rather than absolute
-        // position, so this lines up exactly with the row order used in the Excel
-        // bulk-import format (see CustomCalendarPage's Parameters-sheet parsing): the
-        // Nth time a name appears in the file corresponds to the Nth time it appears
-        // in the template's own step list.
+        // The same IBP operator name can repeat at different positions in a
+        // template's sequence. Disambiguate by occurrence index (how many earlier
+        // entries already had this name, 0-based) so it lines up with the Excel
+        // bulk-import row order (see CustomCalendarPage's Parameters-sheet parsing).
         _buildIbpStepOccurrences: function (aSteps) {
             var oCounts = {};
             return (aSteps || []).map(function (s) {
@@ -1171,7 +1156,133 @@ sap.ui.define([
             return null;
         },
 
+        /**
+         * Reads the template-size fields from a /ibp/template-steps response
+         * (paramCount / maxParamCount / tooManyParams — see jobs.py's
+         * _IBP_MAX_PARAM_COUNT) and locks parameter editing when the
+         * template is too large for IBP to reliably apply a partial
+         * override. IBP's JobSchedule call puts every parameter in the URL,
+         * which is rejected above IBP's own gateway limit — and testing
+         * showed a partial override isn't honored reliably either, so past
+         * that size the only safe option is to always launch with none.
+         */
+        _applyIbpParamSizeGuard: function (data, bShowMessage, iDspIdx) {
+            var that = this;
+            var bLocked = !!data.tooManyParams;
+            var sTemplateName = data.template_name || "";
+
+            // "Usa Default" is a property of the IBP job template, not of any one
+            // DSP step: the same template can be referenced by more than one step
+            // in a chain, and toggling it (or hitting the size lock) for one of
+            // them must be reflected in all of them, never decided independently
+            // per occurrence.
+            var aSteps = this._editModel.getProperty("/steps") || [];
+            var bExistingUseDefaults;
+            if (sTemplateName) {
+                aSteps.forEach(function (s) {
+                    if (s.ibpTemplateName === sTemplateName && s.ibpUseDefaults !== undefined) {
+                        bExistingUseDefaults = s.ibpUseDefaults;
+                    }
+                });
+            }
+            // Locked templates always use defaults, forced and non-optional. Below
+            // the threshold, any existing choice for this template (from another
+            // occurrence, or a previous load) is carried over so it survives
+            // reloads and stays identical everywhere the template is used.
+            var bUseDefaults = bLocked ? true : (bExistingUseDefaults !== undefined ? bExistingUseDefaults : false);
+
+            this._editModel.setProperty("/ibpParamsLocked", bLocked);
+            this._editModel.setProperty("/ibpParamCount", data.paramCount || 0);
+            this._editModel.setProperty("/ibpMaxParamCount", data.maxParamCount || 0);
+            this._editModel.setProperty("/ibpUseDefaults", bUseDefaults);
+
+            // Mirror onto every DSP step that references this same template (not
+            // just whichever one triggered this load) so onSave() validates every
+            // step consistently and the switch reads identically everywhere.
+            // iDspIdx (the step that triggered this load) is always included even
+            // when its /ibpTemplateName in the model hasn't been updated to
+            // sTemplateName yet - on a fresh manual "Load", that write happens
+            // after this call returns, so relying on the name match alone would
+            // silently skip mirroring onto the very step that just loaded it.
+            var oMirrored = {};
+            var mirrorOnto = function (i) {
+                if (oMirrored[i]) return;
+                oMirrored[i] = true;
+                var sBase = "/steps/" + i;
+                that._editModel.setProperty(sBase + "/ibpParamsLocked", bLocked);
+                that._editModel.setProperty(sBase + "/ibpParamCount", data.paramCount || 0);
+                that._editModel.setProperty(sBase + "/ibpMaxParamCount", data.maxParamCount || 0);
+                that._editModel.setProperty(sBase + "/ibpUseDefaults", bUseDefaults);
+            };
+            if (iDspIdx !== null && iDspIdx !== undefined) {
+                mirrorOnto(iDspIdx);
+            }
+            if (sTemplateName) {
+                aSteps.forEach(function (s, i) {
+                    if (s.ibpTemplateName === sTemplateName) mirrorOnto(i);
+                });
+            }
+
+            if (bLocked && bShowMessage && this._sParamsLockWarnedFor !== sTemplateName) {
+                this._sParamsLockWarnedFor = sTemplateName;
+                MessageBox.warning(
+                    "This job template is too large to support custom parameters. "
+                    + "\"Use Default\" has been switched on automatically and parameter "
+                    + "editing is disabled for this template — IBP will use its own saved "
+                    + "defaults for every run.",
+                    { title: "Template too large for custom parameters" }
+                );
+            }
+            return bLocked;
+        },
+
+        /**
+         * Handler for the "Usa Default" switch. Below the param-count threshold
+         * this is the user's free choice; above it, the switch is disabled in
+         * the view so this handler can never fire with bLocked true anyway —
+         * still guarded here in case a binding update races ahead of that.
+         */
+        onToggleIbpUseDefaults: function (oEvt) {
+            if (this._editModel.getProperty("/ibpParamsLocked")) {
+                return; // locked templates can't turn this off - view already disables the control
+            }
+            var bState = oEvt.getParameter("state");
+            this._editModel.setProperty("/ibpUseDefaults", bState);
+            var oCur = this._currentStep();
+            var sTemplateName = oCur && oCur.step && oCur.step.ibpTemplateName;
+            // The flag belongs to the template, not this one step occurrence - mirror
+            // it onto every other DSP step that references the same IBP template.
+            if (sTemplateName) {
+                var aSteps = this._editModel.getProperty("/steps") || [];
+                aSteps.forEach(function (s, i) {
+                    if (s.ibpTemplateName === sTemplateName) {
+                        this._editModel.setProperty("/steps/" + i + "/ibpUseDefaults", bState);
+                    }
+                }, this);
+            } else if (oCur) {
+                this._editModel.setProperty("/steps/" + oCur.idx + "/ibpUseDefaults", bState);
+            }
+        },
+
+        // "Job Name" field: pre-filled from the template's own description but
+        // editable per DSP step (not shared across steps like the template name -
+        // each occurrence of a template represents its own job run and can have
+        // its own name). Mirrors onto the owning step so it survives step-switching
+        // and reaches _buildSaveOutput.
+        onIbpJobTextChange: function (oEvt) {
+            var sValue = (oEvt.getParameter("value") || "").trim();
+            this._editModel.setProperty("/ibpTemplateDescription", sValue);
+            var oCur = this._currentStep();
+            if (oCur) {
+                this._editModel.setProperty("/steps/" + oCur.idx + "/ibpTemplateDescription", sValue);
+            }
+        },
+
         onAddIbpStepParam: function () {
+            if (this._editModel.getProperty("/ibpParamsLocked")) {
+                MessageToast.show("This template has too many parameters — customization is disabled.");
+                return;
+            }
             var oNew = this._editModel.getProperty("/newIbpParam") || {};
             if (!oNew.key || !String(oNew.key).trim()) {
                 MessageToast.show("Param Key is required");
@@ -1179,8 +1290,29 @@ sap.ui.define([
             }
             var oCurIbp = this._currentIbpStep();
             if (!oCurIbp) { MessageToast.show("Select an IBP step first"); return; }
+
+            // "Match code" guard: only accept keys that resolve to a real global
+            // variable known for this step (the same list the Value Help dialog
+            // offers) — free-typed names that don't match anything never reach
+            // IBP as a working override, they just fail silently at launch time.
+            var sKeyTrim = String(oNew.key).trim();
+            var aKnownVars = oCurIbp.step.globalVars || [];
+            var oMatch = aKnownVars.filter(function (g) {
+                return g.name === sKeyTrim
+                    || (oNew.ibpParamName && g.ibpParamName === oNew.ibpParamName);
+            })[0];
+            if (!oMatch) {
+                MessageBox.error(
+                    "\"" + sKeyTrim + "\" does not match a known global variable for this "
+                    + "IBP step. Use the match-code button (value help) to pick a valid "
+                    + "parameter instead of typing a custom name.",
+                    { title: "Unknown parameter" }
+                );
+                return;
+            }
+
             var aParams = (oCurIbp.step.params || []).slice();
-            aParams.push({ key: String(oNew.key).trim(), value: oNew.value == null ? "" : String(oNew.value), active: true, description: oNew.description || "", ibpParamName: oNew.ibpParamName || "", ibpVarNameParam: oNew.ibpVarNameParam || "" });
+            aParams.push({ key: sKeyTrim, value: oNew.value == null ? "" : String(oNew.value), active: true, description: oMatch.label || oNew.description || "", ibpParamName: oMatch.ibpParamName || oNew.ibpParamName || "", ibpVarNameParam: oMatch.ibpVarNameParam || oNew.ibpVarNameParam || "" });
             this._replaceIbpStepParams(oCurIbp.idx, aParams);
             this._editModel.setProperty("/selectedIbpStepParams", aParams);
             this._editModel.setProperty("/newIbpParam", _newParam());
@@ -1445,16 +1577,27 @@ sap.ui.define([
                     }
                     return p;
                 });
-                // Stash manual IBP-template-name / SAC-multiaction overrides so they survive
-                // reload — mirrors the existing __sacMultiActionId sentinel pattern.
-                if (s.ibpTemplateNameIsOverride && s.ibpTemplateName) {
+                // Stash the IBP job template name so it survives reload - there's no DSP
+                // baseline to fall back to anymore, so this is the only source of truth
+                // and must always be saved whenever a template is set (not just "overrides").
+                if (s.ibpTemplateName) {
                     allParams = allParams.concat([{
                         key: "__ibpTemplateNameOverride",
                         value: s.ibpTemplateName,
                         active: true
                     }]);
                 }
-                if (s.sacMultiActionIdIsOverride && s.sacMultiActionId) {
+                // Stash the (possibly user-edited) job name shown in IBP's own job
+                // history at launch — same field as the template's auto-fetched
+                // description, so this also survives reload even when unedited.
+                if (s.ibpTemplateName && s.ibpTemplateDescription) {
+                    allParams = allParams.concat([{
+                        key: "__ibpJobTextOverride",
+                        value: s.ibpTemplateDescription,
+                        active: true
+                    }]);
+                }
+                if (s.sacMultiActionId) {
                     allParams = allParams.concat([{
                         key: "__sacMultiActionIdOverride",
                         value: s.sacMultiActionId,
@@ -1467,6 +1610,12 @@ sap.ui.define([
                 // otherwise never carries it (DSP's API step has no notion of SAC).
                 if (s.sacMultiActionId) {
                     allParams = allParams.concat([{ key: "__sacMultiActionId", value: s.sacMultiActionId, active: true }]);
+                }
+                // Persist the "Usa Default" choice (auto-forced when locked, or the
+                // user's own choice below the threshold) so /launch's server-side
+                // gate and a future reload both see it, not just this session.
+                if (s.ibpUseDefaults) {
+                    allParams = allParams.concat([{ key: "__ibpUseDefaults", value: "true", active: true }]);
                 }
                 if (allParams.length) {
                     oOut[s.name] = allParams;
@@ -1482,6 +1631,58 @@ sap.ui.define([
             var sTargetType = this._editModel.getProperty("/targetType") || "DSP";
             var sJobTemplate = this._editModel.getProperty("/jobTemplate") || "";
             var sCacheKey = sTargetType === "IBP" ? ("IBP:" + sJobTemplate) : sTc;
+
+            // Hard save-time gate: a step DSP declared as "integration": "ibp"|"sac"
+            // (see integrationType in dsp.py) must have the matching Job Template /
+            // Multi Action set - mirrors the same mandatory check already enforced on
+            // the Excel calendar import. Steps with no declared integrationType are
+            // left alone (DSP hasn't tagged them as API tasks yet).
+            if (sTargetType === "DSP") {
+                var aMissingIntegration = [];
+                aSteps.forEach(function (s) {
+                    if (s.isSkipStep) return;
+                    if (s.integrationType === "ibp" && !s.ibpTemplateName) {
+                        aMissingIntegration.push(s.name || s.businessName || "(unnamed step)");
+                    } else if (s.integrationType === "sac" && !s.sacMultiActionId) {
+                        aMissingIntegration.push(s.name || s.businessName || "(unnamed step)");
+                    }
+                });
+                if (aMissingIntegration.length) {
+                    MessageBox.error(
+                        "Cannot save: the following API step(s) have no Job Template (IBP) "
+                        + "or Multi Action (SAC) associated. Set one before saving:\n\n"
+                        + aMissingIntegration.join("\n"),
+                        { title: "Missing Job Template / Multi Action" }
+                    );
+                    return;
+                }
+            }
+
+            // Hard save-time gate: an IBP template over the param-count threshold
+            // must never carry custom parameters, even if the UI lock was somehow
+            // bypassed (stale restored state, template switched after params were
+            // added, etc.). Reject the whole save rather than silently stripping,
+            // so the user sees exactly what needs fixing before they lose work.
+            var aBlocking = [];
+            aSteps.forEach(function (s) {
+                if (!s.ibpParamsLocked) return;
+                var aBadParams = (s.ibpSteps || []).some(function (is) {
+                    return (is.params || []).some(function (p) { return p.active !== false; });
+                });
+                if (aBadParams) {
+                    aBlocking.push(s.name || s.businessName || "(unnamed step)");
+                }
+            });
+            if (aBlocking.length) {
+                MessageBox.error(
+                    "Cannot save: the following step(s) use an IBP template that's too large "
+                    + "to support custom overrides reliably. Turn on \"Usa Default\" (or "
+                    + "remove the custom parameters) before saving:\n\n"
+                    + aBlocking.join("\n"),
+                    { title: "Too many parameters for custom values" }
+                );
+                return;
+            }
 
             var built = this._buildSaveOutput(aSteps);
 

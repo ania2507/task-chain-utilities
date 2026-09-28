@@ -1,7 +1,6 @@
 
 import os
 import sys
-import json
 import logging
 from functools import wraps
 from dotenv import load_dotenv
@@ -68,7 +67,6 @@ def flask_access_validation(required_scope=None):
             token = auth_header[len('Bearer '):]
             try:
                 decoded = jwt.decode(token, options={"verify_signature": False})
-                logger.debug("=== TOKEN PAYLOAD ===\n" + json.dumps(decoded, indent=2))
             except Exception as e:
                 logger.error(f"Unable to decode token: {e}")
 

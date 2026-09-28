@@ -66,7 +66,6 @@ sap.ui.define([
             var sRunId = decodeURIComponent(this._sRunId);
             var sChainId = decodeURIComponent(this._sChainId);
             
-            // Get project data to find spaceId
             var aProjects = JSON.parse(localStorage.getItem("monitoringProjects") || "[]");
             var oProject = aProjects.find(function(p) { return p.id === this._sProjectId; }.bind(this));
             var sSpaceId = "";
@@ -80,7 +79,6 @@ sap.ui.define([
                 }
             }
             
-            // Create initial model with loading state
             var oRunDetailModel = new JSONModel({
                 runId: sRunId,
                 taskChainName: sChainId,
@@ -123,7 +121,6 @@ sap.ui.define([
             // while DSP indexes runs by chain name, so filtering by taskchain can miss the run
             var sRunsUrl = sBaseUrl + "/v1/dsp/taskchain-runs?runId=" + encodeURIComponent(sRunId);
             
-            // Get detailed messages for this run
             var sMessagesUrl = sBaseUrl + "/v1/dsp/tasklog-messages?taskLogId=" + encodeURIComponent(sRunId);
             
             // Get child nodes info (to find failed child tasks)
@@ -138,7 +135,6 @@ sap.ui.define([
                 var messagesResult = results[1];
                 var nodesResult = results[2];
 
-                // Find the specific run
                 var oRun = null;
                 if (runsResult.success && runsResult.runs) {
                     oRun = runsResult.runs.find(function(r) {
@@ -160,7 +156,6 @@ sap.ui.define([
                         oModel.setProperty("/spaceId", oRun.spaceId);
                     }
                     
-                    // Calculate duration
                     var sDuration = "-";
                     if (oRun.duration && typeof oRun.duration === "number") {
                         sDuration = formatter.formatDurationMinutes(oRun.duration);
@@ -181,7 +176,6 @@ sap.ui.define([
                     oModel.setProperty("/statusText", "Unknown");
                 }
                 
-                // Process messages into timeline
                 var aTimeline = [];
                 var sErrorMessage = "";
                 var sErrorCode = "";
@@ -194,20 +188,17 @@ sap.ui.define([
 
                 if (messagesResult.success && messagesResult.messages) {
                     messagesResult.messages.forEach(function(msg) {
-                        // Extract correlation ID from details
                         if (msg.details && msg.details.correlationId && !sCorrelationId) {
                             sCorrelationId = msg.details.correlationId;
                         }
-                        
-                        // Build timeline entry
+
                         aTimeline.push({
                             taskName: msg.details && msg.details.task ? msg.details.task.split("/").pop() : (msg.messageKey || "Message"),
                             timestamp: msg.timestamp,
                             status: msg.severity === "ERROR" ? "error" : msg.severity === "WARNING" ? "warning" : "success",
                             message: msg.text
                         });
-                        
-                        // Capture error details from main chain messages
+
                         if (msg.severity === "ERROR") {
                             if (!sErrorMessage) {
                                 sErrorMessage = msg.text;

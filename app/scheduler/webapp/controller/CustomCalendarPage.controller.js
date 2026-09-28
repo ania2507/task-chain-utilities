@@ -341,8 +341,9 @@ sap.ui.define([
             // steps (IBP/SAC), in DSP step order, when available. When the lookup
             // failed (so we don't actually know what the chain has), falls back to one
             // generic example of each integration type as a safe default.
-            // "Job Template / Multi Action" overrides what's auto-detected from DSP for
-            // that DSP step — leave blank to keep using DSP's auto-detected value.
+            // "Job Template / Multi Action": mandatory for IBP steps; for SAC steps
+            // it overrides what DSP auto-detects for that step, leave blank to keep
+            // using DSP's auto-detected value.
             // "Description" is free text for your own reference, not used by the app.
             // Replace IBP Step names and parameter values with your actual configuration.
             var sIbpTemplatePlaceholder = "YY1_ZAAGTUIS....";
@@ -441,7 +442,7 @@ sap.ui.define([
                 // step's own authoritative "integration": "ibp"|"sac" field.
                 var oOverridesByKey = oParsed.overridesByKey || {};
                 var pStepMap = Promise.resolve({ maById: {}, integrationById: {} });
-                if ((oParsed.sacFlatDspSteps && oParsed.sacFlatDspSteps.length) || Object.keys(oOverridesByKey).length) {
+                {
                     var sSpaceId = that._editModel.getProperty("/spaceId") || "";
                     pStepMap = fetch(that._getApiBase() + "dsp/taskchain-steps?spaceId=" + encodeURIComponent(sSpaceId)
                         + "&taskchain=" + encodeURIComponent(sChain))
@@ -476,6 +477,16 @@ sap.ui.define([
                         var sIntegration = oIntegrationMap[dspStep] || "";
                         var bIsIbp = sIntegration ? sIntegration === "ibp" : ov.hintIbp;
                         if (bIsIbp) {
+                            // A row naming only the job template, with no individual
+                            // parameter values, means "run it with IBP's own defaults" -
+                            // default "Usa Default" on for it (still changeable later if
+                            // the template turns out to be short enough to customize).
+                            var bHasRealParams = aList.some(function (p) {
+                                return !String(p.key || "").startsWith("__");
+                            });
+                            if (!bHasRealParams) {
+                                aList.push({ key: "__ibpUseDefaults", value: "true", active: true });
+                            }
                             aList.push({ key: "__ibpTemplateNameOverride", value: ov.value, active: true });
                         } else {
                             aList.push({ key: "__sacMultiActionIdOverride", value: ov.value, active: true });
@@ -574,30 +585,39 @@ sap.ui.define([
                         that._applyPastFilter();
                     }
 
-                    that._editModel.setProperty("/calendarUploadBusy", false);
+                    // Check 3: IBP templates with real custom parameters must be within
+                    // the size limit (see _checkIbpParamLimitsForImport) - async, so the
+                    // rest of the flow (collision check + upload) waits for it.
+                    that._checkIbpParamLimitsForImport(oParsed, oStepMeta).then(function (oLimitCheck) {
+                        that._editModel.setProperty("/calendarUploadBusy", false);
+                        if (oLimitCheck.blocked) {
+                            MessageBox.error(oLimitCheck.message, { title: "Too many parameters for custom values" });
+                            return;
+                        }
 
-                    if (aCollisions.length) {
-                        var aLabels = aCollisions.slice(0, 5).map(function (e) {
-                            return e.dateLabel + " " + e.rawTime;
-                        });
-                        MessageBox.warning(
-                            aCollisions.length + " date/time slot" +
-                            (aCollisions.length > 1 ? "s" : "") +
-                            " in the file already exist on the app:\n" +
-                            aLabels.join("\n") +
-                            (aCollisions.length > 5 ? "\n…and " + (aCollisions.length - 5) + " more" : "") +
-                            "\n\nProceed and overwrite the conflicting entries?",
-                            {
-                                actions: [MessageBox.Action.OK, MessageBox.Action.CANCEL],
-                                emphasizedAction: MessageBox.Action.OK,
-                                onClose: function (sAction) {
-                                    if (sAction === MessageBox.Action.OK) doUpload();
+                        if (aCollisions.length) {
+                            var aLabels = aCollisions.slice(0, 5).map(function (e) {
+                                return e.dateLabel + " " + e.rawTime;
+                            });
+                            MessageBox.warning(
+                                aCollisions.length + " date/time slot" +
+                                (aCollisions.length > 1 ? "s" : "") +
+                                " in the file already exist on the app:\n" +
+                                aLabels.join("\n") +
+                                (aCollisions.length > 5 ? "\n…and " + (aCollisions.length - 5) + " more" : "") +
+                                "\n\nProceed and overwrite the conflicting entries?",
+                                {
+                                    actions: [MessageBox.Action.OK, MessageBox.Action.CANCEL],
+                                    emphasizedAction: MessageBox.Action.OK,
+                                    onClose: function (sAction) {
+                                        if (sAction === MessageBox.Action.OK) doUpload();
+                                    }
                                 }
-                            }
-                        );
-                    } else {
-                        doUpload();
-                    }
+                            );
+                        } else {
+                            doUpload();
+                        }
+                    });
                 }).catch(function (err) {
                     console.error("[Scheduler] calendar upload error", err);
                     MessageBox.error(String(err.message || err));
@@ -653,8 +673,10 @@ sap.ui.define([
 
             // Parameters sheet: Schedule ID | DSP Step | Job Template / Multi Action | IBP Step | Parameter | Value | HierarchyId
             // IBP Step filled → IBP param (with step field); IBP Step blank → SAC param.
-            // The "Job Template / Multi Action" column is optional (older template files
-            // won't have it) — when present, it overrides what DSP auto-detects for that step.
+            // The "Job Template / Multi Action" column is optional overall (older
+            // template files won't have it) and, for SAC steps, overrides what DSP
+            // auto-detects for that step — but it's mandatory for IBP steps, enforced
+            // in _checkIbpParamLimitsForImport below.
             if (wb.SheetNames.indexOf("Parameters") !== -1) {
                 var wsP = wb.Sheets["Parameters"];
                 var aPRows = XLSX.utils.sheet_to_json(wsP, { header: 1, raw: false });
@@ -723,6 +745,91 @@ sap.ui.define([
                 sacFlatDspSteps: aSacFlatDspSteps,
                 overridesByKey: oOverrideByKey
             };
+        },
+
+        // A bulk Excel import bypasses Step Parameters entirely, so the same
+        // param-count rule enforced there interactively has to be checked here
+        // too: any IBP template referenced with real (non-sentinel) parameter
+        // values must be within the size limit that supports custom overrides,
+        // or IBP won't apply them reliably (see jobs.py's _IBP_MAX_PARAM_COUNT).
+        // Rows naming only a template with no parameter values are unaffected -
+        // those already got the __ibpUseDefaults sentinel above.
+        //
+        // Also enforces that the "Job Template" column is mandatory for every
+        // IBP row: there is no DSP auto-detection to fall back to anymore (the
+        // app never inherits a template name from DSP's own step config), so a
+        // row with IBP parameters but no template override can never resolve
+        // to anything and must block the import rather than silently save with
+        // an empty/stale template.
+        _checkIbpParamLimitsForImport: function (oParsed) {
+            var that = this;
+            var oOverridesByKey = oParsed.overridesByKey || {};
+
+            var oNeedsCheck = {};      // templateName -> ["schId / dspStep", ...]
+            var aMissingTemplate = []; // ["schId / dspStep", ...] - IBP row, no template given
+            Object.keys(oParsed.paramsByScheduleId || {}).forEach(function (schId) {
+                var oByStep = oParsed.paramsByScheduleId[schId] || {};
+                Object.keys(oByStep).forEach(function (dspStep) {
+                    var aList = oByStep[dspStep] || [];
+                    var aRealParams = aList.filter(function (p) {
+                        return !String(p.key || "").startsWith("__");
+                    });
+                    // A row is "for IBP" when its parameters carry an IBP Step name
+                    // (set during parsing whenever the "IBP Step" column is filled in).
+                    var bIsIbpRow = aRealParams.some(function (p) { return !!p.step; });
+                    if (!bIsIbpRow) return;
+                    var oOv = oOverridesByKey[schId + "::" + dspStep];
+                    var sTpl = (oOv && oOv.value) || "";
+                    if (!sTpl) {
+                        aMissingTemplate.push(schId + " / " + dspStep);
+                        return;
+                    }
+                    if (!aRealParams.length) return; // template-only row - no size concern
+                    if (!oNeedsCheck[sTpl]) oNeedsCheck[sTpl] = [];
+                    oNeedsCheck[sTpl].push(schId + " / " + dspStep);
+                });
+            });
+
+            if (aMissingTemplate.length) {
+                return Promise.resolve({
+                    blocked: true,
+                    message: "Cannot import: the \"Job Template\" column is required for "
+                        + "every IBP step row - there is no DSP auto-detection to fall back "
+                        + "to. Missing for:\n\n" + aMissingTemplate.join("\n")
+                });
+            }
+
+            var aTemplates = Object.keys(oNeedsCheck);
+            if (!aTemplates.length) {
+                return Promise.resolve({ blocked: false });
+            }
+
+            return Promise.all(aTemplates.map(function (sTpl) {
+                return fetch(that._getApiBase() + "jobs/ibp/template-steps", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                    body: JSON.stringify({ template_name: sTpl })
+                }).then(function (res) { return res.json(); })
+                    .then(function (data) { return { template: sTpl, data: data }; })
+                    .catch(function () { return { template: sTpl, data: {} }; });
+            })).then(function (aResults) {
+                var aBlocking = [];
+                aResults.forEach(function (r) {
+                    if (r.data && r.data.tooManyParams) {
+                        aBlocking.push(
+                            r.template + " — used by: " + oNeedsCheck[r.template].join(", ")
+                        );
+                    }
+                });
+                if (!aBlocking.length) return { blocked: false };
+                return {
+                    blocked: true,
+                    message: "Cannot import: the following IBP template(s) have more "
+                        + "parameters than supported for custom overrides. Remove the "
+                        + "individual parameter values for these rows (leave only the "
+                        + "template name) before importing:\n\n" + aBlocking.join("\n\n")
+                };
+            });
         },
 
         _buildCalendarEntries: function (aRows, sChain, oParamsByScheduleId) {

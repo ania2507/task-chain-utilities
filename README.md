@@ -48,7 +48,7 @@ In Cloud Foundry, most of these are bound automatically via `mta.yaml` service b
 | `LOG_LEVEL` | Python logging level. | `INFO` |
 | `SKIP_AUTH` | Bypasses XSUAA token validation entirely. **Never set in production.** | `false` |
 | `USE_IN_MEMORY_REPO` | Uses an in-memory store instead of HANA, for a quick smoke test without a DB. | `false` |
-| `ENABLE_DEBUG_ENDPOINTS` | Exposes diagnostic routes (`GET /v1/dsp/debug-*`, `GET /v1/jobs/ibp/debug-conn`, `_debug_*` keys in `POST /v1/jobs/ibp/template-steps`) that leak internal metadata. Keep disabled outside local debugging. | `false` |
+| `ENABLE_DEBUG_ENDPOINTS` | Exposes diagnostic routes/fields that leak internal metadata (raw DB rows, live schema probes) or cost extra live calls to an external system: `GET /v1/dsp/debug-*`, `GET /v1/jobs/ibp/debug-conn`, `_debug_*`/`debug` keys in `GET /v1/dsp/taskchain-schedules`, `GET /v1/dsp/taskchain-steps`, `GET /v1/dsp/task-global-vars` and `POST /v1/jobs/ibp/template-steps`, plus the SAC reconnaissance routes `GET /v1/jobs/sac/dataexport/members`, `GET /v1/jobs/sac/probe-multiaction/<id>`, `GET /v1/jobs/sac/multiaction-definition/<id>` (404 when disabled). Convention: the flag must gate the extra *work* itself (extra API calls, raw queries), not just whether the result is included in the response — see §5.6 and §10.8. Keep disabled outside local debugging. | `false` |
 | `HANA_SERVICE_INSTANCE_NAME` | Name of the bound HDI container service instance for application data. | `task-chain-utilities-db` |
 | `DSP_HANA_SERVICE_NAME` | Name of the bound user-provided service for DSP cross-schema HANA access. | `dsp-hana` |
 | `DSP_SERVICE_NAME` | Name of the bound user-provided service for DSP credentials. | `dsp-credentials` |
@@ -65,7 +65,7 @@ In Cloud Foundry, most of these are bound automatically via `mta.yaml` service b
 
 The SAP Job Scheduling client (`JobSchedulerClient.from_env()`) has no dedicated local-dev env vars — it reads its credentials directly from the `jobscheduler` entry in `VCAP_SERVICES`. Locally (no CF binding) it's simply unavailable and `SchedulerService` falls back to the in-process scheduler transparently (see §5.5).
 
-Per-landscape config values that should be editable without a redeploy (currently just `IBP_JOB_USER`) are **not** env vars — they live in the `AppSetting` HANA table, read via `GET /v1/settings` (see §5.4, §7.2).
+Per-landscape config values that should be editable without a redeploy (`IBP_JOB_USER`, `IBP_MAX_PARAM_COUNT`) are **not** env vars — they live in the `AppSetting` HANA table, read via `GET /v1/settings` (see §5.4, §5.6, §7.2).
 
 ### 2.4 Logical Flow
 
@@ -145,6 +145,28 @@ Calendar entries and Traffic Lights checks are scheduled through the SAP Job Sch
 - Known constraints hit during integration: job names reject hyphens (use underscores), job-creation payloads require an explicit `"schedules": []`, and the minimum schedule granularity is 5 minutes.
 - The in-process 60s completion-polling loop and gunicorn's single worker (`--workers 1`, see §8) are **not** covered by this migration — a frozen/blocked polling loop remains an open residual risk by design.
 
+### 5.6 IBP Job Template Parameter Size Guard
+
+IBP's `JobSchedule` OData v2 Function Import (service `BC_EXT_APPJOB_MANAGEMENT;v=0002`) puts every parameter in the request URL — this is a protocol-level constraint of OData v2 Function Imports (parameters are URL query options regardless of HTTP verb; there is no body-parameter mechanism, unlike OData v4 Actions), confirmed directly against the service's own `$metadata`. IBP's gateway rejects the URL above **~64,700–64,900 characters** (measured empirically), and testing showed IBP does **not** reliably honor a partial parameter override — only sending *all* parameters or *none* works correctly.
+
+To avoid ever hitting that limit, `routes/jobs.py` (`_ibp_template_param_stats`, `_get_ibp_max_param_count`) computes each template's real parameter count and estimated URL length, against a threshold read from `AppSetting` (`IBP_MAX_PARAM_COUNT`, default **200** — a safety margin under the ~337-parameter theoretical max at the ~192 chars/param average observed on real templates):
+
+- **Under threshold**: unchanged behavior — the Step Parameters UI's "Usa Default" toggle is the user's free choice; custom parameters are sent normally.
+- **Over threshold**: "Usa Default" is forced on and locked (parameter editing disabled) both in the UI and at save time (`onSave`'s hard gate in `StepParametersPage.controller.js`) and at launch time (`POST /v1/jobs/launch`'s own gate, defense-in-depth against stale/bypassed state) — the job always launches with zero custom parameters, so IBP uses its own saved template defaults. The same rule is enforced on the Excel Custom Calendar import (`CustomCalendarPage.controller.js`'s `_checkIbpParamLimitsForImport`), where the "Job Template" column is mandatory for IBP-typed rows.
+
+The "Usa Default" flag and the lock state are properties of the **job template**, not of any one DSP step occurrence — if the same template is referenced by more than one step in a chain, toggling it (or hitting the size lock) on one occurrence is mirrored onto every other step using that same template (`_applyIbpParamSizeGuard`).
+
+The job name IBP shows in its own job history (`JobText`) can optionally be customized per step via the same Step Parameters UI (pre-filled with the template's own description, editable) — persisted as the `__ibpJobTextOverride` sentinel and honored by `IBPJobClient.launch_job`'s `job_text` param when non-blank, otherwise auto-derived from the template description as before.
+
+### 5.7 Concurrent-Launch Guards — Two Independent Mechanisms, Kept in Sync
+
+Two separate in-memory mechanisms both track "is this task chain currently running", for different reasons:
+
+1. **`SchedulerService._running_taskchains` / `_pending_queue`** (`scheduler_service.py`): a per-`(spaceId, taskchain)` FIFO queue. A scheduled/manual fire for a taskchain that's already running is queued (persisted as a `ScheduleRun` row with `status: "queued"`) instead of launched immediately, and dequeued once the running execution reaches a terminal DSP status (`_check_taskchain_completion`, polled every 60s).
+2. **`TaskchainExecutor._ACTIVE_TASKCHAINS`** (`taskchain_executor.py`): a per-taskchain-name reservation with a 3-hour safety-net expiry (`_ACTIVE_TASKCHAIN_MAX_SECONDS`), used by `execute_async_dsp`/`retry_dsp` to hard-reject a second concurrent launch that would otherwise overwrite the first run's still-in-use stored step parameters (`_PENDING_STEP_PARAMS` is keyed only by taskchain name — DSP gives no per-run identity on the step-launch callback). Released by its own background poller (`_watch_taskchain_active_flag`, ~30s interval) once DSP reports a terminal status.
+
+Because these poll independently, they can fall out of sync: a queued fire (#1) can be ready to dequeue while guard #2 hasn't yet noticed the same execution finished, causing the dequeued relaunch to fail immediately with *"Task chain '...' is already running..."* — the queued entry never actually starts, silently, until #2's own poller (or its 3h safety net) eventually catches up. Fixed by having `_check_taskchain_completion` (mechanism #1), once it has the authoritative "this execution is over" signal, also proactively clear the matching entry in `_ACTIVE_TASKCHAINS` (mechanism #2) before dequeuing the next fire, instead of waiting on mechanism #2's own independent poll. Any future change to either mechanism's completion-detection should preserve this cross-clear to avoid reintroducing the same class of bug.
+
 ## 6. Security Model
 
 - Authentication: XSUAA.
@@ -166,6 +188,8 @@ Calendar entries and Traffic Lights checks are scheduled through the SAP Job Sch
 - Encapsulates external system clients and execution logic.
 - Handles task-chain run/status workflows and integration diagnostics.
 - `GET /v1/settings` (`routes/settings.py`, `admin` scope): read-only listing of the `AppSetting` table (`name`, `value`, `description`) — rows are written directly against HANA, not through this app (see §5.4, §5.5).
+- `POST /v1/jobs/ibp/template-steps` (`routes/jobs.py`, `admin` scope): reads an IBP template's step/parameter structure and returns the size-guard verdict (`paramCount`, `maxParamCount`, `tooManyParams`) used by the Step Parameters UI and the Excel import check — see §5.6.
+- `GET /v1/scheduler/active-taskchains` / `DELETE /v1/scheduler/active-taskchains/<taskchain>` (`routes/scheduler.py`, `admin` scope): inspect/manually clear the `_ACTIVE_TASKCHAINS` guard described in §5.7 — useful to diagnose or unblock a launch rejected as "already running".
 - `POST /v1/scheduler/jobscheduler-callback` / `POST /v1/scheduler/jobscheduler-delete` (`routes/scheduler.py`): callback targets invoked by the Job Scheduling Service itself, not meant for direct/manual use (see §5.5).
 
 ## 8. Build and Deployment
@@ -235,7 +259,9 @@ Resolution options:
 - Python for orchestration and external integrations.
 4. Remove legacy DSP direct HANA/CLI integration paths.
 5. Delegate entry/Traffic-Lights scheduling to the SAP Job Scheduling Service for HA/multi-instance safety, with a transparent fallback to in-process scheduling when the service isn't bound (local dev) — see §5.5.
-6. Store small per-landscape config values that should be editable without a redeploy (e.g. `IBP_JOB_USER`) in the generic `AppSetting` HANA table instead of env vars — see §5.4.
+6. Store small per-landscape config values that should be editable without a redeploy (e.g. `IBP_JOB_USER`, `IBP_MAX_PARAM_COUNT`) in the generic `AppSetting` HANA table instead of env vars — see §5.4, §5.6.
+7. IBP job launches never send a parameter set that could exceed IBP's gateway URL-length limit — templates over threshold always launch with zero custom parameters instead, rather than risking a `414` (see §5.6). This is enforced redundantly in the UI, at save time, and at launch time.
+8. A debug/diagnostic code path (extra API calls, raw DB dumps, reconnaissance probes) must be gated by `ENABLE_DEBUG_ENDPOINTS` **before** doing the extra work, not just before including it in the response — gating only the response field still pays the cost (extra live calls, DB load) on every normal request (see §2.3).
 
 ## 11. Business Logic Notes
 

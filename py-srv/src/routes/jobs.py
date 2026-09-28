@@ -28,6 +28,62 @@ logger = logging.getLogger(__name__)
 
 bp = Blueprint("jobs", __name__)
 
+# IBP's JobSchedule OData Function Import puts every parameter value in the
+# request URL (not the body) - measured empirically against the real IBP
+# gateway (ICM), the URL is rejected with 414 above ~64,700-64,900 chars.
+# 200 params keeps a healthy safety margin under that limit (the theoretical
+# max is ~337 params at the average ~192 chars/param seen on real templates).
+# Templates above this threshold must never have custom parameters injected -
+# testing showed that partially overriding a subset of params (even when
+# every IBP-flagged "mandatory" field is included) is NOT reliably applied
+# by IBP's own job execution, unlike sending either ALL params explicitly or
+# NONE at all (both of which IBP handles correctly). Above this threshold
+# there is no room to send all params without risking a 414, so the only
+# reliable option left is to send none and let IBP use its own template
+# defaults everywhere.
+#
+# Kept as a fallback default only - the effective value is read from the
+# AppSetting table (key "IBP_MAX_PARAM_COUNT", see _get_ibp_max_param_count)
+# so it can be tuned per landscape (DEV/PROD) without a redeploy, the same
+# way IBP_JOB_USER already is.
+_IBP_MAX_PARAM_COUNT_DEFAULT = 200
+
+
+def _get_ibp_max_param_count() -> int:
+    """Resolve the IBP param-count threshold from the AppSetting table
+    (key "IBP_MAX_PARAM_COUNT"). Falls back to _IBP_MAX_PARAM_COUNT_DEFAULT
+    if the row doesn't exist, isn't a valid integer, or the settings repo
+    isn't reachable (e.g. local dev without HANA)."""
+    settings_repo = current_app.extensions.get("taskchain", {}).get("app_settings_repo")
+    raw = settings_repo.get("IBP_MAX_PARAM_COUNT") if settings_repo else None
+    if raw:
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            logger.warning(
+                "AppSetting IBP_MAX_PARAM_COUNT=%r is not a valid integer - using default %d",
+                raw, _IBP_MAX_PARAM_COUNT_DEFAULT,
+            )
+    return _IBP_MAX_PARAM_COUNT_DEFAULT
+
+
+def _ibp_template_param_stats(client, template_data: dict) -> tuple[int, int]:
+    """Return (param_count, estimated_url_encoded_length) for the FULL set of
+    changeable, non-empty parameters in an already-fetched IBP template
+    (as returned by ``IBPJobClient.read_template``).
+
+    Mirrors exactly what a full-parameter launch would send, so the count
+    reported to the UI and the gate applied in ``/launch`` agree.
+    """
+    from urllib.parse import quote as _quote
+
+    from ..integrations.ibp.client import _build_param_values_json
+
+    merged = _extract_all_seq_params_as_map(template_data)
+    params = list(merged.values())
+    param_json = _build_param_values_json(params) if params else ""
+    return len(merged), len(_quote(param_json, safe=""))
+
 
 @bp.route("/ibp/debug-conn", methods=["GET"])
 @flask_access_validation(required_scope="admin")
@@ -71,10 +127,14 @@ def sac_dataexport_providers():
 @bp.route("/sac/dataexport/members", methods=["GET"])
 @flask_access_validation(required_scope="admin")
 def sac_dataexport_members():
-    """Fetch members of a SAC dimension using the user's JWT.
+    """Debug: fetch members of a SAC dimension using the user's JWT, trying
+    several undocumented API paths to discover which one works for a given
+    model. Not called by the app UI - kept for manual SAC troubleshooting.
 
     Query params: modelId, dimensionId
     """
+    if os.environ.get("ENABLE_DEBUG_ENDPOINTS", "false").lower() != "true":
+        return jsonify({"error": "Not found"}), 404
     model_id = request.args.get("modelId", "")
     dimension_id = request.args.get("dimensionId", "")
     try:
@@ -89,7 +149,9 @@ def sac_dataexport_members():
 def sac_multiaction_definition(multiaction_id):
     """Debug: return the raw SAC multi action definition (parameters,
     dimensions, configured hierarchies) to diagnose hierarchyId mismatches
-    (SAC error 501000531)."""
+    (SAC error 501000531). Not called by the app UI."""
+    if os.environ.get("ENABLE_DEBUG_ENDPOINTS", "false").lower() != "true":
+        return jsonify({"error": "Not found"}), 404
     try:
         client = _get_executor().get_client(IntegrationType.SAC)
         data = client.get_multiaction_definition(multiaction_id)
@@ -101,7 +163,11 @@ def sac_multiaction_definition(multiaction_id):
 @bp.route("/sac/probe-multiaction/<path:multiaction_id>", methods=["GET"])
 @flask_access_validation(required_scope="admin")
 def sac_probe_multiaction(multiaction_id):
-    """Probe GET paths for a multi-action to discover model/param info."""
+    """Debug: probe several undocumented GET paths for a multi-action to
+    discover model/param info. Not called by the app UI - kept for manual
+    SAC troubleshooting."""
+    if os.environ.get("ENABLE_DEBUG_ENDPOINTS", "false").lower() != "true":
+        return jsonify({"error": "Not found"}), 404
     try:
         client = _get_executor().get_client(IntegrationType.SAC)
         return jsonify(client.probe_multiaction(multiaction_id)), 200
@@ -368,6 +434,45 @@ def launch_job():
                 )
                 payload = {**payload, "template_name": _tpl_override}
 
+            # IBP: an app-configured custom job name (Step Parameters UI "Job Name"
+            # field) must reach the launch the same way the template override does
+            # above - otherwise IBPJobClient always falls back to auto-naming the
+            # job after the template's own description (see client.py's job_text
+            # fallback). Same per-step matching/ambiguity rules as the template
+            # override, since a custom job name is set per DSP step occurrence.
+            def _job_text_override_in(sparams):
+                for p in (sparams if isinstance(sparams, list) else []):
+                    if p.get("key") == "__ibpJobTextOverride" and p.get("value"):
+                        return p["value"]
+                return None
+
+            _text_override = None
+            if _dsp_step_id:
+                _text_override = _job_text_override_in(_step_params_for_tpl.get(_dsp_step_id))
+            else:
+                _text_overrides_by_step = {}
+                for _sname, _sparams in _step_params_for_tpl.items():
+                    _found = _job_text_override_in(_sparams)
+                    if _found:
+                        _text_overrides_by_step[_sname] = _found
+                if len(_text_overrides_by_step) == 1:
+                    _text_override = next(iter(_text_overrides_by_step.values()))
+                elif len(_text_overrides_by_step) > 1:
+                    logger.warning(
+                        "Multiple IBP job name overrides found for taskchain '%s' (%s) and "
+                        "DSP did not send a step identifier — cannot disambiguate, leaving "
+                        "job_text as auto-derived from the template",
+                        taskchain_ctx, list(_text_overrides_by_step.keys()),
+                    )
+
+            if _text_override:
+                logger.info(
+                    "Overriding job_text with app-configured value '%s' for taskchain '%s'%s",
+                    _text_override, taskchain_ctx,
+                    f" (step '{_dsp_step_id}')" if _dsp_step_id else "",
+                )
+                payload = {**payload, "job_text": _text_override}
+
     # SAC: an app-configured multi action ID (Step Parameters UI) must actually
     # reach DSP's job launch, not just drive the UI — mirrors the IBP template_name
     # override above. The app-configured value always wins over whatever DSP sends
@@ -488,6 +593,73 @@ def launch_job():
     if integration == "ibp" and taskchain_ctx and not payload.get("parameters"):
         from ..services.taskchain_executor import TaskchainExecutor
         step_params = TaskchainExecutor.consume_pending_step_params(taskchain_ctx)
+
+        # Template-size guard: mirrors the check surfaced to the UI in
+        # /ibp/template-steps. Even though every field we'd inject passed
+        # the "mandatory" check, testing showed IBP does NOT reliably apply
+        # a partial parameter override - only "all params" or "none" are
+        # honored correctly. Above the configured threshold there's no room to
+        # send all params without risking a 414, so any stored overrides for
+        # an oversized template are discarded here - defense in depth in
+        # case the front-end lock was bypassed or the entry predates it.
+        _tpl_name_for_gate = payload.get("template_name")
+
+        # "Usa Default" sentinel: set explicitly by the user (below the size
+        # threshold, their own choice) or by an Excel bulk-import row that only
+        # specified a template with no individual parameter values. Either way
+        # it means "always launch this step with none" - checked against this
+        # specific DSP step's own stored list, the same way the objectId match
+        # further below resolves __ibpTemplateNameOverride/__sacMultiActionId.
+        if step_params:
+            _step_id_for_gate = ""
+            for _cand in (
+                payload.get("objectId"), payload.get("object_id"),
+                payload.get("step_id"), payload.get("stepId"), payload.get("taskId"),
+            ):
+                if isinstance(_cand, str) and _cand.strip():
+                    _step_id_for_gate = _cand.strip()
+                    break
+            _candidate_lists = (
+                [step_params.get(_step_id_for_gate, [])] if _step_id_for_gate
+                else list(step_params.values())
+            )
+            if any(
+                p.get("key") == "__ibpUseDefaults" and p.get("value") == "true"
+                for _lst in _candidate_lists if isinstance(_lst, list)
+                for p in _lst
+            ):
+                logger.info(
+                    "IBP taskchain '%s': \"Usa Default\" sentinel set - launching with no "
+                    "custom parameters", taskchain_ctx,
+                )
+                step_params = None
+
+        if step_params and _tpl_name_for_gate:
+            try:
+                from ..integrations.ibp import IBPJobClient as _IBPGateCls
+
+                _gate_cl = executor.get_client(IntegrationType.IBP)
+                if isinstance(_gate_cl, _IBPGateCls):
+                    _gate_count, _ = _ibp_template_param_stats(
+                        _gate_cl, _gate_cl.read_template(_tpl_name_for_gate)
+                    )
+                    _gate_max = _get_ibp_max_param_count()
+                    if _gate_count > _gate_max:
+                        logger.warning(
+                            "IBP template '%s' has %d params (> %d limit) - discarding "
+                            "stored overrides for taskchain '%s', launching with no "
+                            "custom parameters",
+                            _tpl_name_for_gate, _gate_count, _gate_max, taskchain_ctx,
+                        )
+                        step_params = None
+            except Exception as _gate_ex:
+                logger.warning(
+                    "IBP template-size gate check failed for '%s': %s — proceeding "
+                    "without overrides to be safe",
+                    _tpl_name_for_gate, _gate_ex,
+                )
+                step_params = None
+
         if step_params:
             # Build user-override map (keyed by IBP param name).
             # Excel params carry a "step" field but no ibpParamName — collected separately
@@ -984,13 +1156,41 @@ def read_ibp_template_steps():
         except Exception as _mex:
             logger.debug("IBP mandatory flag fetch skipped: %s", _mex)
 
+        # Template-size guard: IBP's JobSchedule call puts every parameter in
+        # the request URL, which IBP's own gateway rejects above ~64,700
+        # chars (measured). Above the configured threshold, custom parameters
+        # can't be sent reliably (partial overrides aren't honored by IBP
+        # either - only "all params" or "none" work), so the UI must lock
+        # parameter editing for this template and always launch with none.
+        try:
+            param_count, estimated_url_length = _ibp_template_param_stats(client, data)
+        except Exception as _pex:
+            logger.warning("IBP param-count check failed for %s: %s", template_name, _pex)
+            param_count, estimated_url_length = 0, 0
+        max_param_count = _get_ibp_max_param_count()
+        too_many_params = param_count > max_param_count
+
         resp: dict = {
             "template_name": template_name,
             "steps": steps,
             "globalVars": global_vars,
-            "_debug_global_vars_found": len(global_vars),
-            "_debug_template_top_keys": list(data.keys()) if isinstance(data, dict) else [],
+            "paramCount": param_count,
+            "estimatedUrlLength": estimated_url_length,
+            "maxParamCount": max_param_count,
+            "tooManyParams": too_many_params,
         }
+
+        # Everything below is exploratory schema-probing left over from reverse
+        # engineering IBP's OData service, kept behind ENABLE_DEBUG_ENDPOINTS
+        # since it costs several extra live IBP calls (including a full
+        # $metadata fetch) — this endpoint is now called on every IBP step
+        # load (see StepParametersPage's preload), so those calls must not run
+        # unconditionally just to be discarded afterward.
+        if os.environ.get("ENABLE_DEBUG_ENDPOINTS", "false").lower() != "true":
+            return jsonify(resp), 200
+
+        resp["_debug_global_vars_found"] = len(global_vars)
+        resp["_debug_template_top_keys"] = list(data.keys()) if isinstance(data, dict) else []
         # Debug: expose full OData response fields beyond TemplateData
         resp["_debug_odata_extra"] = data.get("_odata_extra", {})
 
@@ -1099,8 +1299,6 @@ def read_ibp_template_steps():
         if not steps:
             resp["_debug_keys"] = list(data.keys()) if isinstance(data, dict) else repr(type(data))
             resp["_debug_raw"] = data
-        if os.environ.get("ENABLE_DEBUG_ENDPOINTS", "false").lower() != "true":
-            resp = {k: v for k, v in resp.items() if not k.startswith("_debug_")}
         return jsonify(resp), 200
     except Exception:
         logger.exception("Error reading IBP template steps for %s", template_name)

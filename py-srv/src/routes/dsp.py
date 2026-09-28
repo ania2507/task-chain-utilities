@@ -1831,23 +1831,25 @@ def get_taskchain_schedules():
             "frequency": frequency,
         })
 
-    # Debug: expose raw column names from the first row so we can identify
-    # the correct aliases for activation_status / at_time / next_run_at.
-    raw_cols = sorted(rows[0].keys()) if rows else []
-    raw_sample = [
-        {k: v for k, v in r.items() if str(v).strip() not in ("", "None", "null")}
-        for r in (rows or [])[:5]
-    ]
-
-    return jsonify({
+    resp = {
         "success": True,
         "view": view_name,
         "available": True,
         "data": schedules,
         "rowCount": len(schedules),
-        "_debug_columns": raw_cols,
-        "_debug_sample": raw_sample,
-    }), 200
+    }
+    # Debug: expose raw column names/sample rows to identify the correct
+    # aliases for activation_status / at_time / next_run_at. This endpoint is
+    # called on every scheduler list page load, so raw DB rows must not go
+    # out by default - only when explicitly enabled.
+    if os.environ.get("ENABLE_DEBUG_ENDPOINTS", "false").lower() == "true":
+        resp["_debug_columns"] = sorted(rows[0].keys()) if rows else []
+        resp["_debug_sample"] = [
+            {k: v for k, v in r.items() if str(v).strip() not in ("", "None", "null")}
+            for r in (rows or [])[:5]
+        ]
+
+    return jsonify(resp), 200
 
 
 @bp.route("/taskchain-steps", methods=["GET"])
@@ -1868,6 +1870,10 @@ def get_taskchain_steps():
 
     space_id  = request.args.get("spaceId")
     taskchain = request.args.get("taskchain")
+    # This endpoint is called on every DSP step load (Step Parameters, Custom
+    # Calendar import) - the "debug" field below is cheap to compute but not
+    # meant for normal responses, so it's stripped unless explicitly enabled.
+    _debug_enabled = os.environ.get("ENABLE_DEBUG_ENDPOINTS", "false").lower() == "true"
 
     if not space_id or not taskchain:
         return jsonify({"success": False, "error": "spaceId and taskchain are required"}), 400
@@ -1953,7 +1959,7 @@ def get_taskchain_steps():
         }
 
         if not tc_meta:
-            return jsonify({"success": True, "steps": [], "debug": debug_info}), 200
+            return jsonify({"success": True, "steps": [], "debug": debug_info if _debug_enabled else None}), 200
 
         raw = tc_meta[0].get("JSON") or tc_meta[0].get("json") or ""
         try:
@@ -2022,7 +2028,7 @@ def get_taskchain_steps():
                 debug_info["patternMatched"] = "recursive-scan"
 
         if not raw_nodes:
-            return jsonify({"success": True, "steps": [], "debug": debug_info}), 200
+            return jsonify({"success": True, "steps": [], "debug": debug_info if _debug_enabled else None}), 200
 
         # Extract objectIds
         object_ids_ordered = []
@@ -2043,7 +2049,7 @@ def get_taskchain_steps():
                 object_ids_ordered.append((obj_id, node))
 
         if not object_ids_ordered:
-            return jsonify({"success": True, "steps": [], "debug": debug_info}), 200
+            return jsonify({"success": True, "steps": [], "debug": debug_info if _debug_enabled else None}), 200
 
         bmap, ibp_tpl_map, sac_ma_map, otype_map = _build_metadata_maps([o for o, _ in object_ids_ordered])
         steps = []
@@ -2100,7 +2106,7 @@ def get_taskchain_steps():
                 "isSkipStep":      is_skip_step,
             })
 
-        return jsonify({"success": True, "steps": steps, "debug": debug_info}), 200
+        return jsonify({"success": True, "steps": steps, "debug": debug_info if _debug_enabled else None}), 200
 
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -2313,7 +2319,7 @@ def get_task_global_vars():
             (task_name,)
         )
         if not rows:
-            return jsonify({"taskName": task_name, "globalVars": [], "_debug": "no metadata row found"}), 200
+            return jsonify({"taskName": task_name, "globalVars": []}), 200
 
         raw = rows[0].get("JSON") or rows[0].get("json") or ""
         try:
@@ -2324,17 +2330,17 @@ def get_task_global_vars():
         found = _scan_for_global_vars(metadata)
         global_vars = sorted(found.values(), key=lambda x: x["name"])
 
-        # Debug: show top-level metadata keys and first 500 chars to diagnose structure
-        debug_info = {
-            "topKeys": list(metadata.keys()) if isinstance(metadata, dict) else [],
-            "rawPreview": raw[:500] if raw else "",
-        }
+        resp = {"taskName": task_name, "globalVars": global_vars}
+        # Debug: show top-level metadata keys and first 500 chars to diagnose
+        # structure - the raw preview can include internal deployment details,
+        # so it's only attached when explicitly enabled.
+        if os.environ.get("ENABLE_DEBUG_ENDPOINTS", "false").lower() == "true":
+            resp["_debug"] = {
+                "topKeys": list(metadata.keys()) if isinstance(metadata, dict) else [],
+                "rawPreview": raw[:500] if raw else "",
+            }
 
-        return jsonify({
-            "taskName": task_name,
-            "globalVars": global_vars,
-            "_debug": debug_info,
-        }), 200
+        return jsonify(resp), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500

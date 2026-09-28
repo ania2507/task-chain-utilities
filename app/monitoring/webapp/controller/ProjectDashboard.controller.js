@@ -1530,12 +1530,10 @@ sap.ui.define([
                     });
             });
 
-            // One model refresh after the whole batch settles, instead of one per row.
-            // checkUpdate(true) re-fires this table's own updateFinished (it's bound to
-            // /recentExecutions), so refreshing per-row re-entered this handler up to 10x
-            // per batch — for a wide custom date range (many never-before-loaded rows)
-            // that cascade produced duplicate in-flight requests for the same runs and
-            // made the last three columns' loading appear to hang instead of progressing.
+            // One model refresh after the whole batch settles, instead of one per row:
+            // checkUpdate(true) re-fires this table's own updateFinished (bound to
+            // /recentExecutions), so a per-row refresh would re-enter this handler and
+            // multiply in-flight requests for the same rows.
             Promise.all(aPromises).then(function() {
                 oDashboardModel.checkUpdate(true);
             });
