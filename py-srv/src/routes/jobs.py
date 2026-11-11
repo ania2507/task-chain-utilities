@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import time
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -214,7 +216,11 @@ def sac_multiaction_parameters(multiaction_id):
 
     try:
         client = _get_executor().get_client(IntegrationType.SAC)
-        raw = client.get_multiaction_definition(multiaction_id)
+        # Discovering parameters by launching the multi action (a real SAC
+        # execution) only on explicit request (?probe=1), sent by the UI after
+        # the user confirmed it - never on an automatic load.
+        allow_probe = str(request.args.get("probe", "")).lower() in ("1", "true", "yes")
+        raw = client.get_multiaction_definition(multiaction_id, allow_probe=allow_probe)
         params = _parse_sac_parameters(raw)
         is_probing = bool(raw.get("probing"))
         probe_done = bool(raw.get("done"))
@@ -225,6 +231,7 @@ def sac_multiaction_parameters(multiaction_id):
             "parameters": params,
             "probing": is_probing,
             "noParameters": no_parameters,
+            "probeRequired": bool(raw.get("probeRequired")),
         }), 200
     except Exception as e:
         logger.exception("Error fetching SAC multi action parameters for %s", multiaction_id)
@@ -831,6 +838,39 @@ def launch_job():
 # ------------------------------------------------------------------
 
 
+# How long consecutive status-read failures for a SAC or IBP execution are
+# reported to DSP as "still running" before giving up and reporting a failure.
+_POLL_ERROR_GRACE_SECONDS = 30 * 60
+# Integrations whose jobs keep running on the remote system regardless of a
+# failed status read - a transient read error must not fail the DSP step.
+_POLL_TOLERANT_INTEGRATIONS = (IntegrationType.SAC.value, IntegrationType.IBP.value)
+# execution_id -> time of the first failed status read in the current streak.
+# In-memory only: a py-srv restart simply starts a fresh grace period.
+_poll_error_since: dict = {}
+_poll_error_lock = threading.Lock()
+
+
+def _is_poll_tolerant_execution(execution_id: str) -> bool:
+    return str(execution_id or "").split("__", 1)[0] in _POLL_TOLERANT_INTEGRATIONS
+
+
+def _note_poll_error(execution_id: str) -> int:
+    """Record a failed status read; return seconds since the streak began."""
+    now = time.time()
+    with _poll_error_lock:
+        # Drop streaks long past any grace period (executions DSP gave up on).
+        for k in [k for k, t in _poll_error_since.items()
+                  if now - t > 2 * _POLL_ERROR_GRACE_SECONDS]:
+            _poll_error_since.pop(k, None)
+        since = _poll_error_since.setdefault(execution_id, now)
+    return int(now - since)
+
+
+def _clear_poll_error(execution_id: str) -> None:
+    with _poll_error_lock:
+        _poll_error_since.pop(execution_id, None)
+
+
 @bp.route("/<execution_id>", methods=["GET"])
 @flask_access_validation(required_scope="admin")
 def get_job_status(execution_id: str):
@@ -845,6 +885,7 @@ def get_job_status(execution_id: str):
 
     try:
         result = executor.get_status(execution_id)
+        _clear_poll_error(execution_id)
         job_status = result.get("status", "")
         if job_status == "COMPLETED":
             http_code = 200
@@ -870,8 +911,31 @@ def get_job_status(execution_id: str):
         # Return 500 so DSP marks the task as failed (cleaner than 404 "not found").
         logger.warning("Status poll for unknown execution_id '%s': %s", execution_id, e)
         return jsonify({"error": str(e), "status": "FAILED"}), 500
-    except Exception:
+    except Exception as e:
         logger.exception("Error polling status for %s", execution_id)
+        # SAC/IBP: a single failed status read (timeout, transient error, an
+        # unreadable response, a token hiccup) must not fail the DSP step while
+        # the job keeps running on the remote system - DSP stops polling on the
+        # first non-2xx and its retry would launch a second execution on top of
+        # the one still running. Report "still running" (202) so DSP polls
+        # again, until reads have kept failing for _POLL_ERROR_GRACE_SECONDS.
+        if _is_poll_tolerant_execution(execution_id):
+            failing_for = _note_poll_error(execution_id)
+            if failing_for < _POLL_ERROR_GRACE_SECONDS:
+                logger.warning(
+                    "Transient error polling execution %s (failing for %ds, grace %ds) - "
+                    "reporting it as still running: %s",
+                    execution_id, failing_for, _POLL_ERROR_GRACE_SECONDS, e,
+                )
+                return jsonify({
+                    "status": "UNKNOWN",
+                    "transient_error": str(e)[:500],
+                    "failing_for_seconds": failing_for,
+                }), 202
+            logger.error(
+                "Status reads for execution %s have failed for %ds - reporting failure",
+                execution_id, failing_for,
+            )
         return jsonify({"error": "Internal error while polling job status"}), 500
 
 

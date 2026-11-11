@@ -24,6 +24,8 @@ from ..base import BaseJobClient, IntegrationType, JobReference, JobStatus
 logger = logging.getLogger(__name__)
 
 _SERVICE_PATH = "/sap/opu/odata/sap/BC_EXT_APPJOB_MANAGEMENT;v=0002"
+# Timeout for a single job-status read (see IBPJobClient.get_job_status).
+_STATUS_READ_TIMEOUT_SECONDS = 15
 
 
 class _ODataSession:
@@ -55,21 +57,33 @@ class _ODataSession:
         return f"{self._host}{_SERVICE_PATH}"
 
     def _fetch_csrf(self) -> str:
-        resp = self._session.get(
-            f"{self.base_url}/",
-            headers={"X-CSRF-Token": "Fetch"},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        token = resp.headers.get("x-csrf-token", "")
-        if not token:
-            raise RuntimeError("IBP: failed to obtain CSRF token")
-        self._csrf_token = token
-        return token
+        """Fetch a CSRF token. If IBP answers without one (typically it didn't
+        accept the session cookies the request arrived with), drop the
+        session's cookies and try exactly once more. Only the token request is
+        repeated - never the job launch, whose retries are DSP's call."""
+        for attempt in (1, 2):
+            resp = self._session.get(
+                f"{self.base_url}/",
+                headers={"X-CSRF-Token": "Fetch"},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            token = resp.headers.get("x-csrf-token", "").strip()
+            if token:
+                self._csrf_token = token
+                return token
+            if attempt == 1:
+                logger.warning(
+                    "IBP: no CSRF token in response (HTTP %s, content-type %r) - "
+                    "clearing session cookies and retrying once",
+                    resp.status_code, resp.headers.get("content-type", ""),
+                )
+                self._session.cookies.clear()
+        raise RuntimeError("IBP: failed to obtain CSRF token")
 
-    def get(self, path: str, **kwargs) -> requests.Response:
+    def get(self, path: str, timeout: float = 60, **kwargs) -> requests.Response:
         url = f"{self.base_url}/{path.lstrip('/')}"
-        resp = self._session.get(url, timeout=60, **kwargs)
+        resp = self._session.get(url, timeout=timeout, **kwargs)
         resp.raise_for_status()
         return resp
 
@@ -293,7 +307,10 @@ class IBPJobClient(BaseJobClient):
             f"?$expand=JobStepSet/JobStepLogInfoSet/JobLogMessageSet&$format=json"
         )
 
-        resp = self._odata.get(path)
+        # Kept well under DSP's 60s API-task timeout: if IBP hangs, py-srv must
+        # still answer DSP in time - routes/jobs.py then reports the job as
+        # still running instead of failing the DSP step.
+        resp = self._odata.get(path, timeout=_STATUS_READ_TIMEOUT_SECONDS)
         data = resp.json().get("d", {})
 
         raw_status = (data.get("JobStatus") or "").strip().upper()

@@ -287,3 +287,67 @@ class TestAfterRunPolicyExternalCleanup:
         svc._apply_after_run_policy("s1", "SP1", "TC1", auto_reset=False, reset_state="GREEN")
 
         mock_client.delete_schedule.assert_not_called()
+
+
+class TestRegistrationErrorsReported:
+    """A schedule rejected by the Job Scheduling service must be reported back
+    through sync() (so the UI can show it), with the service's own message,
+    and its description must be stripped of characters the service rejects."""
+
+    def _rejection(self):
+        import requests
+        resp = requests.Response()
+        resp.status_code = 400
+        resp._content = json.dumps({
+            "code": 400,
+            "message": "Error while adding job schedule: Invalid Description",
+            "detailedError": "Error while adding job schedule: Invalid Description",
+        }).encode()
+        return requests.HTTPError("400 Client Error", response=resp)
+
+    def test_sync_returns_rejected_entries_with_service_message(self):
+        mock_client = MagicMock()
+        mock_client.find_or_create_job.return_value = 42
+        mock_client.create_schedule.side_effect = [self._rejection(), "sched-ok"]
+        svc, repo = make_service(mock_client)
+
+        run_date, run_time = tomorrow_parts()
+        base = {
+            "spaceId": "SP1", "taskchain": "TC1", "runDate": run_date,
+            "runTime": run_time, "timezone": "Europe/Rome", "active": True,
+            "parameters": None, "jobSchedulerScheduleId": None,
+        }
+        repo.entries = [
+            dict(base, ID="bad", details="ACME - CC01|CC02|CC03"),
+            dict(base, ID="good", details=None),
+        ]
+
+        result = svc.sync()
+
+        assert [e["ID"] for e in result["entry_errors"]] == ["bad"]
+        err = result["entry_errors"][0]
+        assert "Invalid Description" in err["message"]
+        assert err["runDate"] == run_date and err["runTime"] == run_time
+        assert repo.entry_job_scheduler_ids == {"good": "sched-ok"}
+        assert result["traffic_light_errors"] == []
+
+    def test_description_is_stripped_of_rejected_characters(self):
+        mock_client = MagicMock()
+        mock_client.find_or_create_job.return_value = 42
+        mock_client.create_schedule.return_value = "sched-1"
+        svc, repo = make_service(mock_client)
+
+        run_date, run_time = tomorrow_parts()
+        repo.entries = [{
+            "ID": "e1", "spaceId": "SP1", "taskchain": "TC1",
+            "runDate": run_date, "runTime": run_time, "timezone": "Europe/Rome",
+            "active": True, "parameters": None,
+            "details": "ACME - Forecast (base) - CC01|CC02|CC03",
+            "jobSchedulerScheduleId": None,
+        }]
+
+        svc._register_entries()
+
+        description = mock_client.create_schedule.call_args.kwargs["description"]
+        assert "|" not in description
+        assert description.endswith("ACME - Forecast (base) - CC01 CC02 CC03")

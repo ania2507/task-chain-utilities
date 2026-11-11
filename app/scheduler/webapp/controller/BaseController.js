@@ -57,6 +57,43 @@ sap.ui.define([
          * @param {object} [oOpts] fetch-style options
          * @returns {Promise<any>}
          */
+        /**
+         * Ask py-srv to (re)register schedules on SAP Job Scheduling service
+         * and show an error listing any it rejected (e.g. "Invalid
+         * Description"). Saving a row only notifies py-srv in the background,
+         * so without this check a rejected schedule fails silently and the
+         * entry never runs.
+         * @param {"entry"|"traffic_light"} sKind which rejections to show
+         * @param {function} [fnFilter] keeps only rejections relevant to the current page
+         * @returns {Promise<object[]>} the rejections shown (empty if none)
+         */
+        checkSchedulingRejections: function (sKind, fnFilter) {
+            var that = this;
+            return this.callScheduler("/sync", { method: "POST" }).then(function (res) {
+                var aAll = (res && (sKind === "traffic_light" ? res.traffic_light_errors : res.entry_errors)) || [];
+                var aErr = fnFilter ? aAll.filter(fnFilter) : aAll;
+                if (!aErr.length) return [];
+                var MAX = 10;
+                var aLines = aErr.slice(0, MAX).map(function (e) {
+                    var sWhat = sKind === "traffic_light"
+                        ? (e.name || e.taskchain || e.ID)
+                        : (e.runDate + " " + (e.runTime || "") + (e.details ? " - " + e.details : ""));
+                    return "• " + sWhat + "\n   " + e.message;
+                });
+                if (aErr.length > MAX) {
+                    aLines.push(that.i18n("schedule.rejected.more", [aErr.length - MAX]));
+                }
+                MessageBox.error(
+                    that.i18n("schedule.rejected.intro", [aErr.length]) + "\n\n" + aLines.join("\n\n"),
+                    { title: that.i18n("schedule.rejected.title") }
+                );
+                return aErr;
+            }).catch(function (err) {
+                MessageBox.warning(that.i18n("schedule.rejected.checkFailed", [err.message || String(err)]));
+                return [];
+            });
+        },
+
         callScheduler: function (sPath, oOpts) {
             var sUrl = this._getApiBase() + "scheduler" + sPath;
             var opts = Object.assign({

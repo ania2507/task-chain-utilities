@@ -48,6 +48,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _TOKEN_PATH = "/api/v1/csrf"
+# Timeout for a single execution-status read (see get_job_status).
+_STATUS_READ_TIMEOUT_SECONDS = 15
 _MULTIACTION_PATH = "/api/v1/multiActions"
 
 
@@ -167,6 +169,22 @@ def _build_parameter_values(run_params: Dict[str, Any]) -> List[Dict[str, Any]]:
     return parameter_values
 
 
+class _UserSession:
+    """SAC connection state for ONE caller identity: its own HTTP session
+    (cookies), SAC access token and CSRF token. Never shared across callers -
+    SAC binds its session cookies and CSRF token to the user they were issued
+    for, so mixing them across users gets requests rejected."""
+
+    def __init__(self, verify_ssl: bool):
+        self.session = requests.Session()
+        self.session.verify = verify_ssl
+        self.access_token: Optional[str] = None
+        self.token_expiry: float = 0
+        self.csrf_token: Optional[str] = None
+        self.last_used: float = time.time()
+        self.lock = threading.RLock()
+
+
 class _SACSession:
     """Manages OAuth2 token + CSRF for SAC REST calls.
 
@@ -175,8 +193,19 @@ class _SACSession:
       • **destination** – BTP Destination Service SAML Bearer (user propagation)
 
     When a ``DestinationClient`` is provided, the destination path is used
-    and requires a BTP user JWT from the current Flask request.
+    and requires a BTP user JWT: the current Flask request's one or, only
+    when there is none (background threads), the one set for the current
+    thread via ``set_user_jwt()``.
+
+    Each caller identity gets its own ``_UserSession`` (cookies, SAC token,
+    CSRF token), so concurrent or successive calls on behalf of different
+    users never reuse each other's SAC session.
     """
+
+    # Drop per-user sessions idle for longer than this (their SAC token has
+    # expired by then anyway) so the cache doesn't grow without bound.
+    _SESSION_IDLE_SECONDS = 2 * 3600
+    _CLIENT_CREDENTIALS_KEY = "__client_credentials__"
 
     def __init__(
         self,
@@ -195,22 +224,18 @@ class _SACSession:
         self._destination_client = destination_client
         self._verify = verify_ssl
 
-        self._session = requests.Session()
-        self._session.verify = verify_ssl
-        self._access_token: Optional[str] = None
-        self._token_expiry: float = 0
-        self._csrf_token: Optional[str] = None
-        self._last_user_jwt: Optional[str] = None
-        # JWT injected explicitly when running outside Flask request context (e.g. background threads)
-        self._override_jwt: Optional[str] = None
+        self._sessions: Dict[str, _UserSession] = {}
+        self._sessions_lock = threading.Lock()
+        # JWT injected explicitly for code running outside a Flask request
+        # (e.g. the parameter-probe background thread). Thread-local, so it
+        # can never leak into other threads or later requests.
+        self._local = threading.local()
 
     def set_user_jwt(self, jwt: Optional[str]) -> None:
-        """Override the JWT used for SAML Bearer token exchange.
-
-        Use this when calling SAC methods from a background thread that has no
-        Flask request context.  Pass ``None`` to revert to the dynamic lookup.
-        """
-        self._override_jwt = jwt
+        """Set the JWT used for SAML Bearer token exchange by the CURRENT
+        THREAD when it has no Flask request context of its own. Pass ``None``
+        to clear it - callers must do so when done (e.g. in a ``finally``)."""
+        self._local.override_jwt = jwt
 
     # ------------------------------------------------------------------
     # Token acquisition
@@ -230,119 +255,149 @@ class _SACSession:
             pass
         return None
 
-    def _ensure_access_token(self) -> str:
-        """Return a valid SAC access token, refreshing if needed.
+    def current_user_jwt(self) -> Optional[str]:
+        """The caller JWT to propagate: the current request's own token wins;
+        the thread's explicitly-set one is only a fallback when there is no
+        request token (background threads)."""
+        return self._get_user_jwt() or getattr(self._local, "override_jwt", None)
 
-        Prefers the Destination Service path when available.
-        In pure user-propagation mode, a caller JWT is required.
-        """
-        # ------ destination (SAML Bearer) path ------
+    def _user_session(self) -> tuple[_UserSession, Optional[str]]:
+        """Return (session for the current caller identity, caller JWT)."""
         if self._destination_client:
-            user_jwt = self._override_jwt or self._get_user_jwt()
+            user_jwt = self.current_user_jwt()
             if not user_jwt:
                 raise RuntimeError(
                     "SAC destination requires an authenticated user context "
                     "for user propagation"
                 )
-            return self._ensure_token_via_destination(user_jwt)
+            key = user_jwt
+        else:
+            user_jwt = None
+            key = self._CLIENT_CREDENTIALS_KEY
 
-        # ------ direct client_credentials path ------
-        if self._access_token and time.time() < self._token_expiry:
-            return self._access_token
+        now = time.time()
+        with self._sessions_lock:
+            for k in [k for k, s in self._sessions.items()
+                      if k != key and now - s.last_used > self._SESSION_IDLE_SECONDS]:
+                self._sessions.pop(k).session.close()
+            us = self._sessions.get(key)
+            if us is None:
+                us = _UserSession(self._verify)
+                self._sessions[key] = us
+            us.last_used = now
+        return us, user_jwt
 
-        resp = requests.post(
-            self._token_url,
-            data={"grant_type": "client_credentials"},
-            auth=(self._client_id, self._client_secret),
-            verify=self._verify,
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        self._access_token = data["access_token"]
-        self._token_expiry = time.time() + int(data.get("expires_in", 3600)) - 60
-        self._session.headers.update({"Authorization": f"Bearer {self._access_token}"})
-        self._csrf_token = None  # new token → CSRF must be re-fetched
-        self._last_user_jwt = None
-        return self._access_token
+    def _ensure_access_token(self, us: Optional[_UserSession] = None,
+                             user_jwt: Optional[str] = None) -> str:
+        """Return a valid SAC access token for the current caller, refreshing
+        if needed. Prefers the Destination Service path when available; in
+        that mode a caller JWT is required."""
+        if us is None:
+            us, user_jwt = self._user_session()
+        with us.lock:
+            if us.access_token and time.time() < us.token_expiry:
+                return us.access_token
 
-    def _ensure_token_via_destination(self, user_jwt: Optional[str] = None) -> str:
-        """Get a SAC token through the BTP Destination Service (SAML Bearer).
+            if self._destination_client:
+                mode = f"user_jwt propagation (user={user_jwt[:20]}...)"
+                logger.debug(f"SAC: exchanging token via BTP Destination ({mode})")
+                token_data = self._destination_client.get_sac_token(user_jwt)
+                access_token = token_data["access_token"]
+                expires_in = int(token_data.get("expires_in", 3600))
+                logger.info(f"SAC token obtained via BTP Destination Service ({mode})")
+            else:
+                resp = requests.post(
+                    self._token_url,
+                    data={"grant_type": "client_credentials"},
+                    auth=(self._client_id, self._client_secret),
+                    verify=self._verify,
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                access_token = data["access_token"]
+                expires_in = int(data.get("expires_in", 3600))
 
-        The caller JWT is forwarded as ``X-user-token`` so the Destination
-        Service can perform SAML Bearer user propagation.
-        """
-        # Invalidate cache when the calling user changes
-        if user_jwt != self._last_user_jwt:
-            self._access_token = None
-            self._token_expiry = 0
+            us.access_token = access_token
+            us.token_expiry = time.time() + expires_in - 60
+            us.session.headers.update({"Authorization": f"Bearer {access_token}"})
+            us.csrf_token = None  # new token → CSRF must be re-fetched
+            return access_token
 
-        if self._access_token and time.time() < self._token_expiry:
-            return self._access_token
+    def _fetch_csrf(self, us: _UserSession) -> str:
+        """Fetch a CSRF token. If SAC answers without one (typically it didn't
+        accept the session the request arrived with and served a login/generic
+        page instead), drop that session's cookies and try exactly once more.
+        Only the token request is repeated - never the multi action launch,
+        whose retries are DSP's call."""
+        for attempt in (1, 2):
+            resp = us.session.get(
+                f"{self._host}{_TOKEN_PATH}",
+                headers={"x-csrf-token": "Fetch"},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            token = resp.headers.get("x-csrf-token", "").strip()
+            if token:
+                us.csrf_token = token
+                return token
+            if attempt == 1:
+                logger.warning(
+                    "SAC: no CSRF token in response (HTTP %s, content-type %r) - "
+                    "clearing session cookies and retrying once",
+                    resp.status_code, resp.headers.get("content-type", ""),
+                )
+                us.session.cookies.clear()
+        raise RuntimeError("SAC: failed to obtain CSRF token")
 
-        mode = f"user_jwt propagation (user={user_jwt[:20]}...)"
-        logger.debug(f"SAC: exchanging token via BTP Destination ({mode})")
-        token_data = self._destination_client.get_sac_token(user_jwt)
-        self._access_token = token_data["access_token"]
-        self._token_expiry = (
-            time.time() + int(token_data.get("expires_in", 3600)) - 60
-        )
-        self._session.headers.update({"Authorization": f"Bearer {self._access_token}"})
-        self._csrf_token = None
-        self._last_user_jwt = user_jwt
-        logger.info(f"SAC token obtained via BTP Destination Service ({mode})")
-        return self._access_token
+    def _ready(self, with_csrf: bool) -> _UserSession:
+        us, user_jwt = self._user_session()
+        self._ensure_access_token(us, user_jwt)
+        if with_csrf:
+            with us.lock:
+                if not us.csrf_token:
+                    self._fetch_csrf(us)
+        return us
 
-    def _fetch_csrf(self) -> str:
-        self._ensure_access_token()
-        resp = self._session.get(
-            f"{self._host}{_TOKEN_PATH}",
-            headers={"x-csrf-token": "Fetch"},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        token = resp.headers.get("x-csrf-token", "").strip()
-        if not token:
-            raise RuntimeError("SAC: failed to obtain CSRF token")
-        self._csrf_token = token
-        return token
+    def raw_get(self, path: str, **kwargs) -> requests.Response:
+        """GET without raise_for_status() - for probing callers that inspect
+        the status code themselves."""
+        us = self._ready(with_csrf=False)
+        return us.session.get(f"{self._host}{path}", **kwargs)
 
-    def get(self, path: str, **kwargs) -> requests.Response:
-        self._ensure_access_token()
-        url = f"{self._host}{path}"
-        resp = self._session.get(url, timeout=60, **kwargs)
+    def get(self, path: str, timeout: float = 60, **kwargs) -> requests.Response:
+        us = self._ready(with_csrf=False)
+        resp = us.session.get(f"{self._host}{path}", timeout=timeout, **kwargs)
         resp.raise_for_status()
         return resp
 
     def post(self, path: str, **kwargs) -> requests.Response:
-        self._ensure_access_token()
-        if not self._csrf_token:
-            self._fetch_csrf()
+        us = self._ready(with_csrf=True)
         url = f"{self._host}{path}"
         headers = kwargs.pop("headers", {})
-        headers["x-csrf-token"] = self._csrf_token
+        headers["x-csrf-token"] = us.csrf_token
         # SAC returns 415 if Content-Type is not explicitly application/json
         headers.setdefault("Content-Type", "application/json")
-        resp = self._session.post(url, headers=headers, timeout=120, **kwargs)
+        resp = us.session.post(url, headers=headers, timeout=120, **kwargs)
         if resp.status_code == 403:
-            self._fetch_csrf()
-            headers["x-csrf-token"] = self._csrf_token
-            resp = self._session.post(url, headers=headers, timeout=120, **kwargs)
+            with us.lock:
+                self._fetch_csrf(us)
+            headers["x-csrf-token"] = us.csrf_token
+            resp = us.session.post(url, headers=headers, timeout=120, **kwargs)
         resp.raise_for_status()
         return resp
 
     def delete(self, path: str, **kwargs) -> requests.Response:
-        self._ensure_access_token()
-        if not self._csrf_token:
-            self._fetch_csrf()
+        us = self._ready(with_csrf=True)
         url = f"{self._host}{path}"
         headers = kwargs.pop("headers", {})
-        headers["x-csrf-token"] = self._csrf_token
-        resp = self._session.delete(url, headers=headers, timeout=60, **kwargs)
+        headers["x-csrf-token"] = us.csrf_token
+        resp = us.session.delete(url, headers=headers, timeout=60, **kwargs)
         if resp.status_code == 403:
-            self._fetch_csrf()
-            headers["x-csrf-token"] = self._csrf_token
-            resp = self._session.delete(url, headers=headers, timeout=60, **kwargs)
+            with us.lock:
+                self._fetch_csrf(us)
+            headers["x-csrf-token"] = us.csrf_token
+            resp = us.session.delete(url, headers=headers, timeout=60, **kwargs)
         resp.raise_for_status()
         return resp
 
@@ -460,7 +515,7 @@ class SACJobClient(BaseJobClient):
             },
         )
 
-    def get_multiaction_definition(self, multiaction_id: str) -> Dict[str, Any]:
+    def get_multiaction_definition(self, multiaction_id: str, allow_probe: bool = False) -> Dict[str, Any]:
         """Return the raw multi action definition including parameters.
 
         Strategy (each step is a fallback for the previous):
@@ -468,6 +523,12 @@ class SACJobClient(BaseJobClient):
         2. GET /multiActions               — list endpoint, filter by id
         3. GET /multiActions/{id}/executions — infer params from past executions (no side effects)
         4. POST /executions (empty params) — parse SAC validation error for param names
+
+        Step 4 launches a REAL execution of the multi action in SAC, so it only
+        runs when ``allow_probe`` is True - i.e. when the user explicitly
+        confirmed it in the UI. Otherwise (e.g. the automatic load when a step
+        is selected) only side-effect-free reads are used and, if they find
+        nothing, ``{"parameters": [], "probeRequired": True}`` is returned.
         """
         path = f"{_MULTIACTION_PATH}/{quote(multiaction_id, safe='.:')}"
         try:
@@ -542,6 +603,12 @@ class SACJobClient(BaseJobClient):
         # Fallback 3: probe via background thread to avoid gateway timeout.
         # Return cached result if already done; otherwise start the probe and return empty
         # so the caller can retry in a few seconds.
+        if not allow_probe and multiaction_id not in self._probe_cache:
+            logger.info(
+                "SAC probe for %s not allowed for this call (no explicit user confirmation) - "
+                "returning probeRequired instead of launching an execution", multiaction_id,
+            )
+            return {"parameters": [], "probeRequired": True}
         if multiaction_id in self._probe_cache:
             cached = self._probe_cache[multiaction_id]
             logger.info("SAC probe: returning cached result for %s (%d params)", multiaction_id, len(cached.get("parameters") or []))
@@ -551,7 +618,7 @@ class SACJobClient(BaseJobClient):
             self._probe_running.add(multiaction_id)
             # Capture the JWT now (still in Flask request context); the background
             # thread won't have request context so we pass it explicitly.
-            captured_jwt = self._sac._override_jwt or self._sac._get_user_jwt()
+            captured_jwt = self._sac.current_user_jwt()
             t = threading.Thread(
                 target=self._run_probe_background,
                 args=(multiaction_id, captured_jwt),
@@ -574,6 +641,8 @@ class SACJobClient(BaseJobClient):
             logger.warning("SAC probe background thread failed: %s", e)
             self._probe_cache[multiaction_id] = {"parameters": [], "done": True}
         finally:
+            # Clear it so this thread's JWT can never be reused for anything else.
+            self._sac.set_user_jwt(None)
             self._probe_running.discard(multiaction_id)
 
     def _probe_multiaction_parameters(self, multiaction_id: str) -> Dict[str, Any]:
@@ -727,12 +796,10 @@ class SACJobClient(BaseJobClient):
             f"/api/v1/multiActions/{quote(multiaction_id, safe='')}/parameters",
             f"/api/v1/multiActions/{quote(clean_id, safe='')}/parameters",
         ]
-        self._sac._ensure_access_token()
         results = {}
         for path in paths:
-            url = f"{self._sac._host}{path}"
             try:
-                r = self._sac._session.get(url, timeout=15)
+                r = self._sac.raw_get(path, timeout=15)
                 try:
                     body = r.json()
                 except Exception:
@@ -759,12 +826,10 @@ class SACJobClient(BaseJobClient):
             "/api/v1/dataexport/providers",
         ]
 
-        self._sac._ensure_access_token()
         results = {}
         for path in paths:
-            url = f"{self._sac._host}{path}"
             try:
-                r = self._sac._session.get(url, timeout=15)
+                r = self._sac.raw_get(path, timeout=15)
                 try:
                     body = r.json()
                 except Exception:
@@ -776,6 +841,10 @@ class SACJobClient(BaseJobClient):
 
     def get_job_status(self, ref: JobReference) -> Dict[str, Any]:
         """Poll SAC for multi action execution status."""
+        # Kept well under DSP's 60s API-task timeout (worst case together with
+        # the ~30s Destination token exchange): if SAC hangs, py-srv must still
+        # answer DSP in time - see routes/jobs.py, which then reports the
+        # execution as still running instead of failing the DSP step.
         multiaction_id, exec_id = ref.remote_id.rsplit(":", 1)
 
         # GET /multiActions/{id}/executions/{execId}
@@ -784,7 +853,7 @@ class SACJobClient(BaseJobClient):
             f"/executions/{quote(exec_id, safe='')}"
         )
 
-        resp = self._sac.get(path)
+        resp = self._sac.get(path, timeout=_STATUS_READ_TIMEOUT_SECONDS)
         data = resp.json() if resp.content else {}
 
         raw_status = (

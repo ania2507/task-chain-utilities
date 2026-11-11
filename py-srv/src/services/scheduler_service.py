@@ -13,9 +13,14 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import socket
 import threading
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+import urllib.error
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Dict, List, Optional
+
+import requests
 
 try:
     from apscheduler.schedulers.background import BackgroundScheduler
@@ -43,6 +48,65 @@ logger = logging.getLogger(__name__)
 _JS_JOB_NAME_ENTRY = "taskchain_calendar_entry"
 _JS_JOB_NAME_TRAFFIC_LIGHT = "taskchain_traffic_light_check"
 _JS_CALLBACK_PATH = "/v1/scheduler/jobscheduler-callback"
+
+# SAP Job Scheduling service rejects schedule descriptions containing some
+# characters (e.g. "|") with a 400 "Invalid Description"; the accepted set
+# isn't documented. The description is purely informational (the dashboard
+# label), so keep only a conservative whitelist that is known to be accepted.
+_JS_DESCRIPTION_DISALLOWED = re.compile(r"[^A-Za-z0-9 _.,@()\-]+")
+
+
+def _js_description(text: str) -> str:
+    cleaned = _JS_DESCRIPTION_DISALLOWED.sub(" ", text or "")
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _registration_error_message(exc: Exception) -> str:
+    """Human-readable reason a schedule couldn't be registered - the Job
+    Scheduling service's own message when it rejected the request (e.g.
+    "Error while adding job schedule: Invalid Description"), else str(exc)."""
+    response = getattr(exc, "response", None)
+    if response is not None:
+        try:
+            body = response.json()
+            msg = body.get("detailedError") or body.get("message")
+            if msg:
+                return f"Job Scheduling service rejected the schedule ({response.status_code}): {msg}"
+        except Exception:
+            pass
+        text = (getattr(response, "text", "") or "").strip()
+        if text:
+            return f"Job Scheduling service rejected the schedule ({response.status_code}): {text[:500]}"
+    return str(exc) or exc.__class__.__name__
+
+
+# Automatic (non-manual) DSP launches that fail with an error proving DSP never
+# processed the request are retried at these offsets from the first failure.
+_LAUNCH_RETRY_OFFSETS_SECONDS = (120, 300, 600)  # retries at +2, +5, +10 minutes
+
+
+def _is_retryable_launch_error(exc: BaseException) -> bool:
+    """True only for errors where DSP certainly did NOT start the run, so a new
+    attempt can never create a duplicate: 502/503 answers, or failures to
+    connect at all. Timeouts after the request was sent (incl. 504) are NOT
+    retryable - DSP may have started the run anyway."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, urllib.error.HTTPError):
+            return exc.code in (502, 503)
+        if isinstance(exc, urllib.error.URLError):
+            reason = exc.reason
+            if isinstance(reason, (socket.timeout, TimeoutError)) or "timed out" in str(reason).lower():
+                return False
+            return True  # DNS failure, connection refused/reset before any response
+        if isinstance(exc, requests.exceptions.ConnectionError) and not isinstance(
+                exc, requests.exceptions.ReadTimeout):
+            return True  # includes ConnectTimeout: the request never got through
+        if isinstance(exc, requests.exceptions.HTTPError) and exc.response is not None:
+            return exc.response.status_code in (502, 503)
+        exc = exc.__cause__ or exc.__context__
+    return False
 
 
 class SchedulerService:
@@ -113,13 +177,18 @@ class SchedulerService:
             loaded_tl = 0
             valid_entry_ids: Optional[set] = None
             valid_tl_ids: Optional[set] = None
+            # Per-row registration failures (e.g. the Job Scheduling service
+            # rejecting a schedule) - returned to the caller so the UI can show
+            # them, instead of only ending up in this app's logs.
+            entry_errors: List[Dict[str, Any]] = []
+            tl_errors: List[Dict[str, Any]] = []
             try:
-                loaded, valid_entry_ids = self._register_entries()
+                loaded, valid_entry_ids = self._register_entries(errors=entry_errors)
             except Exception as e:
                 logger.exception("Failed to register calendar entries")
                 errors.append(f"entries: {e}")
             try:
-                loaded_tl, valid_tl_ids = self._register_traffic_light_schedules()
+                loaded_tl, valid_tl_ids = self._register_traffic_light_schedules(errors=tl_errors)
             except Exception as e:
                 logger.exception("Failed to register traffic light schedules")
                 errors.append(f"traffic_lights: {e}")
@@ -146,7 +215,14 @@ class SchedulerService:
                 self._prune_orphaned_job_scheduler_schedules(valid_tl_ids)
 
             logger.info("Scheduler sync complete: %d calendar entries, %d traffic light schedules", loaded, loaded_tl)
-            return {"status": "ok", "loaded": loaded, "loaded_traffic_lights": loaded_tl, "errors": errors}
+            return {
+                "status": "ok",
+                "loaded": loaded,
+                "loaded_traffic_lights": loaded_tl,
+                "errors": errors,
+                "entry_errors": entry_errors,
+                "traffic_light_errors": tl_errors,
+            }
 
     def _prune_orphaned_job_scheduler_entries(self, valid_entry_ids: Optional[set]) -> None:
         if valid_entry_ids is None:
@@ -222,7 +298,7 @@ class SchedulerService:
         self._js_job_ids[name] = job_id
         return job_id
 
-    def _register_entries(self) -> tuple[int, set]:
+    def _register_entries(self, errors: Optional[List[Dict[str, Any]]] = None) -> tuple[int, set]:
         """Register one-shot jobs for active ScheduleEntry rows.
 
         Returns (count actually (re)scheduled, set of job IDs for every row
@@ -282,7 +358,7 @@ class SchedulerService:
                         js_job_id = self._ensure_js_job(_JS_JOB_NAME_ENTRY)
                         schedule_id = self._job_scheduler.create_schedule(
                             js_job_id,
-                            description=(
+                            description=_js_description(
                                 f"{taskchain} @ {space_id} ({entry_id})"
                                 + (f" - {e['details']}" if e.get("details") else "")
                             ),
@@ -306,11 +382,21 @@ class SchedulerService:
                         misfire_grace_time=300,
                     )
                 count += 1
-            except Exception:
+            except Exception as exc:
                 logger.exception("Failed to register schedule entry %s", e.get("ID"))
+                if errors is not None:
+                    errors.append({
+                        "ID": e.get("ID"),
+                        "spaceId": e.get("spaceId"),
+                        "taskchain": e.get("taskchain"),
+                        "runDate": e.get("runDate"),
+                        "runTime": e.get("runTime"),
+                        "details": e.get("details"),
+                        "message": _registration_error_message(exc),
+                    })
         return count, valid_ids
 
-    def _register_traffic_light_schedules(self) -> tuple[int, set]:
+    def _register_traffic_light_schedules(self, errors: Optional[List[Dict[str, Any]]] = None) -> tuple[int, set]:
         """Register recurring interval jobs for active Schedule (Traffic Lights) rows.
 
         Each job ticks every `checkInterval` minutes (configured by the user in the
@@ -362,7 +448,7 @@ class SchedulerService:
                         js_job_id = self._ensure_js_job(_JS_JOB_NAME_TRAFFIC_LIGHT)
                         schedule_id = self._job_scheduler.create_schedule(
                             js_job_id,
-                            description=(
+                            description=_js_description(
                                 f"{taskchain} @ {space_id} ({s['ID']})"
                                 + (f" - {s['description']}" if s.get("description") else "")
                             ),
@@ -397,8 +483,16 @@ class SchedulerService:
                         misfire_grace_time=300,
                     )
                 count += 1
-            except Exception:
+            except Exception as exc:
                 logger.exception("Failed to register traffic light schedule %s", s.get("ID"))
+                if errors is not None:
+                    errors.append({
+                        "ID": s.get("ID"),
+                        "name": s.get("name"),
+                        "spaceId": s.get("spaceId"),
+                        "taskchain": s.get("taskchain"),
+                        "message": _registration_error_message(exc),
+                    })
         return count, valid_ids
 
     def _fire_traffic_light(self, schedule: Dict[str, Any]) -> Dict[str, Any]:
@@ -682,10 +776,12 @@ class SchedulerService:
 
     # ------------------------------------------------------------------
     def run_adhoc(self, space_id: str, taskchain: str, parameters: Optional[Dict[str, Any]] = None,
-                  details: Optional[str] = None) -> Dict[str, Any]:
-        """Execute a DSP task chain immediately, without a persisted ScheduleEntry row."""
+                  details: Optional[str] = None, entry_id: Optional[str] = None) -> Dict[str, Any]:
+        """Execute a DSP task chain immediately. Without ``entry_id`` there is no
+        persisted ScheduleEntry row; with it (an inactive row the UI created to
+        record the launch) the run history is linked to that row."""
         entry = {
-            "ID": f"adhoc::{space_id}::{taskchain}::{datetime.now(timezone.utc).isoformat()}",
+            "ID": entry_id or f"adhoc::{space_id}::{taskchain}::{datetime.now(timezone.utc).isoformat()}",
             "targetType": "DSP",
             "spaceId": space_id,
             "taskchain": taskchain,
@@ -695,7 +791,8 @@ class SchedulerService:
         return self._fire(entry_id=entry["ID"], manual=True, entry=entry)
 
     # ------------------------------------------------------------------
-    def _fire(self, entry_id: str, manual: bool = False, entry: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _fire(self, entry_id: str, manual: bool = False, entry: Optional[Dict[str, Any]] = None,
+              on_retry_done: Optional[Callable[[Dict[str, Any]], None]] = None) -> Dict[str, Any]:
         """Entry point for every scheduled/manual fire.
 
         Gates the actual launch through a per-(spaceId, taskchain) in-memory
@@ -707,6 +804,13 @@ class SchedulerService:
         queues the new run rather than rejecting it outright. Traffic Lights
         fires keep their own separate semaphore (TrafficLightStatus) and opt
         out of this gate (see below).
+
+        Automatic (non-manual) DSP launches that fail with an error proving DSP
+        never processed the request (503/502, connection failures) are retried
+        later (see _LAUNCH_RETRY_OFFSETS_SECONDS) while keeping the taskchain's
+        slot, so queued fires stay behind it. Such a fire returns status
+        "retrying"; ``on_retry_done`` is then called with the final result once
+        the last attempt has succeeded or definitively failed.
         """
         if not entry:
             logger.warning("ScheduleEntry %s vanished before firing", entry_id)
@@ -747,16 +851,108 @@ class SchedulerService:
                         }
                     self._running_taskchains.add(queue_key)
 
-        result = self._launch(entry_id, manual, entry)
+        can_retry = bool(queue_key) and not manual and self._scheduler is not None
+        result = self._launch(entry_id, manual, entry, attempt=1, retry_allowed=can_retry)
 
         if queue_key:
             remote_id = result.get("remote_id")
             if remote_id and result.get("status") == "success":
                 self._watch_taskchain_completion(queue_key, taskchain, remote_id)
+            elif result.get("status") == "retrying":
+                first_failed_at = datetime.now(timezone.utc)
+                self._schedule_launch_retry(
+                    entry_id, entry, queue_key, taskchain, next_attempt=2,
+                    first_failed_at=first_failed_at,
+                    history=[self._attempt_summary(result)],
+                    on_done=on_retry_done,
+                )
             else:
                 self._advance_taskchain_queue(queue_key)
 
         return result
+
+    @staticmethod
+    def _attempt_summary(result: Dict[str, Any]) -> str:
+        when = (result.get("triggered_at") or "")[:19].replace("T", " ")
+        if result.get("status") == "success":
+            return f"attempt {result.get('attempt', 1)} at {when} UTC: started (remote id {result.get('remote_id')})"
+        return f"attempt {result.get('attempt', 1)} at {when} UTC: failed - {result.get('error')}"
+
+    def _schedule_launch_retry(self, entry_id: str, entry: Dict[str, Any], queue_key: str, taskchain: str,
+                               next_attempt: int, first_failed_at: datetime, history: List[str],
+                               on_done: Optional[Callable[[Dict[str, Any]], None]]) -> None:
+        """Schedule the next launch attempt of a fire whose launch hit a retryable
+        error. The taskchain's slot stays reserved until the retries end."""
+        offset = _LAUNCH_RETRY_OFFSETS_SECONDS[next_attempt - 2]
+        run_at = first_failed_at + timedelta(seconds=offset)
+        try:
+            self._scheduler.add_job(
+                self._retry_launch,
+                trigger="date",
+                run_date=run_at,
+                id=f"retry::{entry_id}::{next_attempt}",
+                kwargs={
+                    "entry_id": entry_id, "entry": entry, "queue_key": queue_key,
+                    "taskchain": taskchain, "attempt": next_attempt,
+                    "first_failed_at": first_failed_at, "history": history, "on_done": on_done,
+                },
+                replace_existing=True,
+                misfire_grace_time=300,
+            )
+            logger.info("Launch of %s (entry_id=%s) will be retried at %s (attempt %d)",
+                        queue_key, entry_id, run_at.isoformat(), next_attempt)
+        except Exception as e:
+            logger.exception("Could not schedule launch retry for %s", entry_id)
+            self._advance_taskchain_queue(queue_key)
+            self._notify_retry_done(on_done, {
+                "entry_id": entry_id, "status": "error", "remote_id": None,
+                "error": f"could not schedule retry: {e}", "attempts": history,
+            })
+
+    def _retry_launch(self, entry_id: str, entry: Dict[str, Any], queue_key: str, taskchain: str,
+                      attempt: int, first_failed_at: datetime, history: List[str],
+                      on_done: Optional[Callable[[Dict[str, Any]], None]]) -> None:
+        """One retry of a launch that failed with a retryable error."""
+        retry_allowed = attempt - 1 < len(_LAUNCH_RETRY_OFFSETS_SECONDS)
+        result = self._launch(entry_id, False, entry, attempt=attempt, retry_allowed=retry_allowed)
+        history = history + [self._attempt_summary(result)]
+
+        if result.get("status") == "retrying":
+            self._schedule_launch_retry(entry_id, entry, queue_key, taskchain, attempt + 1,
+                                        first_failed_at, history, on_done)
+            return
+
+        remote_id = result.get("remote_id")
+        if remote_id and result.get("status") == "success":
+            self._watch_taskchain_completion(queue_key, taskchain, remote_id)
+        else:
+            self._advance_taskchain_queue(queue_key)
+        result["attempts"] = history
+        self._notify_retry_done(on_done, result)
+
+    @staticmethod
+    def _notify_retry_done(on_done: Optional[Callable[[Dict[str, Any]], None]],
+                           result: Dict[str, Any]) -> None:
+        if not on_done:
+            return
+        try:
+            on_done(result)
+        except Exception:
+            logger.exception("Reporting the final result of retried launch %s failed", result.get("entry_id"))
+
+    def report_job_scheduler_run(self, job_id: str, schedule_id: str, run_id: str,
+                                 result: Dict[str, Any]) -> None:
+        """Close an asynchronous SAP Job Scheduling service run (one whose
+        callback answered 202) with the final outcome of the fire."""
+        if not self._job_scheduler:
+            return
+        ok = result.get("status") == "success"
+        lines = list(result.get("attempts") or [])
+        if not lines:
+            lines = [self._attempt_summary(result)]
+        verdict = "Task chain started" if ok else "Task chain NOT started"
+        message = f"{verdict}. " + " | ".join(lines)
+        self._job_scheduler.update_run_log(job_id, schedule_id, run_id, success=ok, message=message)
 
     def _advance_taskchain_queue(self, queue_key: str) -> None:
         """Free up a (spaceId, taskchain) slot and launch the next queued fire, if any."""
@@ -860,8 +1056,14 @@ class SchedulerService:
             details=details,
         )
 
-    def _launch(self, entry_id: str, manual: bool = False, entry: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Actually dispatch a single schedule entry to DSP/IBP/SAC and record the run."""
+    def _launch(self, entry_id: str, manual: bool = False, entry: Optional[Dict[str, Any]] = None,
+                attempt: int = 1, retry_allowed: bool = False) -> Dict[str, Any]:
+        """Actually dispatch a single schedule entry to DSP/IBP/SAC and record the run.
+
+        With ``retry_allowed``, a failure that is safe to retry (see
+        _is_retryable_launch_error) is recorded with status "retrying" instead of
+        "error" - the caller schedules the next attempt.
+        """
         triggered_at = datetime.now(timezone.utc).isoformat()
         target_type = (entry.get("targetType") or "").upper()
         remote_id: Optional[str] = None
@@ -906,9 +1108,15 @@ class SchedulerService:
 
             status = "success"
         except Exception as e:
-            logger.exception("ScheduleEntry %s firing failed", entry_id)
-            status = "error"
-            error_msg = str(e)[:1900]
+            logger.exception("ScheduleEntry %s firing failed (attempt %d)", entry_id, attempt)
+            error_msg = str(e)[:1800]
+            if retry_allowed and _is_retryable_launch_error(e):
+                status = "retrying"
+                error_msg = f"Attempt {attempt} failed, will retry: {error_msg}"
+            else:
+                status = "error"
+                if attempt > 1:
+                    error_msg = f"Attempt {attempt} failed: {error_msg}"
 
         finished_at = datetime.now(timezone.utc).isoformat()
 
@@ -924,6 +1132,7 @@ class SchedulerService:
             "remote_id": remote_id,
             "triggered_at": triggered_at,
             "error": error_msg,
+            "attempt": attempt,
         }
 
     # ------------------------------------------------------------------

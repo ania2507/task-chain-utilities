@@ -206,6 +206,8 @@ def create_app() -> Flask:
         job_scheduler_client = None
     try:
         schedule_repo = ScheduleRepository()
+        from .services.taskchain_executor import TaskchainExecutor
+        TaskchainExecutor.set_schedule_repo(schedule_repo)
         scheduler_service = SchedulerService(
             repo=schedule_repo,
             taskchain_executor=taskchain_executor,

@@ -4,3 +4,7 @@ __pycache__
 *.pyo
 .env
 scripts/
+tests/
+conftest.py
+.pytest_cache/
+requirements-dev.txt

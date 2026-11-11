@@ -404,8 +404,14 @@ sap.ui.define([
                 pSaved = oCtxNew.created();
             }
             pSaved.then(function () {
+                return that.checkSchedulingRejections("traffic_light", function (e) {
+                    return e.spaceId === d.spaceId && e.taskchain === d.taskchain;
+                });
+            }).then(function (aRejected) {
                 that._editModel.setProperty("/busy", false);
-                that.toast(that.i18n(d.ID ? "msg.updated" : "msg.created", [d.name]));
+                if (!aRejected.length) {
+                    that.toast(that.i18n(d.ID ? "msg.updated" : "msg.created", [d.name]));
+                }
                 that.onNavBack();
             }).catch(function (err) {
                 that._editModel.setProperty("/busy", false);

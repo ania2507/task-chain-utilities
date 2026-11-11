@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from flask import Blueprint, current_app, jsonify, request
 
 from ..auth import flask_access_validation
 
 logger = logging.getLogger(__name__)
+
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 
 bp = Blueprint("scheduler", __name__)
 
@@ -36,7 +39,29 @@ def jobscheduler_callback():
     kind = payload.get("kind")
     try:
         if kind == "entry":
-            result = _svc()._fire(payload.get("entry_id"), manual=False, entry=payload.get("entry"))
+            svc = _svc()
+            # Identify this run on the service so it can be closed later when
+            # the launch is retried (asynchronous run, see below).
+            js_job_id = request.headers.get("x-sap-job-id")
+            js_schedule_id = request.headers.get("x-sap-job-schedule-id")
+            js_run_id = request.headers.get("x-sap-job-run-id")
+            can_report = bool(js_job_id and js_schedule_id and js_run_id)
+
+            def _report(final_result):
+                svc.report_job_scheduler_run(js_job_id, js_schedule_id, js_run_id, final_result)
+
+            result = svc._fire(payload.get("entry_id"), manual=False, entry=payload.get("entry"),
+                               on_retry_done=_report if can_report else None)
+            status = result.get("status")
+            if status == "retrying" and can_report:
+                # 202 leaves the run open on the service; py-srv closes it with
+                # the final outcome once the retries end (report_job_scheduler_run).
+                return jsonify(result), 202
+            if status == "error":
+                # Make a launch that failed show as a FAILED run on the service
+                # (a 200 would mark it successful even though nothing started).
+                return jsonify(result), 500
+            return jsonify(result)
         elif kind == "traffic_light":
             result = _svc()._fire_traffic_light(payload.get("schedule") or {})
         else:
@@ -159,9 +184,15 @@ def run_now_adhoc():
         taskchain = body.get("taskchain")
         parameters = body.get("parameters")
         details = body.get("details")
+        # Optional: ID of an (inactive) ScheduleEntry the UI created to record this
+        # launch - the custom calendar's on-demand runs - so the run is linked to
+        # it and shows up among that calendar's past entries.
+        entry_id = body.get("entryId")
         if not space_id or not taskchain:
             return jsonify({"error": "spaceId and taskchain are required"}), 400
-        result = _svc().run_adhoc(space_id, taskchain, parameters, details)
+        if entry_id and not _UUID_RE.match(str(entry_id)):
+            return jsonify({"error": "entryId must be a ScheduleEntry UUID"}), 400
+        result = _svc().run_adhoc(space_id, taskchain, parameters, details, entry_id=entry_id)
         # _fire/_launch catch their own exceptions and always return 200-shaped
         # JSON with status embedded — surface a launch failure (e.g. "already
         # running") as a real HTTP error, or the frontend has no way to tell

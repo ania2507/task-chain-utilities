@@ -159,6 +159,16 @@ class JobSchedulerClient:
         created = self._request("POST", f"/scheduler/jobs/{job_id}/schedules", json_body=body)
         return created.get("scheduleId")
 
+    def update_run_log(self, job_id, schedule_id: str, run_id: str, *, success: bool, message: str) -> None:
+        """Set the final outcome of an asynchronous run - one whose action
+        endpoint answered 202 Accepted, which leaves the run open until the
+        application reports back here."""
+        self._request(
+            "PUT",
+            f"/scheduler/jobs/{job_id}/schedules/{schedule_id}/runs/{run_id}",
+            json_body={"success": bool(success), "message": (message or "")[:4000]},
+        )
+
     def delete_schedule(self, job_id: int, schedule_id: str) -> None:
         """Delete a schedule. Best-effort: logs and swallows errors (e.g. already gone)."""
         try:
@@ -200,6 +210,15 @@ class JobSchedulerClient:
         if resp.status_code in (429, 503):
             retry_after = float(resp.headers.get("retry-after", resp.headers.get("Retry-After", 5)))
             raise JobSchedulerRateLimitError(retry_after)
+        if resp.status_code >= 400:
+            # raise_for_status() drops the response body, which is where the
+            # service explains *why* it rejected the request (e.g. a 400 on
+            # schedule creation) - log it, truncated, before raising.
+            logger.error(
+                "Job Scheduling service %s %s -> %s: %s (request body size: %d chars)",
+                method, path, resp.status_code, (resp.text or "")[:2000],
+                len(json.dumps(json_body)) if json_body is not None else 0,
+            )
         resp.raise_for_status()
         if not resp.content:
             return {}

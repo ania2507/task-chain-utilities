@@ -10,6 +10,9 @@ sap.ui.define([
 ], function (BaseController, Fragment, JSONModel, MessageBox, MessageToast, Filter, FilterOperator, Sorter) {
     "use strict";
 
+    // Entry fields the calendar search box looks into: the free-text details only.
+    var _CALENDAR_SEARCH_FIELDS = ["details"];
+
     return BaseController.extend("scheduler.controller.CustomCalendarPage", {
 
         onInit: function () {
@@ -34,6 +37,7 @@ sap.ui.define([
                 lastRunAt: null,
                 lastRunStatus: "",
                 showPastEntries: false,
+                searchQuery: "",
                 filterDateFrom: null,
                 filterDateTo: null,
                 busy: false,
@@ -84,6 +88,7 @@ sap.ui.define([
                 lastRunAt: null,
                 lastRunStatus: "",
                 showPastEntries: false,
+                searchQuery: "",
                 filterDateFrom: null,
                 filterDateTo: null,
                 busy: false,
@@ -123,7 +128,9 @@ sap.ui.define([
         // Recompute the header summary (active/total entry counts and the
         // next upcoming active entry) whenever /calendarEntries changes.
         _updateSummary: function () {
-            var aEntries = this._editModel.getProperty("/calendarEntries") || [];
+            // On-demand runs are history only - they are not calendar entries.
+            var aEntries = (this._editModel.getProperty("/calendarEntries") || [])
+                .filter(function (e) { return !e.isOnDemand; });
             var aActive = aEntries.filter(function (e) { return e.active; });
             this._editModel.setProperty("/totalCount", aEntries.length);
             this._editModel.setProperty("/activeCount", aActive.length);
@@ -399,6 +406,11 @@ sap.ui.define([
         onUploadButtonPress: function () {
             var oFileUploader = this.byId("customCalendarPageFileUploader");
             if (oFileUploader) {
+                // Reset the previous selection first: picking the SAME file again
+                // otherwise leaves the input's value unchanged, so no "change" event
+                // fires and nothing gets loaded until the page is refreshed.
+                oFileUploader.clear();
+                oFileUploader.$().find("input[type=file]").val("");
                 oFileUploader.$().find("input[type=file]").trigger("click");
             }
         },
@@ -511,12 +523,17 @@ sap.ui.define([
 
                     var aAllEntries = that._buildCalendarEntries(oParsed.rows, sChain, oParsed.paramsByScheduleId);
 
-                    // Ignore past entries from the file — they are historical records already in the DB
+                    // Ignore past entries from the file — they could never be scheduled
+                    // (py-srv skips any entry whose time has already passed). They are
+                    // listed to the user in a warning before the upload goes on.
                     var now = new Date();
+                    var aPastEntries = [];
                     var aEntries = aAllEntries.filter(function (entry) {
                         var sT = entry.rawTime || "00:00";
                         var dt = new Date(entry.date + "T" + (sT.length === 5 ? sT + ":00" : sT));
-                        return dt >= now;
+                        if (dt >= now) return true;
+                        aPastEntries.push(entry);
+                        return false;
                     });
 
                     // Check 1: intra-file duplicates (same date+time in the file itself)
@@ -595,6 +612,45 @@ sap.ui.define([
                             return;
                         }
 
+                        if (aPastEntries.length) {
+                            var aPastLabels = aPastEntries.slice(0, 10).map(function (e) {
+                                return e.dateLabel + " " + e.rawTime;
+                            });
+                            var sPastList = aPastLabels.join("\n") +
+                                (aPastEntries.length > 10 ? "\n…and " + (aPastEntries.length - 10) + " more" : "");
+                            if (!aEntries.length) {
+                                MessageBox.warning(
+                                    "All " + aPastEntries.length + " date/time slot" +
+                                    (aPastEntries.length > 1 ? "s" : "") +
+                                    " in the file are already in the past, so nothing can be scheduled:\n" +
+                                    sPastList,
+                                    { title: "Past dates in the file" }
+                                );
+                                return;
+                            }
+                            MessageBox.warning(
+                                aPastEntries.length + " date/time slot" +
+                                (aPastEntries.length > 1 ? "s" : "") +
+                                " in the file " + (aPastEntries.length > 1 ? "are" : "is") +
+                                " already in the past and will be skipped (they would never run):\n" +
+                                sPastList +
+                                "\n\nContinue with the remaining " + aEntries.length + " entr" +
+                                (aEntries.length > 1 ? "ies" : "y") + "?",
+                                {
+                                    title: "Past dates in the file",
+                                    actions: [MessageBox.Action.OK, MessageBox.Action.CANCEL],
+                                    emphasizedAction: MessageBox.Action.OK,
+                                    onClose: function (sAction) {
+                                        if (sAction === MessageBox.Action.OK) confirmCollisionsAndUpload();
+                                    }
+                                }
+                            );
+                        } else {
+                            confirmCollisionsAndUpload();
+                        }
+                    });
+
+                    function confirmCollisionsAndUpload() {
                         if (aCollisions.length) {
                             var aLabels = aCollisions.slice(0, 5).map(function (e) {
                                 return e.dateLabel + " " + e.rawTime;
@@ -617,7 +673,7 @@ sap.ui.define([
                         } else {
                             doUpload();
                         }
-                    });
+                    }
                 }).catch(function (err) {
                     console.error("[Scheduler] calendar upload error", err);
                     MessageBox.error(String(err.message || err));
@@ -957,9 +1013,13 @@ sap.ui.define([
                         return new Date(b.triggeredAt) - new Date(a.triggeredAt);
                     });
                     var oLastRun = aRuns[0] || null;
+                    // Run Now launched from this calendar, recorded by the On Demand
+                    // page: already executed, so always listed among past entries.
+                    var bOnDemand = o.source === "calendarOnDemand";
                     return {
                         ID: o.ID,
                         chain: o.taskchain,
+                        isOnDemand: bOnDemand,
                         date: o.runDate,
                         dateLabel: that._formatDateLabel(o.runDate),
                         time: sTime + " CET",
@@ -968,7 +1028,7 @@ sap.ui.define([
                         active: !!o.active,
                         parameters: o.parameters || "",
                         details: o.details || "",
-                        isPast: !isNaN(dt.getTime()) && dt < now,
+                        isPast: bOnDemand || (!isNaN(dt.getTime()) && dt < now),
                         runStatus: oLastRun ? (oLastRun.status || "") : "",
                         runAt: oLastRun ? (oLastRun.finishedAt || oLastRun.triggeredAt) : null,
                         _remoteId: oLastRun ? (oLastRun.remoteId || "") : ""
@@ -1080,6 +1140,18 @@ sap.ui.define([
                 aFilters.push(new Filter({ filters: aDateFilters, and: true }));
             }
 
+            // Free-text search on the entry details (case-insensitive) - same rule as
+            // _getVisibleCalendarEntries, so "Delete All" acts on exactly these rows.
+            var sQuery = (this._editModel.getProperty("/searchQuery") || "").trim();
+            if (sQuery) {
+                aFilters.push(new Filter({
+                    filters: _CALENDAR_SEARCH_FIELDS.map(function (sPath) {
+                        return new Filter({ path: sPath, operator: FilterOperator.Contains, value1: sQuery, caseSensitive: false });
+                    }),
+                    and: false
+                }));
+            }
+
             oBinding.filter(aFilters);
             this._editModel.setProperty("/visibleEntriesCount", this._getVisibleCalendarEntries().length);
         },
@@ -1094,11 +1166,42 @@ sap.ui.define([
             var oTo = this._editModel.getProperty("/filterDateTo");
             var sFrom = oFrom ? this._toIsoDate(oFrom) : null;
             var sTo = oTo ? this._toIsoDate(oTo) : null;
+            var sQuery = (this._editModel.getProperty("/searchQuery") || "").trim().toLowerCase();
             return aEntries.filter(function (e) {
                 if (!bShowPast && e.isPast) return false;
                 if (sFrom && e.date < sFrom) return false;
                 if (sTo && e.date > sTo) return false;
+                if (sQuery && !_CALENDAR_SEARCH_FIELDS.some(function (sPath) {
+                    return String(e[sPath] == null ? "" : e[sPath]).toLowerCase().indexOf(sQuery) !== -1;
+                })) return false;
                 return true;
+            });
+        },
+
+        onCalendarSearch: function (oEvt) {
+            // liveChange passes "newValue", search (Enter / clear icon) passes "query".
+            var sValue = oEvt && (oEvt.getParameter("newValue") !== undefined
+                ? oEvt.getParameter("newValue") : oEvt.getParameter("query"));
+            if (sValue !== undefined && sValue !== null) {
+                this._editModel.setProperty("/searchQuery", sValue);
+            }
+            this._applyPastFilter();
+        },
+
+        // Show an error for any of this task chain's calendar entries that SAP
+        // Job Scheduling service refused to schedule (see BaseController).
+        // Keeps the page busy while the check runs, so the user can see that the
+        // scheduling is still being verified after a save.
+        _checkCalendarSchedulingRejections: function () {
+            var oEditModel = this._editModel;
+            var sSpace = oEditModel.getProperty("/spaceId") || "";
+            var sChain = oEditModel.getProperty("/taskchain") || "";
+            oEditModel.setProperty("/busy", true);
+            return this.checkSchedulingRejections("entry", function (e) {
+                return e.spaceId === sSpace && e.taskchain === sChain;
+            }).then(function (aRejected) {
+                oEditModel.setProperty("/busy", false);
+                return aRejected;
             });
         },
 
@@ -1272,6 +1375,7 @@ sap.ui.define([
                     that._updateSummary();
                     that._applyPastFilter();
                     that.onCloseCalendarEntryDialog();
+                    that._checkCalendarSchedulingRejections();
                 }).catch(function (err) {
                     that.error(err.message || String(err));
                 });
@@ -1333,13 +1437,43 @@ sap.ui.define([
         onDeleteAllEntries: function () {
             // Only act on entries the user currently sees — respects the "Show past
             // entries" toggle and the From/To date range, same as the table itself.
-            var aVisible = this._getVisibleCalendarEntries();
-            if (!aVisible.length) return;
+            var aShown = this._getVisibleCalendarEntries();
+            if (!aShown.length) return;
             var that = this;
             var oRb = this.getResourceBundle();
-            MessageBox.confirm(oRb.getText("calendar.confirmDeleteAll", [aVisible.length]), {
-                onClose: function (sAction) {
-                    if (sAction !== MessageBox.Action.OK) return;
+            // Past entries (incl. on-demand runs) are the run history: deleting them
+            // must be an explicit choice, never a side effect of "Delete All".
+            var aPast = aShown.filter(function (e) { return e.isPast && !e._unsaved; });
+            var aFuture = aShown.filter(function (e) { return aPast.indexOf(e) === -1; });
+            var sOnlyFuture = oRb.getText("calendar.deleteAll.onlyFuture", [aFuture.length]);
+            var sIncludePast = oRb.getText("calendar.deleteAll.includePast", [aShown.length]);
+
+            if (!aPast.length) {
+                MessageBox.confirm(oRb.getText("calendar.confirmDeleteAll", [aShown.length]), {
+                    onClose: function (sAction) {
+                        if (sAction === MessageBox.Action.OK) fnDelete(aShown);
+                    }
+                });
+            } else if (!aFuture.length) {
+                MessageBox.warning(oRb.getText("calendar.confirmDeleteAllPastOnly", [aPast.length]), {
+                    actions: [MessageBox.Action.DELETE, MessageBox.Action.CANCEL],
+                    emphasizedAction: MessageBox.Action.CANCEL,
+                    onClose: function (sAction) {
+                        if (sAction === MessageBox.Action.DELETE) fnDelete(aShown);
+                    }
+                });
+            } else {
+                MessageBox.warning(oRb.getText("calendar.confirmDeleteAllWithPast", [aFuture.length, aPast.length]), {
+                    actions: [sOnlyFuture, sIncludePast, MessageBox.Action.CANCEL],
+                    emphasizedAction: sOnlyFuture,
+                    onClose: function (sAction) {
+                        if (sAction === sOnlyFuture) fnDelete(aFuture);
+                        else if (sAction === sIncludePast) fnDelete(aShown);
+                    }
+                });
+            }
+
+            function fnDelete(aVisible) {
                     // Unsaved (staged) entries have no ID and nothing to delete server-side —
                     // just drop them locally. Already-saved entries need the real delete flow.
                     var aSaved = aVisible.filter(function (e) { return !e._unsaved; });
@@ -1364,8 +1498,7 @@ sap.ui.define([
                             console.warn("[Scheduler] delete all failed:", err && err.message);
                         });
                     }
-                }
-            });
+            }
         },
 
         _deleteEntriesByIds: function (aIds) {
@@ -1500,7 +1633,9 @@ sap.ui.define([
             return oCtxBind.requestObject().then(function () {
                 oCtxBind.getBoundContext().setProperty("parameters", s.parametersJson);
                 return oModel.submitBatch(oModel.getUpdateGroupId());
-            }).catch(function (err) {
+            }).then(function () {
+                this._checkCalendarSchedulingRejections();
+            }.bind(this)).catch(function (err) {
                 console.warn("Could not persist step parameters:", err && err.message);
             });
         },
@@ -1527,7 +1662,9 @@ sap.ui.define([
                     oCtxBind.requestObject().then(function () {
                         oCtxBind.getBoundContext().setProperty("parameters", s || "");
                         return oModel.submitBatch(oModel.getUpdateGroupId());
-                    }).catch(function (err) {
+                    }).then(function () {
+                        this._checkCalendarSchedulingRejections();
+                    }.bind(this)).catch(function (err) {
                         console.warn("Could not persist step parameters:", err && err.message);
                     });
                 }
@@ -1561,9 +1698,12 @@ sap.ui.define([
                     that._editModel.setProperty("/pendingDeleteIds", []);
                     return that._loadCalendarEntries();
                 })
-                .then(function () {
+                .then(function () { return that._checkCalendarSchedulingRejections(); })
+                .then(function (aRejected) {
                     that._editModel.setProperty("/busy", false);
-                    that.toast(aUnsaved.length + " calendar entries saved and scheduled");
+                    if (!aRejected.length) {
+                        that.toast(aUnsaved.length + " calendar entries saved and scheduled");
+                    }
                 })
                 .catch(function (err) {
                     that._editModel.setProperty("/busy", false);

@@ -190,6 +190,10 @@ modules:
     - dsp-credentials.json
     - .env
     - .git/
+    - tests/
+    - conftest.py
+    - .pytest_cache/
+    - requirements-dev.txt
     - '*.log'
     - tests/
     - conftest.py

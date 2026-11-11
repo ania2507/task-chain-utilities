@@ -124,6 +124,27 @@ class TaskchainExecutor:
         for execution_id in expired:
             self._executions.pop(execution_id, None)
 
+    # Set once at app start-up (app_factory) so the pending-step-params snapshot
+    # can be persisted/read even outside a Flask request - e.g. a queued fire
+    # dequeued, or a launch retried, from a background scheduler thread.
+    _schedule_repo = None
+
+    @staticmethod
+    def set_schedule_repo(repo) -> None:
+        TaskchainExecutor._schedule_repo = repo
+
+    @staticmethod
+    def _get_schedule_repo():
+        try:
+            from flask import current_app, has_app_context
+            if has_app_context():
+                repo = current_app.extensions.get("taskchain", {}).get("schedule_repo")
+                if repo is not None:
+                    return repo
+        except Exception:
+            pass
+        return TaskchainExecutor._schedule_repo
+
     @staticmethod
     def store_pending_step_params(taskchain: str, params: Dict[str, Any], space_id: str = "") -> None:
         """Store step-level params for *taskchain* so the job-launch endpoint can pick
@@ -144,10 +165,10 @@ class TaskchainExecutor:
         logger.info("store_pending_step_params: taskchain=%r steps=%s", taskchain, step_keys)
 
         try:
-            from flask import current_app
-            repo = current_app.extensions["taskchain"].get("schedule_repo")
-            if repo is not None:
-                repo.set_pending_step_params(taskchain, space_id or "", json.dumps(params))
+            repo = TaskchainExecutor._get_schedule_repo()
+            if repo is None:
+                raise RuntimeError("schedule repository not available")
+            repo.set_pending_step_params(taskchain, space_id or "", json.dumps(params))
         except Exception as e:
             logger.warning("store_pending_step_params: DB persist failed for taskchain=%r: %s", taskchain, e)
 
@@ -171,8 +192,7 @@ class TaskchainExecutor:
                 _PENDING_STEP_PARAMS_TTL.pop(taskchain, None)
 
         try:
-            from flask import current_app
-            repo = current_app.extensions["taskchain"].get("schedule_repo")
+            repo = TaskchainExecutor._get_schedule_repo()
             if repo is not None:
                 raw = repo.get_pending_step_params(taskchain)
                 if raw:

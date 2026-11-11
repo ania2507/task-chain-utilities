@@ -124,83 +124,109 @@
                                   class="sapUiSmallMarginBegin"
                                   visible="{= !${edit>/calendarFileStatus} &amp;&amp; ${edit>/calendarEntries}.length === 0 }"/>
 
-                            <Table id="calendarEntriesTable"
-                                   items="{edit>/calendarEntries}"
-                                   mode="None"
-                                   fixedLayout="true"
-                                   growing="true"
-                                   growingThreshold="50"
-                                   visible="{= ${edit>/calendarEntries}.length > 0 }"
-                                   noDataText="{i18n>calendar.noEntries}">
-                                <headerToolbar>
-                                    <Toolbar>
-                                        <Title text="{ path: 'edit>/taskchain', formatter: '.formatCalendarEntriesTitle' }" level="H4"/>
-                                        <ToolbarSpacer/>
-                                        <Label text="{i18n>calendar.dateFrom}" labelFor="dateFromFilter" class="sapUiTinyMarginEnd"/>
-                                        <DatePicker id="dateFromFilter"
-                                                    value="{edit>/filterDateFrom}"
-                                                    valueFormat="yyyy-MM-dd"
-                                                    displayFormat="medium"
-                                                    width="10rem"
-                                                    change=".onDateFilterChange"
+                            <!-- Title and filters on separate rows, for readability. -->
+                            <Toolbar style="Clear" visible="{= ${edit>/calendarEntries}.length > 0 }">
+                                <Title text="{ path: 'edit>/taskchain', formatter: '.formatCalendarEntriesTitle' }" level="H4"/>
+                            </Toolbar>
+                            <OverflowToolbar style="Clear" visible="{= ${edit>/calendarEntries}.length > 0 }" class="sapUiTinyMarginBottom">
+                                <SearchField id="calendarSearchField"
+                                             value="{edit>/searchQuery}"
+                                             placeholder="{i18n>calendar.searchPlaceholder}"
+                                             liveChange=".onCalendarSearch"
+                                             search=".onCalendarSearch"
+                                             width="16rem"
+                                             class="sapUiSmallMarginEnd"/>
+                                <Label text="{i18n>calendar.dateFrom}" labelFor="dateFromFilter" class="sapUiTinyMarginEnd"/>
+                                <DatePicker id="dateFromFilter"
+                                            value="{edit>/filterDateFrom}"
+                                            placeholder="{i18n>calendar.datePlaceholder}"
+                                            valueFormat="yyyy-MM-dd"
+                                            displayFormat="medium"
+                                            width="10rem"
+                                            change=".onDateFilterChange"
+                                            class="sapUiTinyMarginEnd"/>
+                                <Label text="{i18n>calendar.dateTo}" labelFor="dateToFilter" class="sapUiTinyMarginEnd"/>
+                                <DatePicker id="dateToFilter"
+                                            value="{edit>/filterDateTo}"
+                                            placeholder="{i18n>calendar.datePlaceholder}"
+                                            valueFormat="yyyy-MM-dd"
+                                            displayFormat="medium"
+                                            width="10rem"
+                                            change=".onDateFilterChange"
+                                            class="sapUiSmallMarginEnd"/>
+                                <Label text="{i18n>calendar.showPast}" labelFor="showPastEntriesSwitch" class="sapUiTinyMarginEnd"/>
+                                <Switch id="showPastEntriesSwitch"
+                                        state="{edit>/showPastEntries}"
+                                        change=".onTogglePastEntries"/>
+                                <ToolbarSpacer/>
+                            </OverflowToolbar>
+
+                            <!-- Only the entries scroll (the page header, title and filters stay
+                                 in place); column headers stick to the top while scrolling. -->
+                            <ScrollContainer height="60vh" width="100%" vertical="true" horizontal="false"
+                                             visible="{= ${edit>/calendarEntries}.length > 0 }">
+                                <Table id="calendarEntriesTable"
+                                       items="{edit>/calendarEntries}"
+                                       mode="None"
+                                       fixedLayout="true"
+                                       growing="true"
+                                       growingThreshold="50"
+                                       growingScrollToLoad="true"
+                                       sticky="ColumnHeaders"
+                                       visible="{= ${edit>/calendarEntries}.length > 0 }"
+                                       noDataText="{i18n>calendar.noEntries}">
+                                    <columns>
+                                        <Column width="8rem"><Text text="{i18n>calendar.col.date}"/></Column>
+                                        <Column width="7rem"><Text text="{i18n>calendar.col.time}"/></Column>
+                                        <Column width="20rem"><Text text="{i18n>calendar.col.details}"/></Column>
+                                        <Column hAlign="Center" width="4rem"><Text text="{i18n>calendar.col.active}"/></Column>
+                                        <Column width="9rem"><Text text="{i18n>calendar.col.runStatus}"/></Column>
+                                        <Column hAlign="End" width="18rem"><Text text=""/></Column>
+                                    </columns>
+                                    <ColumnListItem>
+                                        <cells>
+                                            <Text text="{edit>dateLabel}"/>
+                                            <Text text="{edit>rawTime}"/>
+                                            <VBox>
+                                                <ObjectStatus text="{i18n>calendar.onDemandTag}"
+                                                              icon="sap-icon://media-play"
+                                                              state="Information"
+                                                              visible="{= !!${edit>isOnDemand} }"/>
+                                                <Text text="{edit>details}" maxLines="4" wrapping="true"/>
+                                            </VBox>
+                                            <!-- On-demand runs are stored as inactive (so they can never be
+                                                 scheduled) but shown with the tick like the other entries. -->
+                                            <core:Icon src="sap-icon://accept"
+                                                       color="{= (${edit>active} || !!${edit>isOnDemand}) ? 'Positive' : 'Neutral' }"
+                                                       visible="{= !!${edit>active} || !!${edit>isOnDemand} }"/>
+                                            <HBox alignItems="Center">
+                                                <core:Icon
+                                                    src="{= ${edit>runStatus} === 'success' ? 'sap-icon://sys-enter-2' : ${edit>runStatus} === 'error' ? 'sap-icon://sys-cancel-2' : (${edit>runStatus} === 'running' || ${edit>runStatus} === 'retrying') ? 'sap-icon://pending' : ${edit>runStatus} === 'skipped' ? 'sap-icon://step' : '' }"
+                                                    color="{= ${edit>runStatus} === 'success' ? '#107E3E' : ${edit>runStatus} === 'error' ? '#BB0000' : (${edit>runStatus} === 'running' || ${edit>runStatus} === 'retrying') ? '#0a6ed1' : '#9E9E9E' }"
+                                                    visible="{= !!${edit>runStatus} }"
                                                     class="sapUiTinyMarginEnd"/>
-                                        <Label text="{i18n>calendar.dateTo}" labelFor="dateToFilter" class="sapUiTinyMarginEnd"/>
-                                        <DatePicker id="dateToFilter"
-                                                    value="{edit>/filterDateTo}"
-                                                    valueFormat="yyyy-MM-dd"
-                                                    displayFormat="medium"
-                                                    width="10rem"
-                                                    change=".onDateFilterChange"
-                                                    class="sapUiSmallMarginEnd"/>
-                                        <Label text="{i18n>calendar.showPast}" labelFor="showPastEntriesSwitch" class="sapUiTinyMarginEnd"/>
-                                        <Switch id="showPastEntriesSwitch"
-                                                state="{edit>/showPastEntries}"
-                                                change=".onTogglePastEntries"/>
-                                    </Toolbar>
-                                </headerToolbar>
-                                <columns>
-                                    <Column width="8rem"><Text text="{i18n>calendar.col.date}"/></Column>
-                                    <Column width="7rem"><Text text="{i18n>calendar.col.time}"/></Column>
-                                    <Column width="20rem"><Text text="{i18n>calendar.col.details}"/></Column>
-                                    <Column hAlign="Center" width="4rem"><Text text="{i18n>calendar.col.active}"/></Column>
-                                    <Column width="9rem"><Text text="{i18n>calendar.col.runStatus}"/></Column>
-                                    <Column hAlign="End" width="18rem"><Text text=""/></Column>
-                                </columns>
-                                <ColumnListItem>
-                                    <cells>
-                                        <Text text="{edit>dateLabel}"/>
-                                        <Text text="{edit>rawTime}"/>
-                                        <Text text="{edit>details}" maxLines="4" wrapping="true"/>
-                                        <core:Icon src="sap-icon://accept"
-                                                   color="{= ${edit>active} ? 'Positive' : 'Neutral' }"
-                                                   visible="{edit>active}"/>
-                                        <HBox alignItems="Center">
-                                            <core:Icon
-                                                src="{= ${edit>runStatus} === 'success' ? 'sap-icon://sys-enter-2' : ${edit>runStatus} === 'error' ? 'sap-icon://sys-cancel-2' : ${edit>runStatus} === 'running' ? 'sap-icon://pending' : ${edit>runStatus} === 'skipped' ? 'sap-icon://step' : '' }"
-                                                color="{= ${edit>runStatus} === 'success' ? '#107E3E' : ${edit>runStatus} === 'error' ? '#BB0000' : ${edit>runStatus} === 'running' ? '#0a6ed1' : '#9E9E9E' }"
-                                                visible="{= !!${edit>runStatus} }"
-                                                class="sapUiTinyMarginEnd"/>
-                                            <Text text="{= !!${edit>runStatus} ? ${edit>runStatus} : ${i18n>calendar.runStatus.none} }"/>
-                                        </HBox>
-                                        <HBox justifyContent="End" alignItems="Center">
-                                            <Button text="{i18n>onDemand.configureSteps}"
-                                                    icon="sap-icon://settings"
-                                                    type="Emphasized"
-                                                    press=".onCalendarConfigureRowParams"
-                                                    class="sapUiTinyMarginEnd"/>
-                                            <Button icon="sap-icon://edit"
-                                                    tooltip="{i18n>calendar.edit}"
-                                                    type="Transparent"
-                                                    visible="{= !${edit>isPast} }"
-                                                    press=".onEditCalendarEntry"/>
-                                            <Button icon="sap-icon://delete"
-                                                    tooltip="{i18n>calendar.remove}"
-                                                    type="Transparent"
-                                                    press=".onRemoveCalendarEntry"/>
-                                        </HBox>
-                                    </cells>
-                                </ColumnListItem>
-                            </Table>
+                                                <Text text="{= !!${edit>runStatus} ? ${edit>runStatus} : ${i18n>calendar.runStatus.none} }"/>
+                                            </HBox>
+                                            <HBox justifyContent="End" alignItems="Center">
+                                                <Button text="{i18n>onDemand.configureSteps}"
+                                                        icon="sap-icon://settings"
+                                                        type="Emphasized"
+                                                        press=".onCalendarConfigureRowParams"
+                                                        class="sapUiTinyMarginEnd"/>
+                                                <Button icon="sap-icon://edit"
+                                                        tooltip="{i18n>calendar.edit}"
+                                                        type="Transparent"
+                                                        visible="{= !${edit>isPast} }"
+                                                        press=".onEditCalendarEntry"/>
+                                                <Button icon="sap-icon://delete"
+                                                        tooltip="{i18n>calendar.remove}"
+                                                        type="Transparent"
+                                                        press=".onRemoveCalendarEntry"/>
+                                            </HBox>
+                                        </cells>
+                                    </ColumnListItem>
+                                </Table>
+                            </ScrollContainer>
                         </VBox>
                     </content>
                 </Panel>

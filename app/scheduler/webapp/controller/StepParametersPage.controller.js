@@ -355,7 +355,11 @@ sap.ui.define([
                 .catch(function () {});
         },
 
-        _loadSacParameters: function (sSacId, iRetry) {
+        // bAllowProbe: only true after the user confirmed "Run SAC Multi Action?"
+        // (onLoadSacMultiAction). Without it py-srv only uses side-effect-free reads
+        // and never launches a real execution of the multi action to discover its
+        // parameters - e.g. on the automatic load when a step is selected.
+        _loadSacParameters: function (sSacId, iRetry, bAllowProbe) {
             var that = this;
             var nRetry = iRetry || 0;
             if (!nRetry) {
@@ -366,7 +370,8 @@ sap.ui.define([
                 this._editModel.setProperty("/sacMultiActionId", sSacId);
                 this._editModel.setProperty("/sacMultiActionIdInput", sSacId);
             }
-            fetch(that._getApiBase() + "jobs/sac/multiaction-parameters/" + encodeURIComponent(sSacId), {
+            fetch(that._getApiBase() + "jobs/sac/multiaction-parameters/" + encodeURIComponent(sSacId)
+                + (bAllowProbe ? "?probe=1" : ""), {
                 headers: { "Accept": "application/json" }
             })
                 .then(function (res) { return res.json(); })
@@ -385,7 +390,7 @@ sap.ui.define([
                     if (data.probing && nRetry < 10) {
                         setTimeout(function () {
                             if (that._editModel.getProperty("/sacMultiActionId") === sSacId) {
-                                that._loadSacParameters(sSacId, nRetry + 1);
+                                that._loadSacParameters(sSacId, nRetry + 1, bAllowProbe);
                             } else {
                                 that._editModel.setProperty("/sacLoading", false);
                             }
@@ -393,6 +398,15 @@ sap.ui.define([
                         return;
                     }
 
+                    if (data.probeRequired) {
+                        // Reads alone couldn't find the parameters; discovering them
+                        // needs a real execution, which requires explicit confirmation.
+                        that._editModel.setProperty("/sacLoading", false);
+                        that._editModel.setProperty("/sacParamSchemaUnavailable", true);
+                        MessageToast.show("Parameters of this multi action could not be read without running it. "
+                            + "Use \"Load Parameters\" to discover them (it runs the multi action in SAC) or enter them manually.");
+                        return;
+                    }
                     var aSchema = data.parameters || [];
                     that._editModel.setProperty("/sacParamSchema", aSchema);
                     that._editModel.setProperty("/sacNoParameters", !!data.noParameters);
@@ -479,7 +493,7 @@ sap.ui.define([
                 if (oCur) { this._editModel.setProperty("/steps/" + oCur.idx + "/params", []); }
                 this._editModel.setProperty("/selectedStepParams", []);
             }
-            this._loadSacParameters(sId);
+            this._loadSacParameters(sId, 0, true);
         },
 
         // "Insert" — associate the step with this multi action ID without running
@@ -920,8 +934,14 @@ sap.ui.define([
             // Priority: cached ibpSteps on the current DSP step (survive step-switching),
             // falling back to the current /ibpSteps working list.
             var oCurPre = this._currentStep();
-            var aPre = (oCurPre && this._editModel.getProperty("/steps/" + oCurPre.idx + "/ibpSteps"))
-                || this._editModel.getProperty("/ibpSteps") || [];
+            // Only a reload of the SAME template keeps the params already set. When the
+            // template changes, the old template's params must not be carried over to
+            // the new one's steps just because some IBP operator names coincide.
+            var sPrevTemplate = (oCurPre && oCurPre.step.ibpTemplateName)
+                || this._editModel.getProperty("/ibpTemplateName") || "";
+            var bTemplateChanged = !!sPrevTemplate && sPrevTemplate !== sTemplate;
+            var aPre = bTemplateChanged ? [] : ((oCurPre && this._editModel.getProperty("/steps/" + oCurPre.idx + "/ibpSteps"))
+                || this._editModel.getProperty("/ibpSteps") || []);
             // Keyed by "name::occurrenceIndex" — the same IBP operator name can appear
             // more than once in a template's sequence, at different positions, each
             // with its own distinct params (keying by name alone would merge them).
@@ -936,6 +956,10 @@ sap.ui.define([
                 && this._restoredIbpParams[oCurForRestore.step.name];
             if (oRestoredForStep && oCurForRestore) {
                 delete this._restoredIbpParams[oCurForRestore.step.name];
+            }
+            // Params restored from the saved schedule belong to the saved template.
+            if (bTemplateChanged) {
+                oRestoredForStep = null;
             }
             fetch(that._getApiBase() + "jobs/ibp/template-steps", {
                 method: "POST",
@@ -997,6 +1021,17 @@ sap.ui.define([
                         return Object.assign({}, s, { params: aParams });
                     });
                     that._editModel.setProperty("/ibpSteps", aSteps);
+                    // Refresh the params panel right away: keep the same step selected if
+                    // the new template has one with that name, otherwise select its first step.
+                    if (aSteps.length) {
+                        var sSelName = that._editModel.getProperty("/selectedIbpStepName") || "";
+                        var iSel = sSelName ? aSteps.findIndex(function (st) { return st.name === sSelName; }) : -1;
+                        that._selectIbpStepByIndex(iSel >= 0 ? iSel : 0);
+                    } else {
+                        that._editModel.setProperty("/selectedIbpStepIdx", null);
+                        that._editModel.setProperty("/selectedIbpStepName", "");
+                        that._editModel.setProperty("/selectedIbpStepParams", []);
+                    }
                     // Mirror the loaded template name so CASE 2 renders even when reached
                     // via CASE 1's manual "Load" entry point (where /ibpTemplateName was empty).
                     that._editModel.setProperty("/ibpTemplateName", sTemplate);
@@ -1030,13 +1065,22 @@ sap.ui.define([
             this._selectIbpStepByListItem(oEvt.getSource());
         },
 
+        _selectIbpStepByIndex: function (iIdx) {
+            var oStep = (this._editModel.getProperty("/ibpSteps") || [])[iIdx];
+            if (!oStep) return;
+            this._applyIbpStepSelection(iIdx, oStep);
+        },
+
         _selectIbpStepByListItem: function (oItem) {
             if (!oItem) return;
             var oCtx = oItem.getBindingContext("edit");
             if (!oCtx) return;
             var sPath = oCtx.getPath(); // /ibpSteps/<i>
             var iIdx = parseInt(sPath.split("/").pop(), 10);
-            var oStep = oCtx.getObject();
+            this._applyIbpStepSelection(iIdx, oCtx.getObject());
+        },
+
+        _applyIbpStepSelection: function (iIdx, oStep) {
             this._editModel.setProperty("/selectedIbpStepIdx", iIdx);
             this._editModel.setProperty("/selectedIbpStepName", oStep.name || "");
             this._editModel.setProperty("/selectedIbpStepParams", oStep.params || []);

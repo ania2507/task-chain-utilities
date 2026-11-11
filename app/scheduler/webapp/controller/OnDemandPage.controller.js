@@ -239,6 +239,39 @@ sap.ui.define([
             MessageToast.show(this.i18n("steps.saved") || "Parameters saved");
         },
 
+        // Run Now launched from the custom calendar: record it as an INACTIVE
+        // ScheduleEntry (source "calendarOnDemand", date/time of the launch in
+        // Europe/Rome) so the run is linked to it and shows up among that
+        // calendar's past entries. Inactive rows are never scheduled. Resolves to
+        // the new entry's ID, or null (launch goes on unrecorded) if not applicable
+        // or the row couldn't be created.
+        _recordCalendarOnDemandRun: function (d) {
+            var oModel = this.getModel();
+            if (d.returnTo !== "customCalendar" || !oModel) return Promise.resolve(null);
+            var oParts = {};
+            new Intl.DateTimeFormat("en-GB", {
+                timeZone: "Europe/Rome", year: "numeric", month: "2-digit", day: "2-digit",
+                hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+            }).formatToParts(new Date()).forEach(function (p) { oParts[p.type] = p.value; });
+            var oCtx = oModel.bindList("/ScheduleEntry").create({
+                spaceId: d.spaceId,
+                taskchain: d.taskchain,
+                runDate: oParts.year + "-" + oParts.month + "-" + oParts.day,
+                runTime: oParts.hour + ":" + oParts.minute,
+                timezone: "Europe/Rome",
+                active: false,
+                parameters: d.parameters && String(d.parameters).trim() ? d.parameters : "",
+                details: d.onDemandDetails || "",
+                source: "calendarOnDemand"
+            });
+            return oCtx.created().then(function () {
+                return oCtx.getProperty("ID") || null;
+            }).catch(function (err) {
+                console.warn("Could not record the on-demand run in the calendar:", err && err.message);
+                return null;
+            });
+        },
+
         onConfirmOnDemand: function () {
             var d = this._editModel.getData();
             if (!d.spaceId || !d.taskchain) {
@@ -273,10 +306,13 @@ sap.ui.define([
 
             if (d.onDemandModeIndex === 0) {
                 var fnDoRunNow = function () {
-                    that.callScheduler("/run-now-adhoc", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify(payload)
+                    that._recordCalendarOnDemandRun(d).then(function (sEntryId) {
+                        if (sEntryId) payload.entryId = sEntryId;
+                        return that.callScheduler("/run-now-adhoc", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(payload)
+                        });
                     }).then(function (data) {
                         that._editModel.setProperty("/busy", false);
                         if (data && data.status === "queued") {
